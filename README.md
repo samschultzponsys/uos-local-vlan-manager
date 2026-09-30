@@ -129,11 +129,38 @@ environment they can also pick:
 - **Devices they can see**: *All*, or only the ones ticked. Stored by MAC, so a switch that's
   forgotten and re-adopted keeps its access.
 
-| Role | In their environments | Anywhere else |
-|---|---|---|
-| **Admin** | everything, in every environment | environments and API keys, users, roles, access, all settings |
-| **Supervisor** | change ports on their devices using their networks; read the environment's settings (never the key); see the activity log for their environments | – |
-| **Viewer** | see their devices and ports, nothing else | – |
+### Roles & abilities
+
+Everything a person can do is an **ability**. A **role** is a named set of abilities with a
+**level**, and the level decides who is above whom. Admins edit roles under
+**Users → Roles & abilities**.
+
+| Ability | Admin | Supervisor* | Viewer* |
+|---|:-:|:-:|:-:|
+| Change port VLANs (their devices, their networks) | ✓ | ✓ | |
+| Change protected ports | ✓ | | |
+| Lock and unlock ports | ✓ | | |
+| See environment settings (never the API key) | ✓ | ✓ | |
+| See the activity log (their environments) | ✓ | ✓ | |
+| See / add / edit / delete people below them | ✓ | | |
+| Give access to people below them (from their own access) | ✓ | | |
+| Change roles and abilities of people below them | ✓ | | |
+| View as people below them | ✓ | | |
+| Environments & API keys, sign-in settings, roles | ✓ (admin-only) | | |
+
+\* defaults, which can be changed.
+
+- **Supervisor** (level 50) and **Viewer** (level 10) can be renamed and given any
+  abilities.
+- Add **custom roles** at any level from 11 to 99, e.g. a "Lead tech" at 70 who can add
+  technicians, give them access and view as them.
+- **Per person** (Users → edit), each ability can follow the role, or be **allowed** or
+  **denied** just for them.
+- People-management abilities only ever work on people with a **lower** role, and only hand
+  out what the manager has: roles below their own, abilities they hold, and environments,
+  networks and devices from their own access.
+- Environments and API keys, sign-in settings and editing roles are **always admin-only**,
+  because they'd let someone give themselves everything.
 
 Protected ports (uplinks, links to other UniFi devices, LAG and mirror ports) can only be
 changed by an admin, after a warning. Per environment, an admin can allow its supervisors
@@ -178,7 +205,7 @@ console:
 
 ## Sign-in, users & roles
 
-Roles are described under [Who gets what](#who-gets-what).
+Roles and abilities are described under [Roles & abilities](#roles--abilities).
 
 - The first user, `admin`, is created on first start and is the only one that starts as
   Admin. **Every other user starts as Viewer with no environments**, whether an admin adds

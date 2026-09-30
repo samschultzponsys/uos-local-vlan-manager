@@ -678,3 +678,26 @@ details.more summary { cursor: pointer; color: var(--accent); font-weight: 550; 
 .step-n { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 12px;
   background: var(--accent); color: #fff; }
 .choices .chip .status-dot { width: 8px; height: 8px; }
+
+/* roles & abilities */
+.role-badge { color: #cbd5e1; background: rgba(148, 163, 184, .16); }
+.role-list { display: flex; flex-direction: column; gap: 12px; }
+.role-card { border: 1px solid var(--border); border-radius: 14px; padding: 14px; background: var(--surface2); }
+.role-card.admin { border-color: rgba(248, 113, 113, .35); }
+.role-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.role-title { font-size: 15px; }
+.role-name { width: 220px; font-weight: 650; }
+.role-level { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.role-level input { width: 72px; height: 32px; }
+.cap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 20px; }
+.cap-group { display: flex; flex-direction: column; gap: 4px; }
+.cap-row { display: flex; gap: 10px; align-items: flex-start; padding: 5px 4px; border-radius: 8px; cursor: pointer; }
+.cap-row:hover { background: var(--surface3); }
+.cap-row input { margin-top: 3px; }
+.cap-row span { display: flex; flex-direction: column; }
+.cap-row small { color: var(--faint); font-size: 11.5px; }
+.cap-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; flex-wrap: wrap; }
+.cap-label { display: inline-flex; align-items: center; gap: 8px; }
+.cap-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.cap-dot.on { background: var(--good); box-shadow: 0 0 6px var(--good); }
+.cap-line .segmented button { padding: 5px 10px; font-size: 12.5px; }

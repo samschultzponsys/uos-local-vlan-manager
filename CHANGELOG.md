@@ -5,6 +5,41 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 1.4 — 2026-09-30
+
+### Added
+- **Roles & abilities** (Users → Roles & abilities, admins).
+  - A role is now a set of **abilities** with a **level**. The level decides who is above
+    whom.
+  - Abilities:
+    - **Ports:** change port VLANs, change protected ports, lock and unlock ports
+    - **Environments:** see environment settings, see the activity log
+    - **People:** see, add, edit, give access to, change roles and abilities of, delete, and
+      view as the people below them
+  - **Supervisor** and **Viewer** can be renamed and given any abilities.
+  - **Custom roles** (e.g. "Lead tech", level 70) can be added and removed. Their people move
+    to another role when a role is deleted.
+  - **Admin** always has every ability.
+- **Abilities per person** (Users → edit). Each ability can follow the role, or be allowed or
+  denied just for that person, e.g. one viewer who may change ports, or one supervisor who
+  may not see the activity log.
+- **Managing people below you.** People-management abilities only work on people with a
+  lower role, and people can only hand out what they have themselves:
+  - roles below their own
+  - abilities they hold
+  - environments, networks and devices from their own access
+  - a person's access in environments the manager can't see is left untouched
+- Environments and API keys, sign-in settings and editing roles stay **admin-only**, because
+  they'd let someone give themselves everything.
+
+### Changed
+- Everything that used to check "is admin / is supervisor" now checks the matching ability.
+  The defaults keep 1.3's behaviour: Supervisor = change ports, see environment settings,
+  see activity; Viewer = look.
+- An environment's "Supervisors may change protected ports" switch now applies to everyone
+  who can change ports there.
+- Sign-in links can be given any role at or below your own, including custom roles.
+
 ## 1.3 — 2026-09-30
 
 ### Added

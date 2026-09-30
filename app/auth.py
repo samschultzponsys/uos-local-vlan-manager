@@ -53,9 +53,8 @@ from flask import g, jsonify, redirect, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import db
+import perms
 
-ROLES = ("viewer", "supervisor", "admin")
-RANK = {r: i for i, r in enumerate(ROLES)}
 COOKIE = "vlanmgr_session"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._@-]{1,64}$")
 MIN_PASSWORD = 8
@@ -126,8 +125,11 @@ def new_password():
     return "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(4))
 
 
-def role_at_least(role, need):
-    return RANK.get(role, -1) >= RANK[need]
+def _loads(v):
+    try:
+        return json.loads(v) if v else []
+    except ValueError:
+        return []
 
 
 # ----------------------------------------------------------------------------
@@ -320,7 +322,7 @@ def create_user(username, password="", role="viewer", display_name="", email="",
         raise ValueError("Username: 1-64 letters, digits, . _ @ -")
     if find_user(username):
         raise ValueError("That username is taken")
-    if role not in ROLES:
+    if role not in perms.roles():
         raise ValueError("Unknown role")
     if password and len(password) < MIN_PASSWORD:
         raise ValueError(f"Password must be at least {MIN_PASSWORD} characters")
@@ -485,14 +487,15 @@ def _session_user():
         d.commit()
         g.refresh_cookie = token
     role = row["role"]
-    if row["role_cap"]:   # a session opened with a token link keeps that token's limit
-        role = min(role, row["role_cap"], key=lambda r: RANK.get(r, -1))
+    if row["role_cap"] and row["role_cap"] in perms.roles():   # opened with a token link: keep its limit
+        role = perms.lower_of(role, row["role_cap"])
     me = {"id": row["user_id"], "username": row["username"], "display_name": row["display_name"],
           "role": role, "method": row["method"]}
-    # an admin viewing the app as someone else (only while they're still an admin)
-    if row["acting_as"] and role == "admin":
+    # viewing the app as someone below you (only while you still may)
+    if row["acting_as"] and role == row["role"]:
         t = get_user(row["acting_as"])
-        if t is not None and not t["disabled"] and t["role"] != "admin":
+        if t is not None and not t["disabled"] and t["role"] != perms.ADMIN \
+                and perms.has(me, "users.view_as") and perms.above(me, t["role"]):
             return {"id": t["id"], "username": t["username"], "display_name": t["display_name"],
                     "role": t["role"], "method": row["method"],
                     "impersonator": {"id": me["id"], "username": me["username"], "display_name": me["display_name"]}}
@@ -513,7 +516,7 @@ def _token_user(value):
         d.execute("UPDATE api_tokens SET last_used=? WHERE id=?", (now, row["id"]))
         d.commit()
     # a token never grants more than its owner currently has
-    role = min(row["role"], row["user_role"], key=lambda r: RANK.get(r, -1))
+    role = perms.lower_of(row["role"], row["user_role"]) if row["role"] in perms.roles() else perms.lowest_role()
     return {"id": row["user_id"], "username": row["username"], "display_name": row["display_name"],
             "role": role, "method": "token", "token_id": row["id"]}
 
@@ -555,19 +558,33 @@ def current():
     return getattr(g, "user", None)
 
 
-def require(role):
-    """Route decorator: the signed-in user needs at least `role`."""
+def require(cap=None):
+    """Route decorator: signed in, and (if given) holding ability `cap` (see perms.py)."""
     def deco(fn):
         @wraps(fn)
         def wrapper(*a, **kw):
             u = current()
             if not u:
                 return _deny("Sign in required", 401)
-            if not role_at_least(u["role"], role):
-                return _deny(f"This needs the {role} role", 403)
+            if cap and not perms.has(u, cap):
+                return _deny("You don't have permission to do that", 403)
             return fn(*a, **kw)
         return wrapper
     return deco
+
+
+def is_admin(u=None):
+    return perms.is_admin(u or current())
+
+
+def _may_manage(row):
+    """Is `row` (a person) someone the current identity may manage?"""
+    me = current()
+    if not me:
+        return False
+    if is_admin(me):
+        return True
+    return row["id"] != me["id"] and perms.above(me, row["role"])
 
 
 def audit(action, target="", detail=None, ok=True, env_id=None):
@@ -658,7 +675,7 @@ def _oidc_user(claims):
             n += 1
             username = f"{base}{n}"
         # SSO only proves who someone is: role and environments come from an admin here
-        row = create_user(username, "", "viewer", name, email, oidc_sub=sub)
+        row = create_user(username, "", perms.lowest_role(), name, email, oidc_sub=sub)
         _log(f"SSO user '{username}' created as viewer")
     elif email and email != row["email"]:
         d.execute("UPDATE users SET email=? WHERE id=?", (email, row["id"]))
@@ -718,7 +735,7 @@ def init_app(app):
             return _deny("You're viewing as someone else - their own account settings can't be changed", 403)
         if g.user is None and cfg["no_auth"]:
             g.user = {"id": 0, "username": "anonymous", "display_name": "Anonymous",
-                      "role": cfg["anonymous_role"] if cfg["anonymous_role"] in ROLES else "viewer",
+                      "role": cfg["anonymous_role"] if cfg["anonymous_role"] in perms.roles() else perms.lowest_role(),
                       "method": "none"}
         if g.user is not None or path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
             return
@@ -847,6 +864,10 @@ def init_app(app):
             return _deny("Sign in required", 401)
         cfg = config()
         out = {**{k: u[k] for k in ("id", "username", "display_name", "role", "method")},
+               "caps": sorted(perms.caps_for(u)), "role_name": perms.name(u["role"]),
+               "role_level": perms.level(u["role"]),
+               "token_roles": [{"key": r["key"], "name": r["name"]} for r in perms.roles().values()
+                               if r["level"] <= perms.level(u["role"])],
                "impersonator": u.get("impersonator"),
                "no_auth": bool(cfg["no_auth"]),
                "initial_password": False, "prefs": {}, "has_password": False, "email": "",
@@ -891,7 +912,7 @@ def init_app(app):
         if "display_name" in data:
             changes["display_name"] = str(data["display_name"] or "").strip()[:128]
         if "username" in data and str(data["username"] or "").strip() != row["username"]:
-            if not role_at_least(u["role"], "admin"):
+            if not is_admin(u):
                 return _deny("Ask an admin to change your username", 403)
             new = str(data["username"] or "").strip()
             if not USERNAME_RE.match(new):
@@ -909,7 +930,7 @@ def init_app(app):
         return jsonify({"ok": True})
 
     @app.route("/api/users/<int:uid>/impersonate", methods=["POST"])
-    @require("admin")
+    @require("users.view_as")
     def api_impersonate(uid):
         me = current()
         token = request.cookies.get(COOKIE)
@@ -918,8 +939,8 @@ def init_app(app):
         t = get_user(uid)
         if t is None:
             return _deny("No such user", 404)
-        if t["role"] == "admin" or t["disabled"]:
-            return _deny("You can only view as an active supervisor or viewer", 400)
+        if t["role"] == perms.ADMIN or t["disabled"] or not perms.above(me, t["role"]):
+            return _deny("You can only view as an active person below you (never an admin)", 400)
         d = db.get()
         d.execute("UPDATE sessions SET acting_as=? WHERE token_hash=?", (uid, sha(token)))
         d.commit()
@@ -935,7 +956,7 @@ def init_app(app):
         d = db.get()
         d.execute("UPDATE sessions SET acting_as=NULL WHERE token_hash=?", (sha(token),))
         d.commit()
-        db.audit(u["impersonator"]["username"], "admin", "user.impersonate_stop", u["username"], ip=client_ip())
+        db.audit(u["impersonator"]["username"], "", "user.impersonate_stop", u["username"], ip=client_ip())
         return jsonify({"ok": True})
 
     @app.route("/api/me/avatar", methods=["PUT", "DELETE"])
@@ -970,10 +991,10 @@ def init_app(app):
         return resp
 
     @app.route("/api/users/<int:uid>/avatar", methods=["PUT", "DELETE"])
-    @require("admin")
+    @require("users.edit")
     def api_user_avatar(uid):
         row = get_user(uid)
-        if row is None:
+        if row is None or not _may_manage(row):
             return _deny("No such user", 404)
         data = request.get_json(silent=True) or {}
         if request.method == "DELETE":
@@ -1027,8 +1048,8 @@ def init_app(app):
         role = data.get("role") or u["role"]
         if not name:
             return _deny("Give the token a name", 400)
-        if role not in ROLES or not role_at_least(u["role"], role):
-            return _deny("A token can't have a higher role than you", 400)
+        if role not in perms.roles() or perms.level(role) > perms.level(u["role"]):
+            return _deny("A link can't have a higher role than you", 400)
         try:
             days = max(0, min(3650, int(data.get("days") or 0)))
         except (TypeError, ValueError):
@@ -1058,26 +1079,46 @@ def init_app(app):
         audit("token.revoked", str(tid))
         return jsonify({"ok": True})
 
-    # --- users (admin) -----------------------------------------------------
+    # --- people ------------------------------------------------------------
+    # Admins manage everyone. Others need the matching users.* ability and only ever
+    # see or change people whose role is below their own (perms.above).
+
+    def _people_row(r, sess, env_n):
+        eff = perms.user_caps(r["role"], _loads(r["caps_grant"]), _loads(r["caps_deny"]))
+        return {**public_user(r), "sessions": sess.get(r["id"], 0), "envs": env_n.get(r["id"], 0),
+                "role_name": perms.name(r["role"]), "caps_grant": _loads(r["caps_grant"]),
+                "caps_deny": _loads(r["caps_deny"]), "caps": sorted(eff)}
 
     @app.route("/api/users")
-    @require("admin")
+    @require("users.view")
     def api_users():
-        rows = db.get().execute("SELECT * FROM users ORDER BY seeded DESC, username").fetchall()
+        me = current()
+        rows = [r for r in db.get().execute("SELECT * FROM users ORDER BY seeded DESC, username").fetchall()
+                if is_admin(me) or r["id"] == me["id"] or perms.above(me, r["role"])]
         sess = {r["user_id"]: r["n"] for r in db.get().execute(
             "SELECT user_id, COUNT(*) AS n FROM sessions WHERE expires_at > ? GROUP BY user_id", (db.now(),))}
         env_n = {r["user_id"]: r["n"] for r in db.get().execute(
             "SELECT user_id, COUNT(*) AS n FROM user_env GROUP BY user_id")}
-        return jsonify({"users": [{**public_user(r), "sessions": sess.get(r["id"], 0), "envs": env_n.get(r["id"], 0)}
-                                  for r in rows], "roles": list(ROLES)})
+        rs = perms.roles()
+        return jsonify({"users": [_people_row(r, sess, env_n) for r in rows],
+                        "roles": [rs[k] for k in rs],
+                        "assignable_roles": perms.assignable_roles(me),
+                        "caps": perms.public_caps(),
+                        "my_caps": sorted(perms.caps_for(me)),
+                        "admin": is_admin(me)})
 
     @app.route("/api/users", methods=["POST"])
-    @require("admin")
+    @require("users.create")
     def api_user_create():
+        me = current()
         data = request.get_json(silent=True) or {}
+        role = data.get("role") or perms.lowest_role()
+        if not is_admin(me) and (role not in perms.assignable_roles(me)
+                                 or (role != perms.lowest_role() and not perms.has(me, "users.roles"))):
+            role = perms.lowest_role()
         try:
             row = create_user((data.get("username") or "").strip(), data.get("password") or "",
-                              data.get("role") or "viewer", (data.get("display_name") or "").strip(),
+                              role, (data.get("display_name") or "").strip(),
                               (data.get("email") or "").strip())
         except ValueError as e:
             return _deny(str(e), 400)
@@ -1085,17 +1126,19 @@ def init_app(app):
         return jsonify({"ok": True, "user": public_user(row)})
 
     @app.route("/api/users/<int:uid>", methods=["PUT", "DELETE"])
-    @require("admin")
+    @require()
     def api_user_update(uid):
-        row = get_user(uid)
-        if row is None:
-            return _deny("No such user", 404)
         me = current()
+        row = get_user(uid)
+        if row is None or not _may_manage(row):
+            return _deny("No such user", 404)
         d = db.get()
         if request.method == "DELETE":
+            if not perms.has(me, "users.delete"):
+                return _deny("You don't have permission to delete people", 403)
             if uid == me["id"]:
                 return _deny("You can't delete yourself", 400)
-            if row["role"] == "admin" and admin_count(uid) == 0:
+            if row["role"] == perms.ADMIN and admin_count(uid) == 0:
                 return _deny("That's the last admin", 400)
             d.execute("DELETE FROM users WHERE id=?", (uid,))
             d.commit()
@@ -1103,17 +1146,31 @@ def init_app(app):
             audit("user.deleted", row["username"])
             return jsonify({"ok": True})
         data = request.get_json(silent=True) or {}
+        editing = {k for k in ("username", "display_name", "email", "disabled", "password", "sign_out") if k in data}
+        if editing and not perms.has(me, "users.edit"):
+            return _deny("You don't have permission to edit people", 403)
+        if ({"role", "caps_grant", "caps_deny"} & set(data)) and not perms.has(me, "users.roles"):
+            return _deny("You don't have permission to change roles or abilities", 403)
         changes = {}
         if "role" in data and data["role"] != row["role"]:
-            if data["role"] not in ROLES:
+            if data["role"] not in perms.roles():
                 return _deny("Unknown role", 400)
-            if row["role"] == "admin" and admin_count(uid) == 0:
+            if data["role"] not in perms.assignable_roles(me):
+                return _deny("You can only give roles below your own", 403)
+            if row["role"] == perms.ADMIN and admin_count(uid) == 0:
                 return _deny("That's the last admin - make someone else admin first", 400)
             changes["role"] = data["role"]
+        for k in ("caps_grant", "caps_deny"):
+            if k in data:
+                vals = sorted({c for c in (data[k] or []) if c in perms.CAP_KEYS})
+                mine = perms.caps_for(me)
+                if not is_admin(me) and any(c not in mine for c in vals):
+                    return _deny("You can only hand out abilities you have yourself", 403)
+                changes[k] = json.dumps(vals)
         if "disabled" in data and bool(data["disabled"]) != bool(row["disabled"]):
             if uid == me["id"]:
                 return _deny("You can't disable yourself", 400)
-            if data["disabled"] and row["role"] == "admin" and admin_count(uid) == 0:
+            if data["disabled"] and row["role"] == perms.ADMIN and admin_count(uid) == 0:
                 return _deny("That's the last admin", 400)
             changes["disabled"] = 1 if data["disabled"] else 0
         if "username" in data and str(data["username"] or "").strip() != row["username"]:
@@ -1146,10 +1203,94 @@ def init_app(app):
             audit("user.updated", row["username"], changes)
         return jsonify({"ok": True, "user": public_user(get_user(uid))})
 
+    # --- roles (admin) -------------------------------------------------------
+
+    def _role_body(data, builtin):
+        out = {}
+        if "name" in data:
+            n = str(data["name"] or "").strip()[:40]
+            if not n:
+                raise ValueError("Give the role a name")
+            out["name"] = n
+        if "level" in data and not builtin:
+            try:
+                lv = int(data["level"])
+            except (TypeError, ValueError):
+                raise ValueError("Level must be a number")
+            if not 11 <= lv <= 99:
+                raise ValueError("Level must be between 11 and 99")
+            out["level"] = lv
+        if "caps" in data:
+            out["caps"] = json.dumps(sorted({c for c in (data["caps"] or []) if c in perms.CAP_KEYS}))
+        return out
+
+    @app.route("/api/roles")
+    @require("users.view")
+    def api_roles():
+        counts = {r["role"]: r["n"] for r in db.get().execute("SELECT role, COUNT(*) AS n FROM users GROUP BY role")}
+        rs = perms.roles()
+        return jsonify({"roles": [{**rs[k], "users": counts.get(k, 0)} for k in rs], "caps": perms.public_caps(),
+                        "admin_caps": perms.ADMIN_CAPS})
+
+    @app.route("/api/roles", methods=["POST"])
+    @require("roles.manage")
+    def api_role_create():
+        data = request.get_json(silent=True) or {}
+        try:
+            vals = _role_body({"level": 30, **data}, builtin=False)
+        except ValueError as e:
+            return _deny(str(e), 400)
+        if "name" not in vals:
+            return _deny("Give the role a name", 400)
+        key, n = perms.slug(vals["name"]), 1
+        while key in perms.roles():
+            n += 1
+            key = f"{perms.slug(vals['name'])}-{n}"
+        d = db.get()
+        d.execute("INSERT INTO roles (key, name, level, caps, builtin) VALUES (?,?,?,?,0)",
+                  (key, vals["name"], vals["level"], vals.get("caps", "[]")))
+        d.commit()
+        perms.forget()
+        audit("role.created", vals["name"], {"level": vals["level"], "caps": json.loads(vals.get("caps", "[]"))})
+        return jsonify({"ok": True, "role": perms.roles()[key]})
+
+    @app.route("/api/roles/<key>", methods=["PUT", "DELETE"])
+    @require("roles.manage")
+    def api_role(key):
+        role = perms.roles().get(key)
+        if role is None:
+            return _deny("No such role", 404)
+        if key == perms.ADMIN:
+            return _deny("The Admin role always has every ability", 400)
+        d = db.get()
+        if request.method == "DELETE":
+            if role["builtin"]:
+                return _deny("Supervisor and Viewer can be renamed and changed, not deleted", 400)
+            move_to = (request.get_json(silent=True) or {}).get("move_to") or perms.lowest_role()
+            if move_to == key or move_to not in perms.roles():
+                return _deny("Pick another role for its people", 400)
+            d.execute("UPDATE users SET role=? WHERE role=?", (move_to, key))
+            d.execute("UPDATE api_tokens SET role=? WHERE role=?", (move_to, key))
+            d.execute("DELETE FROM roles WHERE key=?", (key,))
+            d.commit()
+            perms.forget()
+            audit("role.deleted", role["name"], {"people_moved_to": perms.name(move_to)})
+            return jsonify({"ok": True})
+        try:
+            vals = _role_body(request.get_json(silent=True) or {}, builtin=role["builtin"])
+        except ValueError as e:
+            return _deny(str(e), 400)
+        if vals:
+            d.execute(f"UPDATE roles SET {', '.join(k + '=?' for k in vals)} WHERE key=?", list(vals.values()) + [key])
+            d.commit()
+            perms.forget()
+            audit("role.updated", role["name"], {k: (json.loads(v) if k == "caps" else v) for k, v in vals.items()})
+        return jsonify({"ok": True, "role": perms.roles()[key]})
+
     # --- auth settings (admin) ----------------------------------------------
 
     @app.route("/api/settings/auth", methods=["GET"])
-    @require("admin")
+    @require("settings.manage")
     def api_auth_settings_get():
         cfg = config()
         o = dict(cfg["oidc"])
@@ -1157,10 +1298,11 @@ def init_app(app):
         return jsonify({**{k: cfg[k] for k in DEFAULT_AUTH if k not in ("oidc",)}, "oidc": o,
                         "locked": cfg["locked"], "oidc_ready": oidc_ready(cfg),
                         "redirect_uri": redirect_uri(), "detected_base": external_base(), "icons": BUTTON_ICONS,
+                        "roles": [{"key": r["key"], "name": r["name"]} for r in perms.roles().values()],
                         "signed_in_with": current()["method"]})
 
     @app.route("/api/settings/auth", methods=["PUT"])
-    @require("admin")
+    @require("settings.manage")
     def api_auth_settings_put():
         data = request.get_json(silent=True) or {}
         cur = config()
@@ -1172,7 +1314,7 @@ def init_app(app):
             if k in data and k not in cur["locked"]:
                 cand[k] = str(data[k] or "").strip()
         if "anonymous_role" in data:
-            if data["anonymous_role"] not in ROLES:
+            if data["anonymous_role"] not in perms.roles():
                 return _deny("Unknown role", 400)
             cand["anonymous_role"] = data["anonymous_role"]
         if "session_days" in data:
@@ -1228,7 +1370,7 @@ def init_app(app):
         return jsonify({"ok": True})
 
     @app.route("/api/settings/auth/test-oidc", methods=["POST"])
-    @require("admin")
+    @require("settings.manage")
     def api_oidc_test():
         o = request.get_json(silent=True) or {}
         url = discovery_url({"discovery_url": (o.get("discovery_url") or "").strip(),
@@ -1253,7 +1395,7 @@ def init_app(app):
         return jsonify(out)
 
     @app.route("/api/sessions", methods=["GET"])
-    @require("admin")
+    @require("settings.manage")
     def api_sessions():
         rows = db.get().execute(
             "SELECT s.created_at, s.last_seen, s.expires_at, s.ip, s.user_agent, s.method, u.username "

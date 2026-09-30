@@ -177,10 +177,11 @@ const sig = (p) => `${p.native_network_id}|${p.tagged_mode}|${[...p.excluded_net
 
 function PortDrawer({ env, access, device, port, networks, colors, me, settings, onClose, onApplied }) {
   const restricted = !access.all_vlans;
-  const mayProtected = me.role === "admin" || (me.role === "supervisor" && env.supervisors_protected);
-  const isAdmin = me.role === "admin";
+  const can = (c) => (me.caps || []).includes(c);
+  const mayProtected = can("ports.protected") || env.supervisors_protected;
+  const isAdmin = can("ports.lock");   // lock controls
   const lock = port.lock;
-  const canEdit = rank(me.role) >= 1 && (!port.protected || mayProtected) && (!lock || isAdmin);
+  const canEdit = can("ports.change") && (!port.protected || mayProtected) && (!lock || isAdmin);
   const [lockNote, setLockNote] = useState("");
   const [lockBusy, setLockBusy] = useState(false);
   const portUrl = `/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}`;
@@ -287,13 +288,13 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
         <b>Locked by an admin</b>${lock.note && html` — ${lock.note}`}.
         ${(() => { const n = netOf(networks, lock.native_network_id); return html` Locked to <b>${n ? `${n.name} (${n.vlan})` : "?"}</b>, ${MODE_LABEL[lock.tagged_mode]}.`; })()}
         ${lock.drift && html`<div class="warn-text"><b>It was changed in UniFi</b> and no longer matches the lock.</div>`}
-        ${!isAdmin && html`<div class="muted small">Only an admin can change it.</div>`}
+        ${!isAdmin && html`<div class="muted small">Only someone who can lock ports can change it.</div>`}
         ${isAdmin && html`<div class="lock-actions">
           ${lock.drift && html`<button class="btn sm primary" disabled=${lockBusy} onClick=${() => lockAction("POST", "/lock/reapply", {}, "Locked settings re-applied")}><${Icon} name="refresh" size=${14} />Re-apply locked settings</button>`}
           <button class="btn sm" disabled=${lockBusy} onClick=${() => lockAction("DELETE", "/lock", {}, `Port ${port.idx} unlocked`)}>Unlock</button>
         </div>`}</div></div>`}
       ${port.protected && html`<div class="notice warn"><${Icon} name="shield" /><div><b>Protected port.</b> ${port.protect_reasons.join(" · ")}.
-        ${mayProtected ? " You can change it after confirming." : " Only an admin can change it."}</div></div>`}
+        ${mayProtected ? " You can change it after confirming." : " You don't have permission to change protected ports."}</div></div>`}
       ${port.profile_name && html`<div class="notice"><${Icon} name="layers" /><div>Uses port profile <b>${port.profile_name}</b>. Applying a VLAN here detaches it.</div></div>`}
       ${canEdit && allowed.length === 0 && html`<div class="notice warn"><${Icon} name="info" /><div>You haven't been given any networks in this environment. Ask an admin.</div></div>`}
 
@@ -498,7 +499,9 @@ function App() {
 
   const settings = envList.settings;
   const prefs = me.prefs || {};
-  const isAdmin = me.role === "admin";
+  const can = (c) => (me.caps || []).includes(c);
+  const isAdmin = can("settings.manage");
+  const canEnvs = can("envs.manage");
   const env = envList.envs.find((e) => e.id === envId);
   const ready = st && env && st.env.id === env.id;
   const networks = ready ? st.networks : [];
@@ -518,7 +521,7 @@ function App() {
   let body;
   if (envList.envs.length === 0) {
     body = html`<div class="empty"><div class="empty-icon"><${Icon} name="server" size=${40} /></div>
-      ${isAdmin ? html`<h2>Add your first environment</h2>
+      ${canEnvs ? html`<h2>Add your first environment</h2>
           <p class="muted">An environment is one UniFi console or UniFi OS instance, reached with its own API key.</p>
           <button class="btn primary" onClick=${() => setModal("settings")}><${Icon} name="plus" />Add environment</button>`
         : html`<h2>Nothing here yet</h2><p class="muted">An admin hasn't given you access to any switches yet.</p>`}</div>`;
@@ -527,8 +530,8 @@ function App() {
   } else if (st.error === "not_configured") {
     body = html`<div class="empty"><div class="empty-icon"><${Icon} name="key" size=${40} /></div>
       <h2>${env.name} isn't connected yet</h2>
-      <p class="muted">${isAdmin ? "Add the console address and an API key for this environment." : "An admin still needs to add this environment's API key."}</p>
-      ${isAdmin && html`<button class="btn primary" onClick=${() => setModal("settings")}><${Icon} name="settings" />Open settings</button>`}</div>`;
+      <p class="muted">${canEnvs ? "Add the console address and an API key for this environment." : "An admin still needs to add this environment's API key."}</p>
+      ${canEnvs && html`<button class="btn primary" onClick=${() => setModal("settings")}><${Icon} name="settings" />Open settings</button>`}</div>`;
   } else if (st.error) {
     body = html`<div class="notice err big"><${Icon} name="alert" /><div><b>Can't load ${env.name} from UniFi.</b> ${st.error}
       <div><button class="link-btn" onClick=${() => load(true)}>Try again</button>${isAdmin && html` · <button class="link-btn" onClick=${() => setModal("settings")}>Settings</button>`}</div></div></div>`;
@@ -555,10 +558,10 @@ function App() {
 
   return html`
     ${me.no_auth && html`<div class="danger-banner"><${Icon} name="alert" />
-      <span><b>No-auth mode is on.</b> Anyone who can reach this page can ${rank(me.role) >= 1 ? "change switch ports" : "see your network"}${me.role === "admin" ? " and settings" : ""} without signing in.</span>
+      <span><b>No-auth mode is on.</b> Anyone who can reach this page can ${can("ports.change") ? "change switch ports" : "see your network"}${isAdmin ? " and settings" : ""} without signing in.</span>
       ${me.method === "none" && html`<a href="/login?manual=1">Sign in</a>`}</div>`}
     ${me.impersonator && html`<div class="imp-banner"><${Icon} name="eye" />
-      <span>You're viewing as <b>${me.display_name || me.username}</b> (${ROLE_LABEL[me.role]}). Anything you change is logged as ${me.impersonator.username} (as ${me.username}).</span>
+      <span>You're viewing as <b>${me.display_name || me.username}</b> (${me.role_name}). Anything you change is logged as ${me.impersonator.username} (as ${me.username}).</span>
       <button class="btn sm" onClick=${async () => { await api("/api/impersonate/stop", { method: "POST" }); location.reload(); }}>Stop viewing as</button></div>`}
     ${me.initial_password && html`<div class="warn-banner"><${Icon} name="key" /><span>You're using the generated admin password.</span>
       <button class="link-btn" onClick=${() => setModal("account")}>Change it now</button></div>`}
@@ -569,9 +572,9 @@ function App() {
         <button class="btn ghost" disabled=${!env} onClick=${() => load(true)} title="Refresh from UniFi">
           <${Icon} name="refresh" cls=${loading ? "spin" : ""} /><span class="hide-sm">Refresh</span></button>
         <button class="btn ghost" onClick=${() => setModal("picker")} disabled=${!devices.length}><${Icon} name="grid" /><span class="hide-sm">Devices</span></button>
-        ${rank(me.role) >= 1 && html`<button class="btn ghost hide-sm" onClick=${() => setModal("audit")}><${Icon} name="list" /><span class="hide-sm">Activity</span></button>`}
-        ${isAdmin && html`<button class="btn ghost hide-sm" onClick=${() => setModal("users")}><${Icon} name="users" /><span class="hide-sm">Users</span></button>`}
-        ${isAdmin && html`<button class="icon-btn hide-sm" onClick=${() => setModal("settings")} title="Settings"><${Icon} name="settings" /></button>`}
+        ${can("activity.view") && html`<button class="btn ghost hide-sm" onClick=${() => setModal("audit")}><${Icon} name="list" /><span class="hide-sm">Activity</span></button>`}
+        ${can("users.view") && html`<button class="btn ghost hide-sm" onClick=${() => setModal("users")}><${Icon} name="users" /><span class="hide-sm">Users</span></button>`}
+        ${(isAdmin || canEnvs) && html`<button class="icon-btn hide-sm" onClick=${() => setModal("settings")} title="Settings"><${Icon} name="settings" /></button>`}
         <button class="icon-btn theme-btn" onClick=${() => setTheme(theme === "dark" ? "light" : "dark")}
           title=${theme === "dark" ? "Switch to light" : "Switch to dark"} aria-label="Toggle day / night">
           <${Icon} name=${theme === "dark" ? "sun" : "moon"} /></button>
@@ -579,14 +582,14 @@ function App() {
           <button class="user-btn" onClick=${() => setMenu(!menu)}>
             <${Avatar} user=${me} />
             <span class="hide-sm user-name">${me.display_name || me.username}</span>
-            <span class=${"role-badge " + me.role}>${ROLE_LABEL[me.role]}</span></button>
+            <span class=${"role-badge " + me.role}>${me.role_name}</span></button>
           ${menu && html`<div class="menu-scrim" onClick=${() => setMenu(false)}></div>`}
           ${menu && html`<div class="menu" onMouseLeave=${canHover ? () => setMenu(false) : undefined}>
             <div class="menu-head"><${Avatar} user=${me} size=${40} /><b>${me.display_name || me.username}</b><span class="muted">${me.username} · ${me.method === "oidc" ? "SSO" : me.method === "token" ? "token" : me.method === "none" ? "not signed in" : "password"}</span></div>
-            ${rank(me.role) >= 1 && env && html`<button onClick=${() => { setMenu(false); setModal("envinfo"); }}><${Icon} name="server" />About ${env.name}</button>`}
-            ${rank(me.role) >= 1 && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("audit"); }}><${Icon} name="list" />Activity</button>`}
-            ${isAdmin && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("users"); }}><${Icon} name="users" />Users</button>`}
-            ${isAdmin && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("settings"); }}><${Icon} name="settings" />Settings</button>`}
+            ${can("env.info") && env && html`<button onClick=${() => { setMenu(false); setModal("envinfo"); }}><${Icon} name="server" />About ${env.name}</button>`}
+            ${can("activity.view") && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("audit"); }}><${Icon} name="list" />Activity</button>`}
+            ${can("users.view") && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("users"); }}><${Icon} name="users" />Users</button>`}
+            ${(isAdmin || canEnvs) && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("settings"); }}><${Icon} name="settings" />Settings</button>`}
             ${me.id ? html`<button onClick=${() => { setMenu(false); setModal("account"); }}><${Icon} name="user" />My account</button>` : null}
             ${env && html`<button onClick=${() => { setMenu(false); setModal("colors"); }}><${Icon} name="palette" />My VLAN colors</button>`}
             <button onClick=${() => setTheme(theme === "dark" ? "light" : "dark")}><${Icon} name=${theme === "dark" ? "sun" : "moon"} />${theme === "dark" ? "Light" : "Dark"} theme</button>

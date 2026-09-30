@@ -18,6 +18,7 @@ from flask import Flask, g, jsonify, redirect, request, send_from_directory
 import auth
 import db
 import envs
+import perms
 import unifi
 import versioning
 from versioning import VERSION, CHANGELOG
@@ -145,7 +146,7 @@ def api_version():
 
 
 @app.route("/api/version/check", methods=["POST"])
-@auth.require("admin")
+@auth.require("settings.manage")
 def api_version_check():
     return jsonify({"version": VERSION, "update": versioning.check(db.setting_bool("update_check"))})
 
@@ -184,16 +185,16 @@ def _env_or_404(env_id):
 
 
 @app.route("/api/envs")
-@auth.require("viewer")
+@auth.require()
 def api_envs():
     me = auth.current()
     return jsonify({"settings": public_settings(),
-                    "envs": [{**envs.public(e, me["role"] == "admin"), "access": acc}
+                    "envs": [{**envs.public(e, perms.has(me, "envs.manage")), "access": acc}
                              for e, acc in envs.accessible(me)]})
 
 
 @app.route("/api/envs/<int:env_id>/state")
-@auth.require("viewer")
+@auth.require()
 def api_env_state(env_id):
     env, acc, err = _env_or_404(env_id)
     if err:
@@ -217,7 +218,7 @@ def api_env_state(env_id):
 
 
 @app.route("/api/envs/<int:env_id>/config")
-@auth.require("supervisor")
+@auth.require("env.info")
 def api_env_config(env_id):
     """Read-only view of an environment's settings for its supervisors (no API key)."""
     env, acc, err = _env_or_404(env_id)
@@ -236,7 +237,7 @@ def _net_label(nets, nid):
 
 
 @app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>", methods=["PUT"])
-@auth.require("supervisor")
+@auth.require("ports.change")
 def api_set_port(env_id, device_id, idx):
     return _set_port(env_id, device_id, idx, request.get_json(silent=True) or {})
 
@@ -280,15 +281,15 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
             excluded = list(set(excluded) | {i for i in net_ids if not envs.vlan_allowed(acc, i)})
     lock = envs.locks(env_id).get((ndev["mac"], idx))
     if lock:
-        if me["role"] != "admin":
+        if not perms.has(me, "ports.lock"):
             return _deny("An admin locked this port" + (f": {lock['note']}" if lock["note"] else ""), 403)
         if not body.get("confirm_locked"):
             return _deny("Locked port", 409, confirm="locked", note=lock["note"])
     if port["protected"]:
-        may = me["role"] == "admin" or (bool(env["supervisors_protected"]) and me["role"] == "supervisor")
+        may = perms.has(me, "ports.protected") or bool(env["supervisors_protected"])
         if not may:
             return _deny("This port is protected (" + "; ".join(port["protect_reasons"]) +
-                         "). Only an admin can change it.", 403)
+                         "). You don't have permission to change protected ports.", 403)
         if not body.get("confirm_protected"):
             return _deny("Protected port", 409, confirm="protected", reasons=port["protect_reasons"])
     if port["profile_id"] and not body.get("detach_profile"):
@@ -354,7 +355,7 @@ def _fresh_port(env, device_id, idx):
 
 
 @app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>/lock", methods=["PUT", "DELETE"])
-@auth.require("admin")
+@auth.require("ports.lock")
 def api_port_lock(env_id, device_id, idx):
     env, _, err = _env_or_404(env_id)
     if err:
@@ -382,7 +383,7 @@ def api_port_lock(env_id, device_id, idx):
 
 
 @app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>/lock/reapply", methods=["POST"])
-@auth.require("admin")
+@auth.require("ports.lock")
 def api_port_lock_reapply(env_id, device_id, idx):
     """Put a locked port back to its locked settings (after someone changed it in UniFi)."""
     env, _, err = _env_or_404(env_id)
@@ -406,7 +407,7 @@ def api_port_lock_reapply(env_id, device_id, idx):
 # ----------------------------------------------------------------------------
 
 @app.route("/api/audit")
-@auth.require("supervisor")
+@auth.require("activity.view")
 def api_audit():
     me = auth.current()
     limit = max(1, min(500, int(request.args.get("limit") or 200)))
@@ -414,8 +415,8 @@ def api_audit():
     if request.args.get("before"):
         where.append("a.id < ?")
         args.append(int(request.args["before"]))
-    if me["role"] != "admin":
-        # supervisors: port changes in their own environments
+    if not perms.has(me, "settings.manage"):
+        # everyone but admins: port changes in their own environments
         ids = [e["id"] for e, _ in envs.accessible(me)] or [-1]
         where.append("a.action LIKE 'port.%' AND a.env_id IN (" + ",".join("?" * len(ids)) + ")")
         args += ids
@@ -431,14 +432,14 @@ def api_audit():
 # ----------------------------------------------------------------------------
 
 @app.route("/api/settings")
-@auth.require("admin")
+@auth.require("settings.manage")
 def api_settings():
     return jsonify({**public_settings(), "update_check": db.setting_bool("update_check"),
                     "update_allowed": versioning.UPDATE_ALLOWED})
 
 
 @app.route("/api/settings", methods=["PUT"])
-@auth.require("admin")
+@auth.require("settings.manage")
 def api_settings_put():
     data = request.get_json(silent=True) or {}
     vals = {}
@@ -514,7 +515,7 @@ def _safe(vals):
 
 
 @app.route("/api/admin/envs")
-@auth.require("admin")
+@auth.require("envs.manage")
 def api_admin_envs():
     counts = {r["env_id"]: r["n"] for r in db.get().execute(
         "SELECT env_id, COUNT(*) AS n FROM user_env GROUP BY env_id")}
@@ -522,7 +523,7 @@ def api_admin_envs():
 
 
 @app.route("/api/admin/envs", methods=["POST"])
-@auth.require("admin")
+@auth.require("envs.manage")
 def api_admin_env_create():
     try:
         vals = _env_fields(request.get_json(silent=True) or {}, partial=False)
@@ -540,7 +541,7 @@ def api_admin_env_create():
 
 
 @app.route("/api/admin/envs/<int:env_id>", methods=["PUT", "DELETE"])
-@auth.require("admin")
+@auth.require("envs.manage")
 def api_admin_env(env_id):
     env = envs.get(env_id)
     if env is None:
@@ -576,7 +577,7 @@ def _candidate_client(data):
 
 
 @app.route("/api/admin/envs/test", methods=["POST"])
-@auth.require("admin")
+@auth.require("envs.manage")
 def api_admin_env_test():
     try:
         c = _candidate_client(request.get_json(silent=True) or {})
@@ -595,7 +596,7 @@ def api_admin_env_test():
 
 
 @app.route("/api/admin/envs/consoles", methods=["POST"])
-@auth.require("admin")
+@auth.require("envs.manage")
 def api_admin_env_consoles():
     try:
         return jsonify({"ok": True, "consoles": _candidate_client(request.get_json(silent=True) or {}).cloud_consoles()})
@@ -604,19 +605,23 @@ def api_admin_env_consoles():
 
 
 @app.route("/api/admin/envs/<int:env_id>/catalog")
-@auth.require("admin")
+@auth.require()
 def api_admin_env_catalog(env_id):
-    """Networks and devices of an environment, for the access and color editors."""
+    """Networks and devices of an environment, for the access and color editors - limited
+    to what the asking person may hand out themselves."""
+    me = auth.current()
     env = envs.get(env_id)
-    if env is None:
+    mine = envs.access(me, env_id)
+    if env is None or not (perms.has(me, "envs.manage") or (perms.has(me, "users.access") and mine)):
         return _deny("No such environment", 404)
     try:
         data, _ = envs.snapshot(env_id).get(envs.client(env), db.setting_bool("protect_uplinks"))
     except unifi.UniFiError as e:
         return jsonify({"ok": False, "error": str(e), "networks": [], "devices": []})
-    return jsonify({"ok": True, "networks": data["networks"],
+    return jsonify({"ok": True,
+                    "networks": [n for n in data["networks"] if envs.vlan_allowed(mine, n["id"])],
                     "devices": [{k: d[k] for k in ("id", "mac", "name", "model_name", "type_label", "port_count", "online")}
-                                for d in data["devices"]]})
+                                for d in data["devices"] if envs.device_allowed(mine, d["mac"])]})
 
 
 # ----------------------------------------------------------------------------
@@ -624,15 +629,21 @@ def api_admin_env_catalog(env_id):
 # ----------------------------------------------------------------------------
 
 @app.route("/api/users/<int:uid>/access", methods=["GET", "PUT"])
-@auth.require("admin")
+@auth.require("users.access")
 def api_user_access(uid):
+    me = auth.current()
     user = auth.get_user(uid)
-    if user is None:
+    if user is None or not auth._may_manage(user):
         return _deny("No such user", 404)
     if request.method == "PUT":
         entries = (request.get_json(silent=True) or {}).get("envs") or []
         if not isinstance(entries, list):
             return _deny("envs must be a list")
+        if not perms.has(me, "envs.manage"):
+            try:
+                entries = envs.limit_grant(me, uid, entries)
+            except ValueError as e:
+                return _deny(str(e), 403)
         envs.set_user_access(uid, entries)
         names = {e["id"]: e["name"] for e in envs.all_envs()}
         auth.audit("user.access", user["username"], {"envs": [

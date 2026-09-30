@@ -77,7 +77,8 @@ FULL = {"all_vlans": True, "vlans": [], "all_devices": True, "devices": []}
 
 
 def _full_access(user):
-    return user["role"] == "admin" or user["method"] == "none"
+    import perms
+    return user["method"] == "none" or perms.has(user, "envs.manage")
 
 
 def access(user, env_id):
@@ -186,3 +187,28 @@ def remove_lock(env_id, mac, idx):
     cur = d.execute("DELETE FROM port_locks WHERE env_id=? AND device_mac=? AND port_idx=?", (env_id, mac.lower(), idx))
     d.commit()
     return cur.rowcount > 0
+
+
+def limit_grant(manager, user_id, entries):
+    """A non-admin can only hand out environments, networks and devices they have themselves.
+    Environments they can't see are left as they were for that person."""
+    mine = {row["id"]: acc for row, acc in accessible(manager)}
+    out = [x for x in user_access_list(user_id) if x["env_id"] not in mine]   # untouched
+    for x in entries:
+        eid = int(x.get("env_id") or 0)
+        acc = mine.get(eid)
+        if acc is None:
+            raise ValueError("You can only give access to environments you have yourself")
+        x = dict(x)
+        if not acc["all_vlans"]:
+            if x.get("all_vlans", True):
+                x["all_vlans"], x["vlans"] = False, list(acc["vlans"])
+            if any(v not in acc["vlans"] for v in x.get("vlans") or []):
+                raise ValueError("You can only give networks you have yourself")
+        if not acc["all_devices"]:
+            if x.get("all_devices", True):
+                x["all_devices"], x["devices"] = False, list(acc["devices"])
+            if any(str(m).lower() not in acc["devices"] for m in x.get("devices") or []):
+                raise ValueError("You can only give devices you can see yourself")
+        out.append(x)
+    return out

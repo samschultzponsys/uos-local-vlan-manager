@@ -4,13 +4,8 @@ import {
   vlanColors, ROLE_LABEL, MODE_LABEL, ago, when, rank,
 } from "./ui.js";
 
-const ROLE_HELP = {
-  admin: "Everything: environments and API keys, users and their access, settings.",
-  supervisor: "Changes ports and reads the settings of their environments. Sees their activity.",
-  viewer: "Sees their devices. Nothing else.",
-};
 
-const ROLES = ["viewer", "supervisor", "admin"];
+const roleName = (roles, key) => ((roles || []).find((r) => r.key === key) || { name: key }).name;
 
 // ============================================================================
 // Settings
@@ -181,7 +176,7 @@ function AuthTab() {
     } catch (e) {
       if (e.status === 409 && e.data.confirm_no_auth) {
         const typed = prompt("No-auth mode lets ANYONE who can reach this app use it without signing in, " +
-          `acting as ${ROLE_LABEL[a.anonymous_role]}.\n\nOnly do this on an isolated network you fully trust.\n\nType I UNDERSTAND to turn it on:`);
+          `acting as ${roleName(a.roles, a.anonymous_role)}.\n\nOnly do this on an isolated network you fully trust.\n\nType I UNDERSTAND to turn it on:`);
         if (typed) return save({ ...extra, confirm_no_auth: typed });
       } else if (e.status === 409 && e.data.confirm) {
         if (await ask({ title: "Are you sure?", body: e.data.confirm, danger: true, confirm: "Save anyway" })) return save({ ...extra, confirm: true });
@@ -260,7 +255,7 @@ function AuthTab() {
       <div class="row">
         <${Toggle} checked=${a.no_auth} disabled=${locked("no_auth")} onChange=${(v) => set("no_auth", v)} label="No authentication" />
         <select value=${a.anonymous_role} onChange=${(e) => set("anonymous_role", e.target.value)}>
-          ${ROLES.map((r) => html`<option value=${r}>Anonymous visitors are ${ROLE_LABEL[r]}</option>`)}</select>
+          ${a.roles.map((r) => html`<option value=${r.key}>Anonymous visitors are ${r.name}</option>`)}</select>
       </div>
       ${locked("no_auth") && html`<small class="hint">Set by VLANMGR_NO_AUTH.</small>`}
     </div>
@@ -334,11 +329,13 @@ function UpdatesTab() {
 
 export function UsersModal({ me, onClose }) {
   const [data, setData] = useState(null);
+  const [tab, setTab] = useState("people");
   const [adding, setAdding] = useState(false);
   const [view, setView] = useState(null);   // { kind: "access" | "edit", user }
-  const [form, setForm] = useState({ username: "", display_name: "", email: "", password: "", role: "viewer" });
+  const [form, setForm] = useState({ username: "", display_name: "", email: "", password: "", role: "" });
   const load = () => api("/api/users").then(setData).catch((e) => toast(e.message, "err"));
   useEffect(() => { load(); }, []);
+  const can = (c) => data && data.my_caps.includes(c);
 
   async function update(u, body, msg) {
     try { await api(`/api/users/${u.id}`, { method: "PUT", body }); toast(msg || "Saved"); load(); return true; } catch (e) { toast(e.message, "err"); return false; }
@@ -347,68 +344,164 @@ export function UsersModal({ me, onClose }) {
 
   if (view && view.kind === "access") {
     return html`<${Modal} title=${`Access · ${view.user.display_name || view.user.username}`} icon="shield" onClose=${onClose} wide>
-      <${AccessEditor} user=${view.user} onDone=${back} /></${Modal}>`;
+      <${AccessEditor} user=${view.user} roles=${data.roles} onDone=${back} /></${Modal}>`;
   }
   if (view && view.kind === "edit") {
-    return html`<${Modal} title=${`Edit · ${view.user.username}`} icon="user" onClose=${onClose}>
-      <${UserEditor} user=${view.user} onSave=${async (b) => { if (await update(view.user, b, "Saved")) back(); }} onCancel=${back} /></${Modal}>`;
+    return html`<${Modal} title=${`Edit · ${view.user.username}`} icon="user" onClose=${onClose} wide>
+      <${UserEditor} user=${view.user} data=${data} me=${me} onSave=${async (b) => { if (await update(view.user, b, "Saved")) back(); }} onCancel=${back} /></${Modal}>`;
   }
+  const rolesByLevel = data ? data.roles.slice().sort((x, y) => y.level - x.level) : [];
   return html`<${Modal} title="Users" icon="users" onClose=${onClose} wide
-    footer=${html`<span class="muted grow">Everyone starts as Viewer with no environments. SSO users appear here after their first sign-in.</span>
-      <button class="btn primary" onClick=${() => setAdding(!adding)}><${Icon} name="plus" />Add user</button>`}>
-    <div class="role-help">${ROLES.slice().reverse().map((r) => html`<div><span class=${"role-badge " + r}>${ROLE_LABEL[r]}</span><span class="muted small">${ROLE_HELP[r]}</span></div>`)}</div>
+    footer=${tab === "people" && data && html`<span class="muted grow">New people start with the lowest role and no environments. SSO users appear here after their first sign-in.</span>
+      ${can("users.create") && html`<button class="btn primary" onClick=${() => setAdding(!adding)}><${Icon} name="plus" />Add user</button>`}`}>
+    ${data && data.admin && html`<nav class="tabs"><button class=${tab === "people" ? "on" : ""} onClick=${() => setTab("people")}><${Icon} name="users" size=${15} />People</button>
+      <button class=${tab === "roles" ? "on" : ""} onClick=${() => setTab("roles")}><${Icon} name="shield" size=${15} />Roles & abilities</button></nav>`}
+    ${!data ? html`<${Spinner} />` : tab === "roles" ? html`<${RolesEditor} onChanged=${load} />` : html`
     ${adding && html`<div class="panel add-user">
       <div class="grid3">
         <${Field} label="Username"><input value=${form.username} onInput=${(e) => setForm({ ...form, username: e.target.value })} /></${Field}>
         <${Field} label="Display name"><input value=${form.display_name} onInput=${(e) => setForm({ ...form, display_name: e.target.value })} /></${Field}>
         <${Field} label="Email"><input value=${form.email} onInput=${(e) => setForm({ ...form, email: e.target.value })} /></${Field}>
         <${Field} label="Password" hint="Leave blank for an SSO-only user."><input type="password" autocomplete="new-password" value=${form.password} onInput=${(e) => setForm({ ...form, password: e.target.value })} /></${Field}>
-        <${Field} label="Role"><select value=${form.role} onChange=${(e) => setForm({ ...form, role: e.target.value })}>${ROLES.map((r) => html`<option value=${r}>${ROLE_LABEL[r]}</option>`)}</select></${Field}>
+        ${(data.admin || can("users.roles")) && html`<${Field} label="Role"><select value=${form.role || rolesByLevel[rolesByLevel.length - 1].key} onChange=${(e) => setForm({ ...form, role: e.target.value })}>
+          ${rolesByLevel.filter((r) => data.assignable_roles.includes(r.key)).map((r) => html`<option value=${r.key}>${r.name}</option>`)}</select></${Field}>`}
         <div class="field end"><button class="btn primary" onClick=${async () => {
           try {
             const r = await api("/api/users", { method: "POST", body: form });
-            toast(`Added ${form.username}`); setForm({ username: "", display_name: "", email: "", password: "", role: "viewer" }); setAdding(false);
-            if (r.user.role !== "admin") setView({ kind: "access", user: r.user }); else load();
+            toast(`Added ${form.username}`); setForm({ username: "", display_name: "", email: "", password: "", role: "" }); setAdding(false);
+            if (r.user.role !== "admin" && can("users.access")) setView({ kind: "access", user: r.user }); else load();
           } catch (e) { toast(e.message, "err"); }
         }}>Create</button></div>
       </div></div>`}
-    ${!data ? html`<${Spinner} />` : html`<div class="table-wrap"><table class="table">
+    <div class="table-wrap"><table class="table">
       <thead><tr><th>User</th><th>Role</th><th>Access</th><th>Last sign-in</th><th>Status</th><th></th></tr></thead>
-      <tbody>${data.users.map((u) => html`<tr key=${u.id} class=${u.disabled ? "disabled" : ""}>
-        <td><div class="u-cell"><${Avatar} user=${u} size=${32} />${u.avatar_locked ? html`<span class="av-lock" title="Picture locked by an admin"><${Icon} name="lock" size=${10} /></span>` : null}
+      <tbody>${data.users.map((u) => {
+        const self = u.id === me.id;
+        const extra = u.caps_grant.length + u.caps_deny.length;
+        return html`<tr key=${u.id} class=${u.disabled ? "disabled" : ""}>
+        <td><div class="u-cell"><${Avatar} user=${u} size=${32} />${u.avatar_locked ? html`<span class="av-lock" title="Picture locked"><${Icon} name="lock" size=${10} /></span>` : null}
           <div><b>${u.display_name || u.username}</b>${u.seeded && html` <span class="badge">first admin</span>`}
             <div class="muted small">${u.username}${u.email ? ` · ${u.email}` : ""}${u.sso ? " · SSO" : ""}</div></div></div></td>
-        <td><select class="sm" value=${u.role} onChange=${(e) => update(u, { role: e.target.value }, `${u.username} is now ${ROLE_LABEL[e.target.value]}`)}>
-          ${ROLES.map((r) => html`<option value=${r}>${ROLE_LABEL[r]}</option>`)}</select></td>
+        <td>${!self && (data.admin || can("users.roles")) && (data.admin || data.assignable_roles.includes(u.role))
+            ? html`<select class="sm" value=${u.role} onChange=${(e) => update(u, { role: e.target.value }, `${u.username} is now ${roleName(data.roles, e.target.value)}`)}>
+                ${rolesByLevel.filter((r) => data.assignable_roles.includes(r.key) || r.key === u.role).map((r) => html`<option value=${r.key}>${r.name}</option>`)}</select>`
+            : html`<span class=${"role-badge " + u.role}>${u.role_name}</span>`}
+          ${extra > 0 && html`<div class="muted small" title="Abilities changed for this person">${u.caps_grant.length ? `+${u.caps_grant.length}` : ""}${u.caps_grant.length && u.caps_deny.length ? " " : ""}${u.caps_deny.length ? `−${u.caps_deny.length}` : ""} abilities</div>`}</td>
         <td>${u.role === "admin" ? html`<span class="badge good">All environments</span>`
-          : html`<button class=${"btn sm " + (u.envs ? "ghost" : "primary")} onClick=${() => setView({ kind: "access", user: u })}>
-              <${Icon} name="shield" size=${14} />${u.envs ? `${u.envs} environment${u.envs > 1 ? "s" : ""}` : "Give access"}</button>`}</td>
+          : can("users.access") && !self ? html`<button class=${"btn sm " + (u.envs ? "ghost" : "primary")} onClick=${() => setView({ kind: "access", user: u })}>
+              <${Icon} name="shield" size=${14} />${u.envs ? `${u.envs} environment${u.envs > 1 ? "s" : ""}` : "Give access"}</button>`
+          : html`<span class="muted small">${u.envs} environment${u.envs === 1 ? "" : "s"}</span>`}</td>
         <td class="muted small">${ago(u.last_login)}${u.sessions ? html`<div>${u.sessions} active session${u.sessions > 1 ? "s" : ""}</div>` : null}</td>
-        <td>${u.id !== me.id ? html`<${Toggle} checked=${!u.disabled} onChange=${(on) => update(u, { disabled: !on }, on ? "Enabled" : "Disabled")} label=${u.disabled ? "Disabled" : "Active"} />` : html`<span class="muted small">you</span>`}</td>
+        <td>${!self && can("users.edit") ? html`<${Toggle} checked=${!u.disabled} onChange=${(on) => update(u, { disabled: !on }, on ? "Enabled" : "Disabled")} label=${u.disabled ? "Disabled" : "Active"} />` : html`<span class="muted small">${self ? "you" : u.disabled ? "disabled" : "active"}</span>`}</td>
         <td class="actions">
-          ${u.role !== "admin" && !u.disabled && !me.impersonator && html`<button class="icon-btn sm" title=${`View as ${u.username}`} onClick=${async () => {
+          ${!self && u.role !== "admin" && !u.disabled && !me.impersonator && can("users.view_as") && html`<button class="icon-btn sm" title=${`View as ${u.username}`} onClick=${async () => {
             try { await api(`/api/users/${u.id}/impersonate`, { method: "POST" }); location.href = "/"; } catch (e) { toast(e.message, "err"); }
           }}><${Icon} name="eye" size=${15} /></button>`}
-          <button class="icon-btn sm" title="Rename / edit" onClick=${() => setView({ kind: "edit", user: u })}><${Icon} name="user" size=${15} /></button>
-          <button class="icon-btn sm" title="Set password" onClick=${() => { const pw = prompt(`New password for ${u.username} (8+ characters):`); if (pw) update(u, { password: pw }, "Password set"); }}><${Icon} name="key" size=${15} /></button>
-          ${u.sessions > 0 && html`<button class="icon-btn sm" title="Sign out everywhere" onClick=${() => update(u, { sign_out: true }, "Signed out")}><${Icon} name="logout" size=${15} /></button>`}
-          ${u.id !== me.id && html`<button class="icon-btn sm danger" title="Delete" onClick=${async () => {
-            if (await ask({ title: `Delete ${u.username}?`, body: "Their sessions, API tokens and access are removed too.", danger: true, confirm: "Delete" })) {
+          ${(data.admin || (!self && (can("users.edit") || can("users.roles")))) && html`<button class="icon-btn sm" title="Edit, abilities" onClick=${() => setView({ kind: "edit", user: u })}><${Icon} name="user" size=${15} /></button>`}
+          ${!self && can("users.edit") && html`<button class="icon-btn sm" title="Set password" onClick=${() => { const pw = prompt(`New password for ${u.username} (8+ characters):`); if (pw) update(u, { password: pw }, "Password set"); }}><${Icon} name="key" size=${15} /></button>`}
+          ${u.sessions > 0 && !self && can("users.edit") && html`<button class="icon-btn sm" title="Sign out everywhere" onClick=${() => update(u, { sign_out: true }, "Signed out")}><${Icon} name="logout" size=${15} /></button>`}
+          ${!self && can("users.delete") && html`<button class="icon-btn sm danger" title="Delete" onClick=${async () => {
+            if (await ask({ title: `Delete ${u.username}?`, body: "Their sessions, sign-in links and access are removed too.", danger: true, confirm: "Delete" })) {
               try { await api(`/api/users/${u.id}`, { method: "DELETE" }); toast("Deleted"); load(); } catch (e) { toast(e.message, "err"); }
             }
           }}><${Icon} name="trash" size=${15} /></button>`}
-        </td></tr>`)}</tbody></table></div>`}
+        </td></tr>`;
+      })}</tbody></table></div>`}
   </${Modal}>`;
 }
 
-function UserEditor({ user, onSave, onCancel }) {
+// what a role or a person may do, grouped
+function capGroups(caps) {
+  const out = [];
+  for (const c of caps) {
+    let g = out.find((x) => x.group === c.group);
+    if (!g) out.push(g = { group: c.group, caps: [] });
+    g.caps.push(c);
+  }
+  return out;
+}
+
+function RolesEditor({ onChanged }) {
+  const [data, setData] = useState(null);
+  const [edits, setEdits] = useState({});
+  const [adding, setAdding] = useState(null);
+  const load = () => api("/api/roles").then((r) => { setData(r); setEdits({}); }).catch((e) => toast(e.message, "err"));
+  useEffect(() => { load(); }, []);
+  if (!data) return html`<${Spinner} />`;
+  const groups = capGroups(data.caps);
+  const val = (r) => ({ ...r, ...(edits[r.key] || {}) });
+  const put = (key, patch) => setEdits({ ...edits, [key]: { ...(edits[key] || {}), ...patch } });
+  const roles = data.roles.slice().sort((a, b) => b.level - a.level);
+  async function save(r) {
+    try { await api(`/api/roles/${r.key}`, { method: "PUT", body: edits[r.key] }); toast(`${val(r).name} saved`); load(); onChanged(); } catch (e) { toast(e.message, "err"); }
+  }
+  return html`<div class="form">
+    <p class="muted">A role is a set of abilities. Its <b>level</b> decides who is above whom: abilities to manage people only ever
+      work on people with a lower level. You can also allow or deny single abilities per person (Users → edit).
+      Changing environments, API keys, sign-in settings and roles is always admin-only.</p>
+    <div class="role-list">
+    ${roles.map((r0) => {
+      const r = val(r0);
+      const admin = r.key === "admin";
+      const dirty = !!edits[r.key];
+      return html`<div class=${"role-card" + (admin ? " admin" : "")} key=${r.key}>
+        <div class="role-head">
+          ${admin ? html`<b class="role-title">${r.name}</b>` : html`<input class="role-name" value=${r.name} onInput=${(e) => put(r.key, { name: e.target.value })} />`}
+          <label class="role-level" title=${r.builtin ? "Built-in roles keep their level" : "11 – 99"}>Level
+            <input type="number" min="11" max="99" value=${r.level} disabled=${r.builtin} onInput=${(e) => put(r.key, { level: e.target.value })} /></label>
+          <span class="badge">${r0.users} ${r0.users === 1 ? "person" : "people"}</span>
+          <span class="grow"></span>
+          ${!r.builtin && html`<button class="btn sm ghost danger-text" onClick=${async () => {
+            const others = roles.filter((x) => x.key !== r.key && x.key !== "admin");
+            const move = prompt(`Delete ${r.name}? Its people move to another role. Type one of: ${others.map((x) => x.name).join(", ")}`, others[others.length - 1].name);
+            if (!move) return;
+            const target = others.find((x) => x.name.toLowerCase() === move.trim().toLowerCase());
+            if (!target) return toast("No such role", "err");
+            try { await api(`/api/roles/${r.key}`, { method: "DELETE", body: { move_to: target.key } }); toast("Role deleted"); load(); onChanged(); } catch (e) { toast(e.message, "err"); }
+            return null;
+          }}>Delete</button>`}
+          ${!admin && html`<button class="btn sm primary" disabled=${!dirty} onClick=${() => save(r0)}>Save</button>`}
+        </div>
+        ${admin ? html`<p class="muted small">Every ability, always — including environments and API keys, sign-in settings and roles.</p>`
+          : html`<div class="cap-grid">${groups.map((g) => html`<div class="cap-group"><div class="field-label">${g.group}</div>
+            ${g.caps.map((c) => html`<label class="cap-row" title=${c.hint}><input type="checkbox" checked=${r.caps.includes(c.key)}
+              onChange=${(e) => put(r.key, { caps: e.target.checked ? [...r.caps, c.key] : r.caps.filter((x) => x !== c.key) })} />
+              <span>${c.label}${c.hint && html`<small>${c.hint}</small>`}</span></label>`)}</div>`)}</div>`}
+      </div>`;
+    })}
+    </div>
+    ${adding ? html`<div class="panel"><div class="grid3">
+        <${Field} label="New role name"><input value=${adding.name} placeholder="Lead tech" onInput=${(e) => setAdding({ ...adding, name: e.target.value })} /></${Field}>
+        <${Field} label="Level (11 – 99)" hint="Supervisor is 50, Viewer is 10."><input type="number" min="11" max="99" value=${adding.level} onInput=${(e) => setAdding({ ...adding, level: e.target.value })} /></${Field}>
+        <${Field} label="Start from"><select value=${adding.from} onChange=${(e) => setAdding({ ...adding, from: e.target.value })}>
+          ${roles.filter((x) => x.key !== "admin").map((x) => html`<option value=${x.key}>${x.name}</option>`)}</select></${Field}>
+      </div>
+      <div class="form-actions"><button class="btn ghost" onClick=${() => setAdding(null)}>Cancel</button><button class="btn primary" onClick=${async () => {
+        const from = roles.find((x) => x.key === adding.from);
+        try { await api("/api/roles", { method: "POST", body: { name: adding.name, level: adding.level, caps: from ? from.caps : [] } }); toast("Role added"); setAdding(null); load(); onChanged(); } catch (e) { toast(e.message, "err"); }
+      }}>Add role</button></div></div>`
+      : html`<div class="form-actions"><button class="btn primary" onClick=${() => setAdding({ name: "", level: 30, from: "supervisor" })}><${Icon} name="plus" />Add a role</button></div>`}
+  </div>`;
+}
+
+function UserEditor({ user, data, me, onSave, onCancel }) {
   const [f, setF] = useState({ username: user.username, display_name: user.display_name || "", email: user.email || "" });
+  const [grant, setGrant] = useState(user.caps_grant || []);
+  const [deny, setDeny] = useState(user.caps_deny || []);
+  const mayEdit = data.admin || data.my_caps.includes("users.edit");
+  const mayRoles = (data.admin || data.my_caps.includes("users.roles")) && user.role !== "admin" && user.id !== me.id;
+  const roleCaps = ((data.roles.find((r) => r.key === user.role) || {}).caps) || [];
+  const stateOf = (k) => (grant.includes(k) ? "allow" : deny.includes(k) ? "deny" : "role");
+  const setState = (k, st) => {
+    setGrant(st === "allow" ? [...grant.filter((x) => x !== k), k] : grant.filter((x) => x !== k));
+    setDeny(st === "deny" ? [...deny.filter((x) => x !== k), k] : deny.filter((x) => x !== k));
+  };
   const [u, setU] = useState(user);
   async function avatar(method, body, msg) {
     try { const r = await api(`/api/users/${u.id}/avatar`, { method, body }); setU(r.user); if (msg) toast(msg); } catch (e) { toast(e.message, "err"); }
   }
   return html`<div class="form">
-    <div class="avatar-edit">
+    ${mayEdit && html`<div class="avatar-edit">
       <${Avatar} user=${u} size=${72} />
       <div class="avatar-actions">
         <div class="row">
@@ -418,22 +511,42 @@ function UserEditor({ user, onSave, onCancel }) {
         <${Toggle} checked=${u.avatar_locked} onChange=${(on) => avatar("PUT", { locked: on }, on ? "Picture locked" : "Picture unlocked")}
           label="Lock picture" hint="They can't change or remove it." />
       </div>
-    </div>
+    </div>`}
     <${Field} label="Username" hint=${user.sso ? "SSO users are matched by their provider ID, so renaming is safe." : "Used to sign in with a password."}>
       <input value=${f.username} autocomplete="off" onInput=${(e) => setF({ ...f, username: e.target.value })} /></${Field}>
     <${Field} label="Display name"><input value=${f.display_name} onInput=${(e) => setF({ ...f, display_name: e.target.value })} /></${Field}>
     <${Field} label="Email"><input value=${f.email} onInput=${(e) => setF({ ...f, email: e.target.value })} /></${Field}>
-    <div class="form-actions"><button class="btn ghost" onClick=${onCancel}>Cancel</button><button class="btn primary" onClick=${() => onSave(f)}>Save</button></div>
+    ${mayRoles && html`<h4 class="section">Abilities</h4>
+      <p class="muted small">From their role (<b>${user.role_name}</b>) unless you allow or deny one here.${data.admin ? "" : " You can only hand out abilities you have yourself."}</p>
+      <div class="cap-grid">${capGroups(data.caps).map((g) => html`<div class="cap-group"><div class="field-label">${g.group}</div>
+        ${g.caps.map((c) => {
+          const st = stateOf(c.key);
+          const fromRole = roleCaps.includes(c.key);
+          const on = st === "allow" || (st === "role" && fromRole);
+          const mine = data.admin || data.my_caps.includes(c.key);
+          return html`<div class=${"cap-line" + (on ? " on" : "")} title=${c.hint}>
+            <span class="cap-label"><span class=${"cap-dot" + (on ? " on" : "")}></span>${c.label}</span>
+            <${Segmented} value=${st} onChange=${(v) => setState(c.key, v)} options=${[
+              { value: "role", label: fromRole ? "Role ✓" : "Role —" },
+              { value: "allow", label: "Allow", disabled: !mine },
+              { value: "deny", label: "Deny" }]} />
+          </div>`;
+        })}</div>`)}</div>`}
+    <div class="form-actions"><button class="btn ghost" onClick=${onCancel}>Cancel</button><button class="btn primary" onClick=${() => {
+      const body = mayEdit ? { ...f } : {};
+      if (mayRoles) Object.assign(body, { caps_grant: grant, caps_deny: deny });
+      onSave(body);
+    }}>Save</button></div>
   </div>`;
 }
 
 // which environments a user may use, and which networks / devices inside them
-function AccessEditor({ user, onDone }) {
+function AccessEditor({ user, roles, onDone }) {
   const [envList, setEnvList] = useState(null);
   const [acc, setAcc] = useState({});        // env id -> access entry
   const [catalogs, setCatalogs] = useState({});
   useEffect(() => {
-    Promise.all([api("/api/admin/envs"), api(`/api/users/${user.id}/access`)]).then(([e, a]) => {
+    Promise.all([api("/api/envs"), api(`/api/users/${user.id}/access`)]).then(([e, a]) => {
       setEnvList(e.envs);
       const m = {};
       for (const x of a.envs) m[x.env_id] = x;
@@ -455,7 +568,7 @@ function AccessEditor({ user, onDone }) {
   if (!envList) return html`<${Spinner} />`;
   return html`<div class="form">
     ${user.role === "admin" && html`<div class="notice"><${Icon} name="info" /><div>Admins always have every environment. This only matters if you change their role.</div></div>`}
-    <p class="muted">${ROLE_LABEL[user.role]}s ${user.role === "viewer" ? "only see the devices you pick." : "change ports on the devices you pick, using the networks you pick."}
+    <p class="muted">${user.display_name || user.username} (${roleName(roles, user.role)}) sees the devices you pick${(user.caps || []).includes("ports.change") ? ", and changes ports using the networks you pick" : ""}.
       ${" "}Networks and devices come live from each console.</p>
     ${envList.length === 0 && html`<div class="empty-sm">Add an environment under Settings → Environments first.</div>`}
     <div class="access-list">
@@ -529,7 +642,7 @@ export function AccountModal({ me, onClose }) {
   useEffect(() => { loadTokens(); }, []);
   return html`<${Modal} title="My account" icon="user" onClose=${onClose} wide>
     <div class="account-head"><${Avatar} user=${{ ...me, avatar: pic }} size=${64} />
-      <div><h3>${me.display_name || me.username}</h3><div class="muted">${me.username}${me.email ? ` · ${me.email}` : ""} · <span class=${"role-badge " + me.role}>${ROLE_LABEL[me.role]}</span></div>
+      <div><h3>${me.display_name || me.username}</h3><div class="muted">${me.username}${me.email ? ` · ${me.email}` : ""} · <span class=${"role-badge " + me.role}>${me.role_name}</span></div>
         ${me.id ? (me.avatar_locked ? html`<div class="muted small"><${Icon} name="lock" size=${12} /> An admin set your picture.</div>`
           : html`<div class="row avatar-row">
               <button class="btn sm" onClick=${async () => {
@@ -595,7 +708,7 @@ function SignInLinks({ me, tokens, reload }) {
       <details class="more"><summary>More options</summary>
         <div class="grid2">
           <${Field} label="Access" hint="The link can have less access than you, never more.">
-            <select value=${tf.role} onChange=${(e) => setTf({ ...tf, role: e.target.value })}>${ROLES.filter((r) => rank(r) <= rank(me.role)).map((r) => html`<option value=${r}>${ROLE_LABEL[r]}</option>`)}</select></${Field}>
+            <select value=${tf.role} onChange=${(e) => setTf({ ...tf, role: e.target.value })}>${(me.token_roles || []).map((r) => html`<option value=${r.key}>${r.name}</option>`)}</select></${Field}>
           <${Field} label="Stops working after (days)" hint="0 = never."><input type="number" min="0" value=${tf.days} onInput=${(e) => setTf({ ...tf, days: e.target.value })} /></${Field}>
         </div>
         <p class="muted small">For scripts: send the code in an <span class="mono">Authorization: Bearer ${"<code>"}</span> header instead of opening the link.</p>
@@ -609,7 +722,7 @@ function SignInLinks({ me, tokens, reload }) {
 
     ${tokens && tokens.tokens.length > 0 && html`<h4 class="section">Your links</h4>
       <table class="table"><thead><tr><th>Name</th><th>Access</th><th>Created</th><th>Last used</th><th>Stops working</th><th></th></tr></thead>
-      <tbody>${tokens.tokens.map((t) => html`<tr key=${t.id}><td><b>${t.name}</b></td><td>${ROLE_LABEL[t.role]}</td><td class="small">${ago(t.created_at)}</td>
+      <tbody>${tokens.tokens.map((t) => html`<tr key=${t.id}><td><b>${t.name}</b></td><td>${roleName(me.token_roles, t.role)}</td><td class="small">${ago(t.created_at)}</td>
         <td class="small">${ago(t.last_used)}</td><td class="small">${t.expires_at ? when(t.expires_at) : "never"}</td>
         <td class="actions"><button class="btn sm ghost danger-text" onClick=${async () => {
           if (!await ask({ title: `Revoke “${t.name}”?`, body: "Devices signed in with this link are signed out.", danger: true, confirm: "Revoke" })) return;
@@ -619,7 +732,7 @@ function SignInLinks({ me, tokens, reload }) {
 
 function ProfileForm({ me }) {
   const [f, setF] = useState({ display_name: me.display_name || "", username: me.username });
-  const isAdmin = me.role === "admin";
+  const isAdmin = (me.caps || []).includes("settings.manage");
   return html`<h4 class="section">Profile</h4>
     <div class="grid3">
       <${Field} label="Display name"><input value=${f.display_name} onInput=${(e) => setF({ ...f, display_name: e.target.value })} /></${Field}>
@@ -644,7 +757,9 @@ const ACTION_LABEL = {
   "settings.app": "Settings changed", "settings.auth": "Sign-in settings changed",
   "user.access": "Access changed", "env.created": "Environment added", "env.updated": "Environment changed",
   "env.deleted": "Environment deleted", "port.locked": "Port locked", "port.unlocked": "Port unlocked",
-  "port.lock_reapplied": "Locked settings re-applied",
+  "port.lock_reapplied": "Locked settings re-applied", "role.created": "Role added", "role.updated": "Role changed",
+  "role.deleted": "Role deleted", "user.avatar": "Picture changed", "user.impersonate": "Started viewing as",
+  "user.impersonate_stop": "Stopped viewing as",
 };
 
 export function AuditModal({ onClose }) {
@@ -668,7 +783,7 @@ export function AuditModal({ onClose }) {
               ${d.after.excluded && d.after.excluded.length > 0 && html`<span class="muted small"> (not tagged: ${d.after.excluded.join(", ")})</span>`}</div>`}
             ${d.note && html`<div class="muted small">“${d.note}”</div>`}
             ${d.error && html`<div class="err-text small">${d.error}</div>`}
-            <div class="muted small">${r.username || "?"}${r.role ? ` (${ROLE_LABEL[r.role] || r.role})` : ""} · ${when(r.ts)}${r.ip ? ` · ${r.ip}` : ""}</div>
+            <div class="muted small">${r.username || "?"}${r.role ? ` (${r.role})` : ""} · ${when(r.ts)}${r.ip ? ` · ${r.ip}` : ""}</div>
           </div></div>`;
       })}</div>`}
   </${Modal}>`;

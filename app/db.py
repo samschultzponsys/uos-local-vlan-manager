@@ -113,6 +113,14 @@ CREATE TABLE IF NOT EXISTS port_locks (
     created_at    INTEGER NOT NULL,
     PRIMARY KEY (env_id, device_mac, port_idx)
 );
+-- roles: a named set of abilities with a level (who is above whom); see perms.py
+CREATE TABLE IF NOT EXISTS roles (
+    key      TEXT PRIMARY KEY,
+    name     TEXT NOT NULL,
+    level    INTEGER NOT NULL,
+    caps     TEXT NOT NULL DEFAULT '[]',
+    builtin  INTEGER NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
 """
@@ -210,6 +218,8 @@ COLUMNS = [
     ("users", "avatar_version", "INTEGER NOT NULL DEFAULT 0"),   # 0 = no picture
     ("users", "avatar_locked", "INTEGER NOT NULL DEFAULT 0"),    # an admin chose it; user can't change it
     ("sessions", "acting_as", "INTEGER"),                          # admin "view as" another user
+    ("users", "caps_grant", "TEXT NOT NULL DEFAULT '[]'"),         # abilities on top of their role
+    ("users", "caps_deny", "TEXT NOT NULL DEFAULT '[]'"),          # abilities taken away from their role
 ]
 
 
@@ -257,6 +267,8 @@ def init(version):
         for k, v in SETTING_DEFAULTS.items():
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)", (k, v))
         _migrate_single_console(db)
+        import perms
+        perms.seed(db)
         db.execute("INSERT INTO settings (key, value) VALUES ('schema_version', ?) "
                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (version,))
         db.commit()
