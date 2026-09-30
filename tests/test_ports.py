@@ -310,7 +310,7 @@ def test_cloud_diagnosis_explains_each_step():
                          "/stat/device": _R(403)})
     steps = c.diagnose_cloud("default")
     assert [s["ok"] for s in steps] == [True, True, True, False]
-    assert "can't change port VLANs" in steps[-1]["detail"]
+    assert "view only" in steps[-1]["detail"] and steps[-1]["warn"]
     assert "role: owner" in steps[1]["detail"]
     # everything through
     c.http = _CloudHTTP({"/v1/hosts": HOSTS, "/integration/v1/info": _R(200, {}), "/stat/device": _R(200, {"data": []})})
@@ -319,3 +319,22 @@ def test_cloud_diagnosis_explains_each_step():
     c.console_id = "OTHER:2"
     c.http = _CloudHTTP({"/v1/hosts": HOSTS})
     assert not c.diagnose_cloud("default")[1]["ok"]
+
+
+def test_cloud_environment_falls_back_to_view_only(app, fake, admin):
+    r = admin.post("/api/admin/envs", json={"name": "Cloud rack", "mode": "cloud", "api_key": "test-key",
+                                            "console_id": "https://unifi.ui.com/consoles/3be578f1-fc61-4478-926e-441311aaaf64/network/default"})
+    env = r.get_json()["env"]
+    assert env["console_id"] == "HOST:1"        # resolved from the pasted address
+    test = admin.post("/api/admin/envs/test", json={"env_id": env["id"], "mode": "cloud", "console_id": "HOST:1"}).get_json()
+    assert test["ok"] and test["readonly"] and test["devices"] == 4
+    assert [s["ok"] for s in test["steps"]] == [True, True, True, False] and test["steps"][-1]["warn"]
+    s = admin.get(f"/api/envs/{env['id']}/state").get_json()
+    assert s["error"] is None and s["readonly"] and "VLANs" in s["readonly_reason"]
+    p1 = _port(s, "dev-sw8", 1)
+    assert p1["up"] and p1["poe_enabled"] and p1["poe_active"] and p1["native_network_id"] is None
+    assert _port(s, "dev-sw24", 25)["sfp"]
+    assert {n["vlan"] for n in s["networks"]} >= {1, 20, 700}
+    r = _set(admin, env["id"], "dev-sw8", 3, native_network_id="net-cam", tagged_mode="block_all")
+    assert r.status_code == 409 and "view only" in r.get_json()["error"]
+    assert admin.put(f"/api/envs/{env['id']}/devices/dev-sw8/ports/3/lock", json={}).status_code == 409

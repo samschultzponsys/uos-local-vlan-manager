@@ -37,8 +37,8 @@ function PortTip({ port, networks }) {
   const c = port.clients[0];
   return html`<div class="tip-title">Port ${port.idx}${port.name !== `Port ${port.idx}` ? ` · ${port.name}` : ""}</div>
     <div class="tip-row"><span class=${"led " + (port.up ? "on" : "")}></span>${port.up ? `Up · ${speedLabel(port.speed)}${port.full_duplex ? " FD" : ""}` : port.enabled ? "Disconnected" : "Disabled"}</div>
-    <div class="tip-row"><${Icon} name="tag" size=${13} />${n ? `${n.name} (${n.vlan})` : "Unknown network"} · ${MODE_LABEL[port.tagged_mode]}</div>
-    ${port.poe_capable && html`<div class="tip-row"><${Icon} name="bolt" size=${13} />${port.poe_active ? `PoE delivering ${port.poe_power} W` : port.poe_enabled ? "PoE on · idle" : "PoE off"}</div>`}
+    <div class="tip-row"><${Icon} name="tag" size=${13} />${port.native_network_id === null ? "VLAN not available through UniFi's cloud" : `${n ? `${n.name} (${n.vlan})` : "Unknown network"} · ${MODE_LABEL[port.tagged_mode]}`}</div>
+    ${port.poe_capable && html`<div class="tip-row"><${Icon} name="bolt" size=${13} />${port.poe_active ? (port.poe_power == null ? "PoE delivering" : `PoE delivering ${port.poe_power} W`) : port.poe_enabled ? "PoE on · idle" : "PoE off"}</div>`}
     ${c && html`<div class="tip-row"><${Icon} name="plug" size=${13} />${c.name || c.hostname || c.mac}${port.client_count > 1 ? ` +${port.client_count - 1}` : ""}</div>`}
     ${port.device_link && html`<div class="tip-row"><${Icon} name="link" size=${13} />${port.device_link}</div>`}
     ${port.profile_name && html`<div class="tip-row"><${Icon} name="layers" size=${13} />Profile: ${port.profile_name}</div>`}
@@ -61,9 +61,9 @@ function PortTile({ port, device, networks, colors, highlight, selected, onPick 
     <span class="p-num">${port.idx}</span>
     ${port.poe_capable && html`<span class=${"p-poe " + (port.poe_active ? "active" : port.poe_enabled ? "on" : "offpoe")}>
       <${Icon} name="bolt" size=${11} fill=${port.poe_active} /></span>`}
-    <span class="p-vlan">${n ? n.vlan : "?"}</span>
+    <span class="p-vlan">${n ? n.vlan : port.native_network_id === null ? (port.sfp ? "SFP" : "") : "?"}</span>
     <span class="p-flags">
-      ${port.tagged_mode !== "block_all" && html`<span title="Tagged VLANs allowed"><${Icon} name="trunk" size=${10} /></span>`}
+      ${port.tagged_mode && port.tagged_mode !== "block_all" && html`<span title="Tagged VLANs allowed"><${Icon} name="trunk" size=${10} /></span>`}
       ${port.profile_name && html`<span title="Port profile"><${Icon} name="layers" size=${10} /></span>`}
       ${port.protected && !port.lock && html`<span title="Protected"><${Icon} name="shield" size=${10} /></span>`}
       ${port.lock && html`<span class=${"flag-lock" + (port.lock.drift ? " drift" : "")} title=${port.lock.drift ? "Locked - but changed in UniFi" : "Locked by an admin"}><${Icon} name=${port.lock.drift ? "alert" : "lock"} size=${10} /></span>`}
@@ -175,13 +175,13 @@ function ColorsModal({ networks, colors, mine, onSave, onClose }) {
 const cfgOf = (p) => ({ native_network_id: p.native_network_id, tagged_mode: p.tagged_mode, excluded_network_ids: p.excluded_network_ids });
 const sig = (p) => `${p.native_network_id}|${p.tagged_mode}|${[...p.excluded_network_ids].sort().join()}`;
 
-function PortDrawer({ env, access, device, port, networks, colors, me, settings, onClose, onApplied }) {
+function PortDrawer({ env, access, device, port, networks, colors, me, settings, onClose, onApplied, readonly }) {
   const restricted = !access.all_vlans;
   const can = (c) => (me.caps || []).includes(c);
   const mayProtected = can("ports.protected") || env.supervisors_protected;
   const isAdmin = can("ports.lock");   // lock controls
   const lock = port.lock;
-  const canEdit = can("ports.change") && (!port.protected || mayProtected) && (!lock || isAdmin);
+  const canEdit = !readonly && can("ports.change") && (!port.protected || mayProtected) && (!lock || isAdmin);
   const [lockNote, setLockNote] = useState("");
   const [lockBusy, setLockBusy] = useState(false);
   const portUrl = `/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}`;
@@ -266,11 +266,12 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
         <div class="sg"><span class="sg-l">Link</span><span class=${"sg-v " + (port.up ? "good" : "")}><span class=${"led " + (port.up ? "on" : "")}></span>
           ${port.up ? `${speedLabel(port.speed)}${port.full_duplex ? " · Full duplex" : ""}` : port.enabled ? "Down" : "Disabled"}</span></div>
         <div class="sg"><span class="sg-l">PoE</span><span class=${"sg-v " + (port.poe_active ? "poe" : "")}>
-          ${!port.poe_capable ? "Not supported" : port.poe_active ? html`<${Icon} name="bolt" size=${14} fill />${port.poe_power} W` : port.poe_enabled ? `On · idle (${port.poe_mode})` : "Off"}</span></div>
+          ${!port.poe_capable ? "Not supported" : port.poe_active ? html`<${Icon} name="bolt" size=${14} fill />${port.poe_power == null ? "Delivering" : `${port.poe_power} W`}` : port.poe_enabled ? `On · idle (${port.poe_mode})` : "Off"}</span></div>
+        ${readonly ? html`<div class="sg"><span class="sg-l">Max speed</span><span class="sg-v">${speedLabel(port.max_speed) || "—"}</span></div>` : html`
         <div class="sg"><span class="sg-l">Native VLAN</span><span class="sg-v"><span class="dot" style=${`background:${colors[port.native_network_id]}`}></span>${cur ? `${cur.name} (${cur.vlan})` : "?"}</span></div>
-        <div class="sg"><span class="sg-l">Tagged</span><span class="sg-v">${MODE_LABEL[port.tagged_mode]}</span></div>
+        <div class="sg"><span class="sg-l">Tagged</span><span class="sg-v">${MODE_LABEL[port.tagged_mode]}</span></div>`}
         ${port.media && html`<div class="sg"><span class="sg-l">Media</span><span class="sg-v">${port.media}</span></div>`}
-        ${port.up && html`<div class="sg"><span class="sg-l">Traffic</span><span class="sg-v">↓ ${bytes(port.rx_bytes)} · ↑ ${bytes(port.tx_bytes)}</span></div>`}
+        ${port.up && port.rx_bytes != null && html`<div class="sg"><span class="sg-l">Traffic</span><span class="sg-v">↓ ${bytes(port.rx_bytes)} · ↑ ${bytes(port.tx_bytes)}</span></div>`}
       </div>
       ${(c0.length > 0 || port.device_link || port.lldp) && html`<div class="panel">
         <div class="panel-title">Connected</div>
@@ -281,6 +282,8 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
         ${port.lldp && !port.device_link && html`<div class="client"><${Icon} name="link" size=${14} /><b>${port.lldp.name || port.lldp.chassis_id}</b><span class="muted">LLDP ${port.lldp.port}</span></div>`}
       </div>`}
 
+      ${readonly && html`<div class="notice warn"><${Icon} name="eye" /><div><b>View only.</b> This environment is connected through
+        UniFi's cloud, which doesn't show or change port VLANs. An admin can switch it to a Direct connection for full control.</div></div>`}
       ${changedElsewhere && html`<div class="notice warn"><${Icon} name="refresh" /><div><b>Changed in UniFi.</b> This port is now
         ${cur ? `${cur.name} (${cur.vlan})` : "?"}, ${MODE_LABEL[port.tagged_mode]}.
         <button class="link-btn" onClick=${reset}>Start over from that</button></div></div>`}
@@ -298,7 +301,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
       ${port.profile_name && html`<div class="notice"><${Icon} name="layers" /><div>Uses port profile <b>${port.profile_name}</b>. Applying a VLAN here detaches it.</div></div>`}
       ${canEdit && allowed.length === 0 && html`<div class="notice warn"><${Icon} name="info" /><div>You haven't been given any networks in this environment. Ask an admin.</div></div>`}
 
-      <div class="panel">
+      ${!readonly && html`<div class="panel">
         <div class="panel-title">Core settings ${!canEdit && html`<span class="badge">View only</span>`}</div>
         <label class="field"><span class="field-label">Native VLAN / Network</span>
           <div class="select-wrap"><span class="dot" style=${`background:${colors[native]}`}></span>
@@ -319,9 +322,9 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
             <span class="dot" style=${`background:${colors[n.id]}`}></span>${n.name}<span class="chip-vlan">${n.vlan}</span></label>`)}
           ${allowed.filter((n) => n.id !== native).length === 0 && html`<span class="muted small">No other networks to tag.</span>`}
         </div>`}
-      </div>
+      </div>`}
 
-      ${isAdmin && !lock && html`<div class="panel lock-panel">
+      ${isAdmin && !lock && !readonly && html`<div class="panel lock-panel">
         <div class="panel-title"><span><${Icon} name="lock" size=${15} /> Lock this port</span></div>
         <p class="muted small">Only admins can change a locked port. Good for upstream trunks and dedicated ports. It's locked to the settings UniFi has right now.</p>
         <div class="row"><input placeholder="Why? e.g. Upstream trunk from core port 17" value=${lockNote} maxlength="300" onInput=${(e) => setLockNote(e.target.value)} />
@@ -537,7 +540,8 @@ function App() {
       <div><button class="link-btn" onClick=${() => load(true)}>Try again</button>${isAdmin && html` · <button class="link-btn" onClick=${() => setModal("settings")}>Settings</button>`}</div></div></div>`;
   } else {
     body = html`
-      <${Legend} networks=${networks} colors=${colors} devices=${shown} highlight=${highlight} setHighlight=${setHighlight} onColors=${() => setModal("colors")} />
+      ${st.readonly && html`<div class="notice warn"><${Icon} name="eye" /><div><b>View only (UniFi cloud).</b> ${st.readonly_reason}</div></div>`}
+      ${!st.readonly && html`<${Legend} networks=${networks} colors=${colors} devices=${shown} highlight=${highlight} setHighlight=${setHighlight} onColors=${() => setModal("colors")} />`}
       ${!chosen && devices.length > 1 && html`<div class="notice"><${Icon} name="info" /><div>Showing ${env.access.all_devices ? "all switches" : "your devices"}. <button class="link-btn" onClick=${() => setModal("picker")}>Choose which to show</button></div></div>`}
       ${shown.length === 0 ? html`<div class="empty"><div class="empty-icon"><${Icon} name="grid" size=${40} /></div>
           <h2>${devices.length ? "No devices selected" : "No devices"}</h2>
@@ -611,7 +615,7 @@ function App() {
       ${body}
     </main>
 
-    ${selPort && html`<${PortDrawer} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
+    ${selPort && html`<${PortDrawer} readonly=${!!(st && st.readonly)} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
       settings=${settings} onClose=${() => setSel(null)} onApplied=${() => load(true)} />`}
 
     <button class=${"version" + (upd ? " has-update" : "")} onClick=${() => setModal("changelog")} title=${upd ? `Version ${version.update.latest} is available` : "Changelog"}>

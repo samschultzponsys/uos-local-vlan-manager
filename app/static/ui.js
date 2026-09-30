@@ -266,8 +266,8 @@ export function AskHost() {
   openAsk = (opts) => new Promise((resolve) => setQ({ ...opts, resolve }));
   if (!q) return null;
   const done = (v) => { q.resolve(v); setQ(null); };
-  return html`<${Modal} title=${q.title} icon=${q.danger ? "alert" : "info"} onClose=${() => done(false)}
-    footer=${html`<button class="btn ghost" onClick=${() => done(false)}>Cancel</button>
+  return html`<${Modal} title=${q.title} icon=${q.danger ? "alert" : "info"} wide=${!!q.wide} onClose=${() => done(false)}
+    footer=${html`<button class="btn ghost" onClick=${() => done(false)}>${q.cancel || "Cancel"}</button>
       <button class=${"btn " + (q.danger ? "danger" : "primary")} onClick=${() => done(true)}>${q.confirm || "Continue"}</button>`}>
     <div class="ask-body">${q.body}</div></${Modal}>`;
 }

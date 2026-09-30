@@ -30,6 +30,7 @@ read, changed for the one port, and written back - then read again to verify.
 """
 
 import copy
+import os
 import re
 import threading
 import time
@@ -39,7 +40,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-CLOUD_BASE = "https://api.ui.com"
+CLOUD_BASE = os.environ.get("VLANMGR_CLOUD_BASE", "https://api.ui.com").rstrip("/")   # override for development only
 # networks you'd put on a switch port (not WAN / VPN)
 PORT_PURPOSES = ("corporate", "guest", "vlan-only")
 MODES = ("auto", "block_all", "custom")
@@ -222,9 +223,10 @@ class UniFi:
         r, err = get(f"/api/s/{self.site}/stat/device")
         if r is None or r.status_code >= 400:
             code = f"HTTP {r.status_code}" if r is not None else err
-            step("Switch ports", False, f"UniFi's cloud connector refused the switch-port API ({code}). It only allows UniFi's "
-                                        "official Integration API, which can't change port VLANs. Use a Direct connection "
-                                        "to this console (its address, reachable from this server - e.g. over a VPN).")
+            steps.append({"name": "Switch ports", "ok": False, "warn": True,
+                          "detail": f"UniFi's cloud refused the switch-port API ({code}), so this environment will be "
+                                    "view only: link, speed and PoE status, but port VLANs can't be seen or changed. "
+                                    "Use a Direct connection for full control."})
             return steps
         step("Switch ports", True, "The switch-port API works through the cloud - VLAN changes will work.")
         return steps
@@ -277,6 +279,99 @@ class UniFi:
 
     def put_port_overrides(self, device_id, overrides):
         return self._req("PUT", self._site(f"/rest/device/{device_id}"), {"port_overrides": overrides})
+
+
+# ----------------------------------------------------------------------------
+# Read-only view through UniFi's official Integration API (what the cloud
+# connector allows). No per-port VLANs, no port changes - just devices, link,
+# speed, connector and PoE state.
+# ----------------------------------------------------------------------------
+
+READONLY_REASON = ("Viewed through UniFi's cloud, which only allows UniFi's official API: link, speed and PoE "
+                   "are shown, but port VLANs can't be seen or changed. Use a Direct connection for full control.")
+FEATURE_TYPE = {"switching": "usw", "gateway": "udm", "accessPoint": "uap"}
+
+
+def _integration_get(client, path):
+    try:
+        r = client.http.get(client.base() + "/integration/v1" + path, timeout=client.timeout,
+                            headers={"X-API-KEY": client.api_key, "Accept": "application/json"})
+    except requests.RequestException as e:
+        raise UniFiError(f"Can't reach UniFi: {e.__class__.__name__}")
+    if r.status_code >= 400:
+        raise UniFiError(f"UniFi's official API returned HTTP {r.status_code} for {path}")
+    try:
+        return r.json()
+    except ValueError:
+        raise UniFiError("UniFi sent a non-JSON reply")
+
+
+def _integration_list(client, path):
+    out, offset = [], 0
+    for _ in range(20):
+        sep = "&" if "?" in path else "?"
+        page = _integration_get(client, f"{path}{sep}offset={offset}&limit=200")
+        data = page.get("data") or []
+        out += data
+        offset += len(data)
+        if not data or offset >= int(page.get("totalCount") or 0):
+            break
+    return out
+
+
+def integration_snapshot(client):
+    """Normalized view (same shape as normalize()) from the Integration API, read-only."""
+    sites = _integration_list(client, "/sites")
+    site = next((s for s in sites if client.site in (s.get("internalReference"), s.get("name"), s.get("id"))),
+                sites[0] if sites else None)
+    if site is None:
+        raise UniFiError("No sites on this console")
+    sid = site["id"]
+    nets = []
+    for n in _integration_list(client, f"/sites/{sid}/networks"):
+        nets.append({"id": n.get("id"), "name": n.get("name") or "?", "vlan": _int(n.get("vlanId"), 1),
+                     "purpose": (n.get("management") or "").lower(), "subnet": "", "is_default": bool(n.get("default")),
+                     "enabled": n.get("enabled", True) is not False})
+    nets.sort(key=lambda x: (x["vlan"], x["name"].lower()))
+    devices = []
+    for d in _integration_list(client, f"/sites/{sid}/devices"):
+        if "ports" not in (d.get("interfaces") or []):
+            continue
+        try:
+            det = _integration_get(client, f"/sites/{sid}/devices/{d['id']}")
+        except UniFiError:
+            continue
+        ports = []
+        for p in sorted((det.get("interfaces") or {}).get("ports") or [], key=lambda x: _int(x.get("idx"))):
+            idx = _int(p.get("idx"))
+            poe = p.get("poe") or None
+            conn = p.get("connector") or ""
+            ports.append({
+                "idx": idx, "name": f"Port {idx}", "up": p.get("state") == "UP", "enabled": True,
+                "speed": _int(p.get("speedMbps")), "full_duplex": False, "media": conn,
+                "sfp": conn not in ("", "RJ45"), "is_uplink": False,
+                "poe_capable": poe is not None, "poe_enabled": bool(poe and poe.get("enabled")),
+                "poe_active": bool(poe and poe.get("state") == "UP"), "poe_power": None,
+                "poe_mode": (poe or {}).get("standard") or "", "op_mode": "switch",
+                "native_network_id": None, "tagged_mode": None, "excluded_network_ids": [],
+                "profile_id": None, "profile_name": None, "clients": [], "client_count": 0,
+                "device_link": None, "lldp": None, "rx_bytes": None, "tx_bytes": None,
+                "protected": False, "protect_reasons": [], "max_speed": _int(p.get("maxSpeedMbps")),
+            })
+        feats = d.get("features") or []
+        dtype = next((FEATURE_TYPE[f] for f in ("switching", "gateway", "accessPoint") if f in feats), "")
+        devices.append({
+            "id": d.get("id"), "mac": (d.get("macAddress") or "").lower(), "name": d.get("name") or d.get("model") or "?",
+            "model": d.get("model") or "", "model_name": d.get("model") or "", "type": dtype,
+            "type_label": DEVICE_TYPES.get(dtype, "Device"), "ip": d.get("ipAddress") or "",
+            "version": d.get("firmwareVersion") or "", "online": d.get("state") == "ONLINE",
+            "state": 1 if d.get("state") == "ONLINE" else 0, "uptime": 0, "legacy": False,
+            "port_count": len(ports), "ports": ports,
+        })
+    devices.sort(key=lambda x: (x["type"] != "usw", x["name"].lower()))
+    default = next((n["id"] for n in nets if n["is_default"]), None)
+    return {"networks": nets, "default_network_id": default, "devices": devices,
+            "readonly": True, "readonly_reason": READONLY_REASON}
 
 
 # ----------------------------------------------------------------------------
@@ -499,6 +594,8 @@ def verify_override(dev, port_idx, native_id, mode):
 class Snapshot:
     """Short-lived cache so many open browsers don't hammer the controller."""
 
+    RECHECK = 600   # a read-only cloud environment retries the full API every 10 minutes
+
     def __init__(self, ttl=5):
         self.ttl = ttl
         self._lock = threading.Lock()
@@ -506,6 +603,8 @@ class Snapshot:
         self._at = 0
         self._data = None
         self._raw = None
+        self.readonly = False
+        self._readonly_since = 0
 
     def invalidate(self):
         with self._lock:
@@ -516,13 +615,28 @@ class Snapshot:
         with self._lock:
             if not force and self._data is not None and self._key == key and time.time() - self._at < self.ttl:
                 return self._data, self._raw
-            raw = {
-                "devices": client.raw_devices(),
-                "networks": client.raw_networks(),
-                "portconfs": client.raw_portconfs(),
-                "clients": client.raw_clients(),
-            }
-            data = normalize(raw["devices"], raw["networks"], raw["portconfs"], raw["clients"], protect_uplinks)
+            if self._key != key:
+                self.readonly, self._readonly_since = False, 0
+            data = raw = None
+            if client.mode == "cloud" and self.readonly and time.time() - self._readonly_since < self.RECHECK:
+                data = integration_snapshot(client)
+            else:
+                try:
+                    raw = {
+                        "devices": client.raw_devices(),
+                        "networks": client.raw_networks(),
+                        "portconfs": client.raw_portconfs(),
+                        "clients": client.raw_clients(),
+                    }
+                    data = normalize(raw["devices"], raw["networks"], raw["portconfs"], raw["clients"], protect_uplinks)
+                    self.readonly = False
+                except UniFiError:
+                    if client.mode != "cloud":
+                        raise
+                    # the cloud connector refused the switch-port API: show what the official API allows
+                    data = integration_snapshot(client)
+                    self.readonly, self._readonly_since = True, time.time()
+            data.setdefault("readonly", False)
             data["fetched_at"] = int(time.time())
             self._key, self._at, self._data, self._raw = key, time.time(), data, raw
             return data, raw

@@ -159,6 +159,56 @@ def create_app():
             dev["port_overrides"] = copy.deepcopy(body["port_overrides"])
         return ok([dev])
 
+    # --- UniFi cloud stand-in: Site Manager hosts + the connector, which (like the real one)
+    # carries the official Integration API but refuses the switch-port API
+    @app.route("/v1/hosts")
+    def hosts():
+        return jsonify({"data": [{"id": "HOST:1", "hardwareId": "3be578f1-fc61-4478-926e-441311aaaf64",
+                                  "isBlocked": False, "reportedState": {"name": "UOS-Test", "version": "5.0.6"},
+                                  "userData": {"role": "owner", "permissions": {"network.management": ["admin"]}}}]})
+
+    CONNECTOR = "/v1/connector/consoles/<cid>/network"
+
+    @app.route(CONNECTOR + "/api/<path:rest>", methods=["GET", "PUT", "POST"])
+    def connector_classic(cid, rest):
+        return jsonify({"code": "FORBIDDEN"}), 403
+
+    @app.route(CONNECTOR + "/integration/v1/info")
+    def i_info(cid):
+        return jsonify({"applicationVersion": "10.0.160"})
+
+    def page(items):
+        return jsonify({"data": items, "count": len(items), "offset": 0, "limit": 200, "totalCount": len(items)})
+
+    @app.route(CONNECTOR + "/integration/v1/sites")
+    def i_sites(cid):
+        return page([{"id": "site-uuid", "internalReference": "default", "name": "Default"}])
+
+    @app.route(CONNECTOR + "/integration/v1/sites/<sid>/networks")
+    def i_networks(cid, sid):
+        return page([{"id": n["_id"], "name": n["name"], "vlanId": n.get("vlan") or 1, "default": n.get("attr_hidden_id") == "LAN",
+                      "enabled": True, "management": "GATEWAY"} for n in NETWORKS if n["purpose"] != "wan"])
+
+    def i_device(d):
+        return {"id": d["_id"], "macAddress": d["mac"], "name": d["name"], "model": d["model"], "ipAddress": d["ip"],
+                "state": "ONLINE", "firmwareVersion": d["version"], "features": ["switching"] if d["type"] == "usw" else [],
+                "interfaces": ["ports"]}
+
+    @app.route(CONNECTOR + "/integration/v1/sites/<sid>/devices")
+    def i_devices(cid, sid):
+        return page([i_device(d) for d in state["devices"]])
+
+    @app.route(CONNECTOR + "/integration/v1/sites/<sid>/devices/<did>")
+    def i_device_details(cid, sid, did):
+        d = next(x for x in state["devices"] if x["_id"] == did)
+        ports = [{"idx": p["port_idx"], "state": "UP" if p["up"] else "DOWN", "speedMbps": p["speed"],
+                  "maxSpeedMbps": 10000 if "SFP" in p["media"] else 1000,
+                  "connector": "SFPPLUS" if "SFP" in p["media"] else "RJ45",
+                  **({"poe": {"enabled": p.get("poe_mode") != "off", "state": "UP" if p.get("poe_good") else "DOWN",
+                              "standard": "802.3at", "type": 2}} if p.get("port_poe") else {})}
+                 for p in d["port_table"]]
+        return jsonify({**i_device(d), "interfaces": {"ports": ports}})
+
     return app
 
 

@@ -213,7 +213,9 @@ def api_env_state(env_id):
         return jsonify(out)
     out.update(data)
     out["networks"] = [{**n, "allowed": envs.vlan_allowed(acc, n["id"])} for n in data["networks"]]
-    out["devices"] = envs.annotate_locks(env_id, [d for d in data["devices"] if envs.device_allowed(acc, d["mac"])])
+    out["devices"] = [d for d in data["devices"] if envs.device_allowed(acc, d["mac"])]
+    if not data.get("readonly"):
+        envs.annotate_locks(env_id, out["devices"])
     return jsonify(out)
 
 
@@ -242,11 +244,21 @@ def api_set_port(env_id, device_id, idx):
     return _set_port(env_id, device_id, idx, request.get_json(silent=True) or {})
 
 
+READONLY_MSG = ("This environment is view only: UniFi's cloud doesn't allow changing port VLANs. "
+                "An admin can switch it to a Direct connection for full control.")
+
+
+def _readonly(env):
+    return env["mode"] == "cloud" and envs.snapshot(env["id"]).readonly
+
+
 def _set_port(env_id, device_id, idx, body, action="port.set"):
     me = auth.current()
     env, acc, err = _env_or_404(env_id)
     if err:
         return err
+    if _readonly(env):
+        return _deny(READONLY_MSG, 409)
     native = body.get("native_network_id")
     mode = body.get("tagged_mode") or db.get_setting("default_tagged_mode")
     excluded = body.get("excluded_network_ids") or []
@@ -360,6 +372,8 @@ def api_port_lock(env_id, device_id, idx):
     env, _, err = _env_or_404(env_id)
     if err:
         return err
+    if _readonly(env):
+        return _deny(READONLY_MSG, 409)
     try:
         dev, port = _fresh_port(env, device_id, idx)
     except unifi.UniFiError as e:
@@ -586,9 +600,16 @@ def api_admin_env_test():
     steps = None
     if c.mode == "cloud":
         steps = c.diagnose_cloud(c.site)
-        if not all(s["ok"] for s in steps):
-            return jsonify({"ok": False, "steps": steps, "console_id": c.console_id,
-                            "error": next(s for s in steps if not s["ok"])["detail"]})
+        bad = [s for s in steps if not s["ok"] and not s.get("warn")]
+        if bad:
+            return jsonify({"ok": False, "steps": steps, "console_id": c.console_id, "error": bad[0]["detail"]})
+        if any(s.get("warn") for s in steps):   # view only through the official API
+            try:
+                data = unifi.integration_snapshot(c)
+            except unifi.UniFiError as e:
+                return jsonify({"ok": False, "steps": steps, "console_id": c.console_id, "error": str(e)})
+            return jsonify({"ok": True, "readonly": True, "steps": steps, "console_id": c.console_id,
+                            "devices": len(data["devices"]), "networks": len(data["networks"]), "sites": []})
     try:
         sites = c.sites()
     except unifi.UniFiError as e:

@@ -707,3 +707,13 @@ details.more summary { cursor: pointer; color: var(--accent); font-weight: 550; 
 .check-row.ok .icon { color: var(--good); margin-top: 2px; }
 .check-row.bad { border-color: rgba(248, 113, 113, .4); }
 .check-row.bad .icon { color: var(--err); margin-top: 2px; }
+
+.check-row.warn { border-color: rgba(251, 191, 36, .4); }
+.check-row.warn .icon { color: var(--warn); margin-top: 2px; }
+.cloud-note p { margin: 0 0 10px; }
+.cn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.cn-grid > div { padding: 10px 12px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--border); }
+.cn-grid ul { margin: 6px 0 0; padding-left: 18px; }
+.cn-grid li { margin: 3px 0; }
+.cn-head { display: flex; align-items: center; gap: 6px; font-weight: 650; }
+@media (max-width: 760px) { .cn-grid { grid-template-columns: 1fr; } }

@@ -33,6 +33,33 @@ function useSettings() {
 
 // --- environments ------------------------------------------------------------
 
+// shown when an admin picks a cloud connection
+const CLOUD_NOTE = {
+  title: "About UniFi cloud connections",
+  wide: true,
+  confirm: "Use cloud anyway",
+  cancel: "Use Direct",
+  body: html`<div class="cloud-note">
+    <p>This app is built to run on the same network as your consoles. <b>Direct</b> connections can do everything.</p>
+    <p>Through UniFi's cloud, UniFi only allows its official API. In practice that means:</p>
+    <div class="cn-grid">
+      <div><div class="cn-head good-text"><${Icon} name="check" size=${15} /> Works</div><ul>
+        <li>Your switches and whether they're online</li>
+        <li>Each port's link and speed</li>
+        <li>SFP / RJ45 ports</li>
+        <li>PoE on and delivering power</li>
+        <li>The list of networks</li></ul></div>
+      <div><div class="cn-head err-text"><${Icon} name="x" size=${15} /> Not available</div><ul>
+        <li>Seeing a port's VLAN</li>
+        <li>Changing VLANs or tagging</li>
+        <li>Port locks</li>
+        <li>Connected devices per port and PoE watts</li></ul></div>
+    </div>
+    <p class="muted small">You'll need a Site Manager API key from unifi.ui.com/api, and the console needs UniFi OS 5.0.3 or newer with Remote Access on.
+      If UniFi ever allows the full switch API through the cloud for your console, Test connection will say so and everything will work.</p>
+  </div>`,
+};
+
 const NEW_ENV = { id: null, name: "", mode: "local", host: "", site: "default", console_id: "", verify_ssl: false,
   supervisors_protected: false, notes: "", vlan_colors: {}, api_key_set: false };
 
@@ -97,7 +124,10 @@ function EnvEditor({ env, onDone }) {
     <button class="link-btn back" onClick=${() => onDone(false)}><${Icon} name="chevron" size=${14} cls="back-chev" />All environments</button>
     <div class="grid2">
       <${Field} label="Name" hint="What users see, e.g. “Jake's staging rack”."><input value=${s.name} onInput=${(e) => set("name", e.target.value)} /></${Field}>
-      <${Field} label="Connection"><${Segmented} value=${s.mode} onChange=${(v) => set("mode", v)}
+      <${Field} label="Connection"><${Segmented} value=${s.mode} onChange=${async (v) => {
+        if (v === "cloud" && s.mode !== "cloud" && !await ask(CLOUD_NOTE)) return;
+        set("mode", v);
+      }}
         options=${[{ value: "local", label: "Direct" }, { value: "cloud", label: "UniFi cloud" }]} /></${Field}>
     </div>
     ${!cloud ? html`<${Field} label="Console address" hint="UDM / UCG / Cloud Key / UniFi OS Server or a UniFi OS container, e.g. https://10.1.2.3 or https://10.1.2.3:11443">
@@ -120,7 +150,7 @@ function EnvEditor({ env, onDone }) {
         ${consoles && html`<div class="choices">${consoles.map((c) => html`<button class=${"chip" + (c.id === s.console_id ? " on" : "")} onClick=${() => { set("console_id", c.id); setConsoles(null); if (!s.name) set("name", c.name); }}>
             <span class=${"status-dot " + (c.online ? "on" : "")}></span>${c.name}<span class="muted">${c.type}</span></button>`)}
           ${consoles.length === 0 && html`<span class="muted">No consoles on this key.</span>`}</div>`}</${Field}>
-      <p class="muted small">Cloud mode goes through UniFi's cloud connector and is experimental. If this server can reach the console's address, <b>Direct</b> is faster and more reliable.</p>`}
+      <p class="muted small">Through the cloud, ports are <b>view only</b> — UniFi's cloud doesn't let apps change port VLANs. To change ports, use <b>Direct</b> (the console's own address, e.g. over a VPN).</p>`}
     ${!cloud && keyField}
     <${Field} label="Site" hint="UniFi's internal site name, usually 'default'. Test the connection to pick from a list.">
       <input value=${s.site} onInput=${(e) => set("site", e.target.value)} />
@@ -130,10 +160,10 @@ function EnvEditor({ env, onDone }) {
     <${Toggle} checked=${s.supervisors_protected} onChange=${(v) => set("supervisors_protected", v)} label="Supervisors may change protected ports"
       hint="Uplinks, links to other UniFi devices, LAG and mirror ports. Off: only admins, after a warning." />
     <${Field} label="Notes (visible to this environment's supervisors)"><input value=${s.notes} onInput=${(e) => set("notes", e.target.value)} /></${Field}>
-    ${test && html`<div class=${"notice " + (test.ok ? "good" : "err")}><${Icon} name=${test.ok ? "check" : "alert"} /><div>
-      ${test.ok ? html`Connected — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks on site <b>${s.site}</b>.` : test.steps ? "A check above failed — its note says what to do." : test.error}</div></div>`}
-    ${test && test.steps && html`<div class="steps-check">${test.steps.map((st) => html`<div class=${"check-row " + (st.ok ? "ok" : "bad")}>
-      <${Icon} name=${st.ok ? "check" : "x"} size=${15} /><div><b>${st.name}</b><div class="muted small">${st.detail}</div></div></div>`)}</div>`}
+    ${test && html`<div class=${"notice " + (test.ok ? (test.readonly ? "warn" : "good") : "err")}><${Icon} name=${test.ok ? "check" : "alert"} /><div>
+      ${test.ok && test.readonly ? html`Connected, <b>view only</b> — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks.` : test.ok ? html`Connected — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks on site <b>${s.site}</b>.` : test.steps ? "A check above failed — its note says what to do." : test.error}</div></div>`}
+    ${test && test.steps && html`<div class="steps-check">${test.steps.map((st) => html`<div class=${"check-row " + (st.ok ? "ok" : st.warn ? "warn" : "bad")}>
+      <${Icon} name=${st.ok ? "check" : st.warn ? "alert" : "x"} size=${15} /><div><b>${st.name}</b><div class="muted small">${st.detail}</div></div></div>`)}</div>`}
     ${test && test.ok && test.console_id && test.console_id !== s.console_id && html`<div class="muted small">Console ID resolved to <span class="mono">${test.console_id}</span> — it's saved that way.</div>`}
 
     ${catalog && catalog.networks.length > 0 && html`<h4 class="section">Default VLAN colors</h4>

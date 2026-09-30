@@ -5,6 +5,28 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 1.6 — 2026-09-30
+
+### Added
+- **UniFi cloud environments work in view-only mode**. Before, they failed at Test connection.
+  - Through the cloud you see:
+    - your switches and whether they're online
+    - each port's link, speed and maximum speed
+    - SFP / RJ45 ports
+    - PoE on / delivering
+  - Port VLANs, VLAN changes, port locks, per-port clients, PoE watts and traffic aren't
+    available, because UniFi's cloud only allows its official API.
+  - A *View only (UniFi cloud)* banner explains this. The port panel shows status without
+    controls, and the server refuses changes too.
+  - Every 10 minutes the app checks whether UniFi now allows the full switch API for that
+    console, and uses it if so.
+- **A popup when you pick UniFi cloud** for an environment lists what works and what doesn't,
+  with **Use Direct** / **Use cloud anyway**.
+
+### Changed
+- Test connection's last cloud step (switch-port API) is now a warning ("view only") instead of
+  a failure, and the result says **Connected, view only** with the device and network count.
+
 ## 1.5 — 2026-09-30
 
 ### Fixed

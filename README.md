@@ -103,14 +103,26 @@ in. API keys are never sent to any browser, not even an admin's.
 | Connection | Use it for | You need |
 |---|---|---|
 | **Direct** | a console or UniFi OS instance this server can reach (a UniFi-hosted console works via its own URL) | Its address (e.g. `https://10.1.2.3` or `https://10.1.2.3:11443`) and an API key from **Network → Settings → Control Plane → Integrations** in that console |
-| **UniFi cloud** *(experimental)* | a console this server can't reach directly | A **Site Manager** API key from [unifi.ui.com/api](https://unifi.ui.com/api), made by the console's owner or a super admin (not the console's Network → Integrations key). Then **Find my consoles**, or paste the address of any unifi.ui.com page of that console and the ID is worked out for you. Needs UniFi OS 5.0.3+ with Remote Access on. Requests go through `api.ui.com/v1/connector/consoles/<id>/network/…`. |
+| **UniFi cloud** *(view only)* | looking at a console this server can't reach directly | A **Site Manager** API key from [unifi.ui.com/api](https://unifi.ui.com/api), made by the console's owner or a super admin (not the console's Network → Integrations key). Then **Find my consoles**, or paste the address of any unifi.ui.com page of that console and the ID is worked out for you. Needs UniFi OS 5.0.3+ with Remote Access on. Requests go through `api.ui.com/v1/connector/consoles/<id>/network/…`. |
 
-**Cloud and VLAN changes:** UniFi's cloud connector officially only carries the Network
-**Integration API**, which can list devices, ports and networks but has **no way to change a
-port's VLAN**. **Test connection** checks four steps (key → console → connector → switch-port
-API) and tells you if the last one is refused. If it is, use a **Direct** connection to that
-console, reachable from this server (e.g. over a VPN). Direct needs the console's own local
-API key.
+**This app is built to run next to your consoles, so Direct is the main way to use it.**
+Cloud connections are **view only**, because UniFi's cloud connector only carries the Network
+**Integration API**. When you pick UniFi cloud, a popup lists what that means:
+
+| Works through the cloud | Not available through the cloud |
+|---|---|
+| Switches and whether they're online | Seeing a port's VLAN |
+| Each port's link and speed, max speed, SFP / RJ45 | Changing VLANs or tagging |
+| PoE on / delivering | Port locks |
+| The list of networks | Connected devices per port, PoE watts, traffic |
+
+**Test connection** checks four steps (key → console → connector → switch-port API). If the
+cloud refuses the switch-port API, the last step shows a warning and the environment is saved
+as view only. Everyone using it sees a *View only* banner, ports show link and PoE without a
+VLAN, and the port panel has no controls. The app checks every 10 minutes whether UniFi now
+allows the full API for that console, and if it does, everything works as with Direct. To
+change ports, use a **Direct** connection to the console, reachable from this server (e.g.
+over a VPN), with the console's own local API key.
 
 - **Site** is UniFi's internal site name, usually `default`. **Test connection** lists the
   sites to pick from.
