@@ -1,0 +1,125 @@
+name: test-and-release
+
+# Every push to main: run the tests, then build the container image.
+#
+# Versioning: the newest "## x.y" heading in CHANGELOG.md is the version
+# (MAJOR.MINOR, single-digit minor: 1.0 ... 1.9, then 2.0).
+#   - New version (no vX.Y tag yet): publish :latest, :X.Y, :vX.Y and :sha-...,
+#     then create the matching git tag + GitHub release with that version's
+#     changelog section. The app's update dot reads these releases.
+#   - Same version as the last release: publish :edge and :sha-... only, so
+#     :latest and :X.Y always match a GitHub release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # tags + releases
+  packages: write   # GHCR
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+
+  image:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tags, to see which versions exist
+
+      - name: Read and check the version
+        id: ver
+        run: |
+          V=$(grep -m1 -oE '^## \[?v?[0-9]+\.[0-9]+' CHANGELOG.md | grep -oE '[0-9]+\.[0-9]+' || true)
+          if [[ ! "$V" =~ ^[0-9]+\.[0-9]$ ]]; then
+            echo "::error file=CHANGELOG.md::Newest heading must be '## MAJOR.MINOR' with a single-digit minor (e.g. '## 1.2'), got '${V:-nothing}'. After x.9 comes the next major (1.9 -> 2.0)."
+            exit 1
+          fi
+          PREV=$(git tag -l 'v[0-9]*.[0-9]' | sed 's/^v//' | sort -t. -k1,1n -k2,2n | tail -1)
+          RELEASE=false
+          if ! git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            if [ -n "$PREV" ]; then
+              # must be newer than the last release
+              if [ "$(printf '%s\n%s\n' "$PREV" "$V" | sort -t. -k1,1n -k2,2n | tail -1)" != "$V" ]; then
+                echo "::error file=CHANGELOG.md::Version $V is older than the last release v$PREV."
+                exit 1
+              fi
+              MA=${PREV%.*}; MI=${PREV#*.}; MI=$((MI + 1)); if [ $MI -gt 9 ]; then MA=$((MA + 1)); MI=0; fi
+              [ "$V" = "$MA.$MI" ] || echo "::warning::Expected the next version to be $MA.$MI after v$PREV, got $V."
+            fi
+            RELEASE=true
+          fi
+          [ "${{ github.ref_name }}" = "${{ github.event.repository.default_branch }}" ] || RELEASE=false
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "Version $V (last release: ${PREV:-none}), release: $RELEASE"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.ver.outputs.image }}
+          tags: |
+            type=raw,value=latest,enable=${{ steps.ver.outputs.release }}
+            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ steps.ver.outputs.release }}
+            type=raw,value=v${{ steps.ver.outputs.version }},enable=${{ steps.ver.outputs.release }}
+            type=raw,value=edge
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.title=VLAN Manager
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A GitHub release (and git tag) for every published container version.
+      - name: Create GitHub release
+        if: steps.ver.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V: ${{ steps.ver.outputs.version }}
+          IMAGE: ${{ steps.ver.outputs.image }}
+        run: |
+          awk -v v="$V" '$0 ~ "^## \\[?v?"v"([^0-9]|$)" {on=1; next} /^## / && on {exit} on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Maintenance release." > notes.md
+          {
+            echo
+            echo "### Container image"
+            echo '```'
+            echo "docker pull ${IMAGE}:${V}"
+            echo '```'
+            echo "Also tagged \`latest\` and \`v${V}\`. Update with \`docker compose pull && docker compose up -d\`."
+          } >> notes.md
+          gh release create "v$V" --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md --latest

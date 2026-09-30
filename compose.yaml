@@ -1,0 +1,38 @@
+# VLAN Manager - runs the prebuilt image from GHCR (built by the GitHub Action).
+#   Start:   docker compose up -d
+#   Update:  docker compose pull && docker compose up -d
+#   First admin password:  docker logs vlan-manager 2>&1 | grep -A6 "ADMIN SIGN-IN"
+#
+# Everything the app keeps lives in ./data on the host (bind mount): the SQLite
+# database and automatic pre-upgrade backups in ./data/backups. Pulling a new
+# image never touches it.
+services:
+  vlan-manager:
+    image: ghcr.io/samschultzponsys/uos-local-vlan-manager:latest   # or pin, e.g. :1.0
+    container_name: vlan-manager
+    restart: unless-stopped
+    ports:
+      - "20090:20090"
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: America/Chicago
+      # Files in ./data are owned by this user/group on the host (id -u / id -g).
+      PUID: "1000"
+      PGID: "1000"
+
+      # --- everything below is optional -------------------------------------
+      # Sign-in, SSO and the UniFi connection are set up in the app (Settings).
+      #
+      # VLANMGR_PUBLIC_URL: "https://vlans.example.com"   # if a proxy doesn't send X-Forwarded-Host
+      # VLANMGR_COOKIE_SECURE: "true"                     # when you only use HTTPS
+      # VLANMGR_TRUSTED_PROXIES: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.1/32"
+      #
+      # DANGER - no sign-in at all, for an isolated lab network only:
+      # VLANMGR_NO_AUTH: "true"
+      #
+      # Recovery (remove again after one start):
+      # VLANMGR_FORCE_LOCAL_LOGIN: "true"   # always allow password sign-in (SSO broken)
+      # VLANMGR_RESET_ADMIN: "true"         # new password for the first admin, printed in the log
+      #
+      # VLANMGR_UPDATE_CHECK: "false"       # never contact GitHub for the update dot
