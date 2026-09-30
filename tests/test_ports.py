@@ -211,3 +211,56 @@ def test_version_rolls_over_at_nine():
     assert versioning.next_version("1.9") == "2.0"
     assert versioning.version_key("2.0") > versioning.version_key("1.9")
     assert versioning.VERSION == versioning.CHANGELOG[0]["version"]
+
+
+def _lock_url(eid, dev, idx):
+    return f"/api/envs/{eid}/devices/{dev}/ports/{idx}/lock"
+
+
+def test_admin_lock_blocks_supervisors_and_shows_in_state(app, fake, admin):
+    eid = configure_unifi(admin)
+    uid, sup = make_user(admin, app, "techl", "supervisor")
+    admin.put(f"/api/users/{uid}/access", json={"envs": [{"env_id": eid}]})
+    _set(admin, eid, "dev-sw8", 3, native_network_id="net-rack7", tagged_mode="block_all")
+    assert admin.put(_lock_url(eid, "dev-sw8", 3), json={"note": "Upstream trunk"}).status_code == 200
+    assert sup.put(_lock_url(eid, "dev-sw8", 3), json={}).status_code == 403   # only admins lock
+    p = _port(_state(sup, eid, True), "dev-sw8", 3)
+    assert p["lock"]["note"] == "Upstream trunk" and p["lock"]["native_network_id"] == "net-rack7"
+    assert p["lock"]["drift"] is False
+    r = _set(sup, eid, "dev-sw8", 3, native_network_id="net-cam", tagged_mode="block_all")
+    assert r.status_code == 403 and "Upstream trunk" in r.get_json()["error"]
+    # admins are asked, and the lock follows their change
+    assert _set(admin, eid, "dev-sw8", 3, native_network_id="net-cam", tagged_mode="block_all").get_json()["confirm"] == "locked"
+    assert _set(admin, eid, "dev-sw8", 3, native_network_id="net-cam", tagged_mode="block_all",
+                confirm_locked=True).status_code == 200
+    p = _port(_state(admin, eid, True), "dev-sw8", 3)
+    assert p["lock"]["native_network_id"] == "net-cam" and p["lock"]["note"] == "Upstream trunk"
+    assert admin.delete(_lock_url(eid, "dev-sw8", 3), json={}).status_code == 200
+    assert _port(_state(admin, eid, True), "dev-sw8", 3)["lock"] is None
+    assert _set(sup, eid, "dev-sw8", 3, native_network_id="net-iot", tagged_mode="block_all").status_code == 200
+    actions = [e["action"] for e in admin.get("/api/audit").get_json()["entries"]]
+    assert "port.locked" in actions and "port.unlocked" in actions
+
+
+def test_lock_drift_after_change_in_unifi_and_reapply(fake, admin):
+    eid = configure_unifi(admin)
+    _set(admin, eid, "dev-sw24", 2, native_network_id="net-iot", tagged_mode="custom", excluded_network_ids=["net-guest"])
+    admin.put(_lock_url(eid, "dev-sw24", 2), json={})
+    # someone changes it in the UniFi UI
+    dev = next(d for d in fake.config["STATE"]["devices"] if d["_id"] == "dev-sw24")
+    o = next(o for o in dev["port_overrides"] if o["port_idx"] == 2)
+    o.update(native_networkconf_id="net-lan", tagged_vlan_mgmt="auto", excluded_networkconf_ids=[])
+    p = _port(_state(admin, eid, True), "dev-sw24", 2)
+    assert p["lock"]["drift"] is True
+    r = admin.post(_lock_url(eid, "dev-sw24", 2) + "/reapply", json={})
+    assert r.status_code == 200 and r.get_json()["verified"]
+    p = _port(_state(admin, eid, True), "dev-sw24", 2)
+    assert p["native_network_id"] == "net-iot" and p["tagged_mode"] == "custom" and p["lock"]["drift"] is False
+
+
+def test_lock_survives_readoption(fake, admin):
+    eid = configure_unifi(admin)
+    admin.put(_lock_url(eid, "dev-sw8", 5), json={"note": "desk phone"})
+    dev = next(d for d in fake.config["STATE"]["devices"] if d["_id"] == "dev-sw8")
+    dev["_id"] = "dev-sw8-new"
+    assert _port(_state(admin, eid, True), "dev-sw8-new", 5)["lock"]["note"] == "desk phone"

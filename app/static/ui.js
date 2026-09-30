@@ -148,6 +148,11 @@ export function markdown(src) {
       out.push(`<li>${inline(m[2])}</li>`);
       continue;
     }
+    // an indented line continues the previous bullet
+    if (list && /^\s{2,}\S/.test(raw) && out.length && out[out.length - 1].endsWith("</li>")) {
+      out[out.length - 1] = out[out.length - 1].slice(0, -5) + " " + inline(raw.trim()) + "</li>";
+      continue;
+    }
     if (list && /^\s{2,}\S/.test(raw)) { out.push(`<p class="cont">${inline(raw.trim())}</p>`); continue; }
     while (list) { out.push("</ul>"); list--; }
     const h = raw.match(/^(#{3,4}) (.*)$/);

@@ -98,6 +98,20 @@ CREATE TABLE IF NOT EXISTS user_env (
     devices      TEXT NOT NULL DEFAULT '[]',     -- device MACs (survive re-adoption)
     PRIMARY KEY (user_id, env_id)
 );
+-- ports an admin locked: only admins may change them. The locked settings are kept so a
+-- change made elsewhere (the UniFi UI) shows up as drift and can be re-applied.
+CREATE TABLE IF NOT EXISTS port_locks (
+    env_id        INTEGER NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    device_mac    TEXT NOT NULL,
+    port_idx      INTEGER NOT NULL,
+    native_network_id TEXT NOT NULL,
+    tagged_mode   TEXT NOT NULL,
+    excluded      TEXT NOT NULL DEFAULT '[]',
+    note          TEXT NOT NULL DEFAULT '',
+    locked_by     TEXT NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL,
+    PRIMARY KEY (env_id, device_mac, port_idx)
+);
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
 """

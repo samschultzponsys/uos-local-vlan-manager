@@ -185,13 +185,14 @@ function AuthTab() {
     <${Toggle} checked=${a.token_enabled} onChange=${(v) => set("token_enabled", v)} label="API tokens" hint="Personal tokens for scripts (Bearer header) or a kiosk link." />
 
     <h4 class="section">Single sign-on (OIDC)</h4>
+    <${RedirectBox} a=${a} onUseOrigin=${() => set("public_url", location.origin)} />
     <div class="grid2">
       <${Field} label="Issuer URL" hint="Authentik: https://auth.example.com/application/o/<slug>/"><input value=${a.oidc.issuer} onInput=${(e) => setO("issuer", e.target.value)} /></${Field}>
       <${Field} label="Client ID"><input value=${a.oidc.client_id} onInput=${(e) => setO("client_id", e.target.value)} /></${Field}>
       <${Field} label="Client secret"><input type="password" autocomplete="new-password" value=${secret} placeholder=${a.oidc.client_secret_set ? "✓ saved — leave blank to keep" : ""} onInput=${(e) => setSecret(e.target.value)} /></${Field}>
       <${Field} label="Scopes"><input value=${a.oidc.scopes} onInput=${(e) => setO("scopes", e.target.value)} /></${Field}>
-      <${Field} label="Redirect URI (register at your provider)" hint="Override only if the detected one is wrong.">
-        <div class="row"><input value=${a.oidc.redirect_uri} placeholder=${a.redirect_uri} onInput=${(e) => setO("redirect_uri", e.target.value)} /><${Copy} text=${a.oidc.redirect_uri || a.redirect_uri} /></div></${Field}>
+      <${Field} label="Redirect URI override (advanced)" hint="Leave empty to use the one shown above.">
+        <input value=${a.oidc.redirect_uri} placeholder="detected automatically" onInput=${(e) => setO("redirect_uri", e.target.value)} /></${Field}>
       <${Field} label="Groups claim"><input value=${a.oidc.groups_claim} onInput=${(e) => setO("groups_claim", e.target.value)} /></${Field}>
       <${Field} label="Allowed groups" hint="Comma-separated. Empty = anyone your provider lets through."><input value=${a.oidc.allowed_groups} onInput=${(e) => setO("allowed_groups", e.target.value)} /></${Field}>
     </div>
@@ -236,6 +237,28 @@ function AuthTab() {
       ${locked("no_auth") && html`<small class="hint">Set by VLANMGR_NO_AUTH.</small>`}
     </div>
     <div class="form-actions sticky"><button class="btn primary" onClick=${() => save()}>Save sign-in settings</button></div>
+  </div>`;
+}
+
+// the URIs to paste into the provider - shown before anything else is filled in, since the
+// provider needs the redirect URI before it hands out the client ID and secret
+function RedirectBox({ a, onUseOrigin }) {
+  const override = (a.oidc.redirect_uri || "").trim();
+  const base = (a.public_url || a.detected_base || location.origin).replace(/\/+$/, "");
+  const redirect = override || `${base}/auth/oidc/callback`;
+  let origin = "";
+  try { origin = new URL(redirect).origin; } catch (e) { /* invalid override */ }
+  const mismatch = !override && origin && origin !== location.origin;
+  return html`<div class="uri-box">
+    <div class="uri-item"><span class="field-label">Redirect URI — paste this at your provider</span>
+      <div class="uri-row"><code>${redirect}</code><${Copy} text=${redirect} /></div></div>
+    <div class="uri-item"><span class="field-label">Launch URL (optional, for the provider's app list)</span>
+      <div class="uri-row"><code>${base}/</code><${Copy} text=${`${base}/`} /></div></div>
+    ${mismatch && html`<div class="notice warn"><${Icon} name="alert" /><div>
+      Your browser is at <b>${location.origin}</b>, but the app sees itself as <b>${origin}</b>. That usually means a reverse
+      proxy isn't passing <span class="mono">X-Forwarded-Host</span> / <span class="mono">-Proto</span>.
+      <div><button class="link-btn" onClick=${onUseOrigin}>Use ${location.origin} as the public URL</button> (then save)</div></div></div>`}
+    <small class="hint">Worked out from the address you're using now${a.public_url ? " (Public URL below)" : ""}. Open these settings through the same URL people use to sign in.</small>
   </div>`;
 }
 
@@ -527,7 +550,8 @@ const ACTION_LABEL = {
   "user.password_changed": "Password changed", "token.created": "Token created", "token.revoked": "Token revoked",
   "settings.app": "Settings changed", "settings.auth": "Sign-in settings changed",
   "user.access": "Access changed", "env.created": "Environment added", "env.updated": "Environment changed",
-  "env.deleted": "Environment deleted",
+  "env.deleted": "Environment deleted", "port.locked": "Port locked", "port.unlocked": "Port unlocked",
+  "port.lock_reapplied": "Locked settings re-applied",
 };
 
 export function AuditModal({ onClose }) {
@@ -544,11 +568,12 @@ export function AuditModal({ onClose }) {
           <div class="tl-dot"></div>
           <div class="tl-main">
             <div class="tl-head"><b>${ACTION_LABEL[r.action] || r.action}</b>${r.target && html`<span class="muted"> · ${r.target}</span>`}
-              ${r.action === "port.set" && r.ok && (d.verified ? html`<span class="badge good">verified</span>` : html`<span class="badge warn">unverified</span>`)}
+              ${(r.action === "port.set" || r.action === "port.lock_reapplied") && r.ok && (d.verified ? html`<span class="badge good">verified</span>` : html`<span class="badge warn">unverified</span>`)}
               ${!r.ok && html`<span class="badge err">failed</span>`}</div>
-            ${r.action === "port.set" && d.before && html`<div class="tl-diff">
+            ${d.before && d.after && html`<div class="tl-diff">
               <span>${d.before.native} · ${d.before.tagged}</span><span class="arrow">→</span><b>${d.after.native} · ${d.after.tagged}</b>
               ${d.after.excluded && d.after.excluded.length > 0 && html`<span class="muted small"> (not tagged: ${d.after.excluded.join(", ")})</span>`}</div>`}
+            ${d.note && html`<div class="muted small">“${d.note}”</div>`}
             ${d.error && html`<div class="err-text small">${d.error}</div>`}
             <div class="muted small">${r.username || "?"}${r.role ? ` (${ROLE_LABEL[r.role] || r.role})` : ""} · ${when(r.ts)}${r.ip ? ` · ${r.ip}` : ""}</div>
           </div></div>`;

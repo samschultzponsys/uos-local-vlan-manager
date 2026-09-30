@@ -11,7 +11,7 @@ function Login() {
   const [ver, setVer] = useState("");
 
   useEffect(() => {
-    api("/api/auth/config").then((c) => { setCfg(c); document.title = `Sign in · ${c.app_name}`; });
+    api("/api/auth/config").then((c) => { window.__vlanmgrStarted = true; setCfg(c); document.title = `Sign in · ${c.app_name}`; });
     api("/api/version").then((v) => setVer(v.version)).catch(() => {});
   }, []);
 

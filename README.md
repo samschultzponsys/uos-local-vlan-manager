@@ -136,7 +136,19 @@ environment they can also pick:
 
 Protected ports (uplinks, links to other UniFi devices, LAG and mirror ports) can only be
 changed by an admin, after a warning. Per environment, an admin can allow its supervisors
-to change them too.
+to change them too. They show a shield.
+
+### Port locks
+
+For upstream trunks and other dedicated ports, an admin can **lock** a port from its port
+panel, with an optional note:
+
+- It's locked to the settings UniFi has right now.
+- Everyone sees a lock on the port, and only admins can change it. An admin's change keeps
+  the port locked, to the new settings.
+- If someone changes a locked port in the UniFi UI, the port shows a warning and admins get
+  **Re-apply locked settings**.
+- Locks are kept by switch MAC, so they survive a re-adoption.
 
 Upgrading from 1.0 turns the single UniFi connection into an environment called **Default**.
 
@@ -203,13 +215,15 @@ Set up under **Settings → Sign-in**. Any combination works:
 
 ### Authentik in 60 seconds
 
-1. Authentik → Applications → **Create with provider** → OAuth2/OpenID.
+1. In the app, open **Settings → Sign-in** *through the URL people will use* and copy the
+   **Redirect URI** from the box at the top of the SSO section. It's worked out from the
+   address you're on, and warns you if a reverse proxy hides the real one.
+2. Authentik → Applications → **Create with provider** → OAuth2/OpenID.
    - Client type **Confidential**.
-   - Redirect URI: `https://<app>/auth/oidc/callback` (also shown, with a copy button, in
-     Settings → Sign-in).
-2. In the app: **Issuer URL** `https://auth.example.com/application/o/<slug>/`, plus the client
-   ID and secret. Click **Test provider**, turn on SSO (and auto sign-in if you like), then save.
-3. Optional: to limit who can sign in, put an Authentik group in **Allowed groups**. Authentik's
+   - Paste the redirect URI, and optionally the launch URL.
+3. Back in the app: **Issuer URL** `https://auth.example.com/application/o/<slug>/`, plus the
+   client ID and secret. Click **Test provider**, turn on SSO (and auto sign-in if you like), then save.
+4. Optional: to limit who can sign in, put an Authentik group in **Allowed groups**. Authentik's
    default `profile` scope already sends a `groups` claim. Roles and access are then given
    in **Users**.
 
@@ -242,7 +256,8 @@ A red striped banner shows on every page while it's on. Admins can still sign in
 ### Behind a reverse proxy
 
 Proxy `https://vlans.example.com` → `http://<docker host>:20090` (Nginx Proxy Manager,
-Traefik, Caddy…). Then set **HTTPS-only cookie** in Settings → Sign-in. HTTPS is also what
+Traefik, Caddy…). Asset caching in the proxy is fine: scripts and styles are served from
+URLs that change with every release. Then set **HTTPS-only cookie** in Settings → Sign-in. HTTPS is also what
 lets Android offer **Install app**. On iPhone, **Share → Add to Home Screen** works over
 plain HTTP too.
 

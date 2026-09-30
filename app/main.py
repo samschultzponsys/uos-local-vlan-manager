@@ -5,6 +5,7 @@ VLAN Manager for UniFi - pick switches, click a port, set its native VLAN.
 Flask + SQLite, single container. See README.md.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -24,6 +25,23 @@ from versioning import VERSION, CHANGELOG
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+BUILD_RE = re.compile(r"^\d+\.\d+-[0-9a-f]{8}$")
+
+
+def _build_id():
+    """Version + a hash of the UI files. Pages load their scripts and styles from
+    /static/<build>/..., so a new release (or any UI change) always gets fresh
+    URLs - browsers, installed home-screen apps and caching proxies can't keep
+    serving old files."""
+    h = hashlib.sha1()
+    for root, _, files in sorted(os.walk(STATIC_DIR)):
+        for f in sorted(files):
+            with open(os.path.join(root, f), "rb") as fh:
+                h.update(f.encode() + fh.read())
+    return f"{VERSION}-{h.hexdigest()[:8]}"
+
+
+BUILD = _build_id()
 
 app = Flask(__name__, static_folder=None)
 app.config.update(SESSION_COOKIE_NAME="vlanmgr_flow", SESSION_COOKIE_HTTPONLY=True,
@@ -56,9 +74,16 @@ def _headers(resp):
     return resp
 
 
+def _page(name):
+    with open(os.path.join(STATIC_DIR, name), encoding="utf-8") as fh:
+        html = fh.read()
+    html = html.replace('"/static/', f'"/static/{BUILD}/').replace("__BUILD__", BUILD)
+    return app.response_class(html, mimetype="text/html")
+
+
 @app.route("/")
 def index():
-    return send_from_directory(STATIC_DIR, "index.html")
+    return _page("index.html")
 
 
 @app.route("/login")
@@ -66,7 +91,7 @@ def login_page():
     u = auth.current()
     if u and u["method"] != "none":
         return redirect(auth._safe_next(request.args.get("next")))
-    return send_from_directory(STATIC_DIR, "login.html")
+    return _page("login.html")
 
 
 @app.route("/manifest.webmanifest")
@@ -93,6 +118,12 @@ def favicon():
 
 @app.route("/static/<path:fname>")
 def static_files(fname):
+    first, _, rest = fname.partition("/")
+    if rest and BUILD_RE.match(first):
+        resp = send_from_directory(STATIC_DIR, rest)
+        # a versioned URL never changes content: cache it forever
+        resp.headers["Cache-Control"] = ("public, max-age=31536000, immutable" if first == BUILD else "no-cache")
+        return resp
     resp = send_from_directory(STATIC_DIR, fname)
     resp.headers["Cache-Control"] = "no-cache"
     return resp
@@ -109,7 +140,7 @@ def healthz():
 
 @app.route("/api/version")
 def api_version():
-    return jsonify({"version": VERSION, "changelog": CHANGELOG,
+    return jsonify({"version": VERSION, "build": BUILD, "changelog": CHANGELOG,
                     "update": versioning.status(db.setting_bool("update_check"))})
 
 
@@ -181,7 +212,7 @@ def api_env_state(env_id):
         return jsonify(out)
     out.update(data)
     out["networks"] = [{**n, "allowed": envs.vlan_allowed(acc, n["id"])} for n in data["networks"]]
-    out["devices"] = [d for d in data["devices"] if envs.device_allowed(acc, d["mac"])]
+    out["devices"] = envs.annotate_locks(env_id, [d for d in data["devices"] if envs.device_allowed(acc, d["mac"])])
     return jsonify(out)
 
 
@@ -207,11 +238,14 @@ def _net_label(nets, nid):
 @app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>", methods=["PUT"])
 @auth.require("supervisor")
 def api_set_port(env_id, device_id, idx):
+    return _set_port(env_id, device_id, idx, request.get_json(silent=True) or {})
+
+
+def _set_port(env_id, device_id, idx, body, action="port.set"):
     me = auth.current()
     env, acc, err = _env_or_404(env_id)
     if err:
         return err
-    body = request.get_json(silent=True) or {}
     native = body.get("native_network_id")
     mode = body.get("tagged_mode") or db.get_setting("default_tagged_mode")
     excluded = body.get("excluded_network_ids") or []
@@ -244,6 +278,12 @@ def api_set_port(env_id, device_id, idx):
             return _deny("Allow All would tag networks you can't use - pick Block All or Custom", 403)
         if mode == "custom":   # networks you can't use are never tagged
             excluded = list(set(excluded) | {i for i in net_ids if not envs.vlan_allowed(acc, i)})
+    lock = envs.locks(env_id).get((ndev["mac"], idx))
+    if lock:
+        if me["role"] != "admin":
+            return _deny("An admin locked this port" + (f": {lock['note']}" if lock["note"] else ""), 403)
+        if not body.get("confirm_locked"):
+            return _deny("Locked port", 409, confirm="locked", note=lock["note"])
     if port["protected"]:
         may = me["role"] == "admin" or (bool(env["supervisors_protected"]) and me["role"] == "supervisor")
         if not may:
@@ -276,8 +316,12 @@ def api_set_port(env_id, device_id, idx):
     try:
         c.put_port_overrides(device_id, overrides)
     except unifi.UniFiError as e:
-        auth.audit("port.set", target, {**detail, "error": str(e)}, ok=False, env_id=env_id)
+        auth.audit(action, target, {**detail, "error": str(e)}, ok=False, env_id=env_id)
         return _deny(str(e), 502)
+    if lock:   # an admin changed a locked port: it stays locked, to the new settings
+        envs.set_lock(env_id, ndev["mac"], idx, native, mode, after.get("excluded_networkconf_ids", []),
+                      lock["note"], me["username"])
+        detail["lock"] = "kept, updated to the new settings"
     verified = False
     try:
         for _ in range(3):
@@ -289,10 +333,72 @@ def api_set_port(env_id, device_id, idx):
         pass
     envs.invalidate(env_id)
     detail["verified"] = verified
-    auth.audit("port.set", target, detail, ok=True, env_id=env_id)
+    auth.audit(action, target, detail, ok=True, env_id=env_id)
     return jsonify({"ok": True, "verified": verified,
                     "warning": None if verified else
                     "UniFi accepted the change but didn't report it back yet. Refresh in a moment to check."})
+
+
+# ----------------------------------------------------------------------------
+# Port locks (admin)
+# ----------------------------------------------------------------------------
+
+def _fresh_port(env, device_id, idx):
+    """(device, port) straight from UniFi, or raise UniFiError / return (None, None)."""
+    c = envs.client(env)
+    raw_devs = c.raw_devices()
+    norm = unifi.normalize(raw_devs, c.raw_networks(), c.raw_portconfs(), [], db.setting_bool("protect_uplinks"))
+    dev = next((d for d in norm["devices"] if d["id"] == device_id), None)
+    port = next((p for p in (dev or {}).get("ports", []) if p["idx"] == idx), None)
+    return dev, port
+
+
+@app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>/lock", methods=["PUT", "DELETE"])
+@auth.require("admin")
+def api_port_lock(env_id, device_id, idx):
+    env, _, err = _env_or_404(env_id)
+    if err:
+        return err
+    try:
+        dev, port = _fresh_port(env, device_id, idx)
+    except unifi.UniFiError as e:
+        return _deny(str(e), 502)
+    if port is None:
+        return _deny("No such port", 404)
+    target = f"{env['name']} / {dev['name']} / port {idx}"
+    if request.method == "DELETE":
+        if not envs.remove_lock(env_id, dev["mac"], idx):
+            return _deny("That port isn't locked", 404)
+        auth.audit("port.unlocked", target, env_id=env_id)
+    else:
+        note = str((request.get_json(silent=True) or {}).get("note") or "").strip()
+        # locked to the settings UniFi has right now
+        envs.set_lock(env_id, dev["mac"], idx, port["native_network_id"], port["tagged_mode"],
+                      port["excluded_network_ids"] if port["tagged_mode"] == "custom" else [], note,
+                      auth.current()["username"])
+        auth.audit("port.locked", target, {"note": note, "tagged": unifi.MODE_LABEL[port["tagged_mode"]]}, env_id=env_id)
+    envs.invalidate(env_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>/lock/reapply", methods=["POST"])
+@auth.require("admin")
+def api_port_lock_reapply(env_id, device_id, idx):
+    """Put a locked port back to its locked settings (after someone changed it in UniFi)."""
+    env, _, err = _env_or_404(env_id)
+    if err:
+        return err
+    try:
+        dev, port = _fresh_port(env, device_id, idx)
+    except unifi.UniFiError as e:
+        return _deny(str(e), 502)
+    lock = envs.locks(env_id).get((dev["mac"], idx)) if dev else None
+    if not lock:
+        return _deny("That port isn't locked", 404)
+    return _set_port(env_id, device_id, idx, {
+        "native_network_id": lock["native_network_id"], "tagged_mode": lock["tagged_mode"],
+        "excluded_network_ids": lock["excluded_network_ids"], "confirm_locked": True,
+        "confirm_protected": True, "detach_profile": True}, action="port.lock_reapplied")
 
 
 # ----------------------------------------------------------------------------

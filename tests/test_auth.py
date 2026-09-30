@@ -214,3 +214,12 @@ def test_single_console_from_1_0_becomes_an_environment(app):
     assert d.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'unifi_%'").fetchone()[0] == 0
     d.close()
     db.close()
+
+
+def test_pages_use_versioned_assets(app, client):
+    import main
+    page = client.get("/login").get_data(as_text=True)
+    assert f"/static/{main.BUILD}/login.js" in page and f'content="{main.BUILD}"' in page
+    r = client.get(f"/static/{main.BUILD}/ui.js")
+    assert r.status_code == 200 and "immutable" in r.headers["Cache-Control"]
+    assert client.get("/api/version").get_json()["build"] == main.BUILD

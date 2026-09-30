@@ -5,6 +5,40 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 1.2 — 2026-09-30
+
+### Added
+- **Port locks**: an admin can lock a port from its port panel, with an optional note like
+  "Upstream trunk from core port 17".
+  - The port is locked to the settings UniFi has right now.
+  - Everyone sees a lock on the port. Supervisors can't change it, whatever their other rights.
+  - Admins can still change a locked port after a confirmation, and it stays locked to the
+    new settings.
+  - **Drift**: if a locked port is changed in the UniFi UI, it shows a warning. Admins get a
+    **Re-apply locked settings** button that puts it back.
+  - Locks are kept by switch MAC, so they survive a re-adoption.
+  - Locking, unlocking and re-applying are in the activity log.
+- **Redirect URI box** in Settings → Sign-in, shown before anything else is filled in. It has:
+  - the exact redirect URI to paste into your provider, with a copy button
+  - the launch URL
+  - a warning, with a one-click fix, if the app sees a different address than your browser
+    (a reverse proxy not passing the hostname)
+
+### Fixed
+- **Stuck loading screen after an update.** A browser, home-screen app or caching proxy
+  (for example Nginx Proxy Manager's "Cache Assets") could keep serving the old scripts.
+  - Scripts and styles now load from a URL that changes with every release, so an old copy
+    can't be used.
+  - A page or installed app left open during an update reloads itself when it notices the
+    new version.
+  - If the app ever fails to start, it now shows the error and a Reload button instead of
+    spinning.
+- Wrapped bullet lines in this changelog now display as one line.
+
+### Changed
+- Automatic protection (uplinks, device links, LAG/mirror) now shows a shield icon, so it's
+  easy to tell apart from an admin's lock.
+
 ## 1.1 — 2026-09-30
 
 ### Added

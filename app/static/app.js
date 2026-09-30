@@ -1,4 +1,4 @@
-import { render, useState, useEffect, useMemo, useCallback } from "./vendor/preact-htm.module.js";
+import { render, useState, useEffect, useMemo, useCallback, useErrorBoundary } from "./vendor/preact-htm.module.js";
 import {
   html, api, Icon, Modal, Segmented, Toasts, toast, Spinner, useInterval, Logo, markdown,
   vlanColors, readable, speedLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost,
@@ -42,7 +42,9 @@ function PortTip({ port, networks }) {
     ${c && html`<div class="tip-row"><${Icon} name="plug" size=${13} />${c.name || c.hostname || c.mac}${port.client_count > 1 ? ` +${port.client_count - 1}` : ""}</div>`}
     ${port.device_link && html`<div class="tip-row"><${Icon} name="link" size=${13} />${port.device_link}</div>`}
     ${port.profile_name && html`<div class="tip-row"><${Icon} name="layers" size=${13} />Profile: ${port.profile_name}</div>`}
-    ${port.protected && html`<div class="tip-row warn"><${Icon} name="lock" size=${13} />${port.protect_reasons.join(" · ")}</div>`}`;
+    ${port.lock && html`<div class="tip-row warn"><${Icon} name="lock" size=${13} />Locked by an admin${port.lock.note ? `: ${port.lock.note}` : ""}</div>`}
+    ${port.lock && port.lock.drift && html`<div class="tip-row warn"><${Icon} name="alert" size=${13} />Changed in UniFi since it was locked</div>`}
+    ${port.protected && html`<div class="tip-row warn"><${Icon} name="shield" size=${13} />${port.protect_reasons.join(" · ")}</div>`}`;
 }
 
 function PortTile({ port, device, networks, colors, highlight, selected, onPick }) {
@@ -63,7 +65,8 @@ function PortTile({ port, device, networks, colors, highlight, selected, onPick 
     <span class="p-flags">
       ${port.tagged_mode !== "block_all" && html`<span title="Tagged VLANs allowed"><${Icon} name="trunk" size=${10} /></span>`}
       ${port.profile_name && html`<span title="Port profile"><${Icon} name="layers" size=${10} /></span>`}
-      ${port.protected && html`<span title="Protected"><${Icon} name="lock" size=${10} /></span>`}
+      ${port.protected && !port.lock && html`<span title="Protected"><${Icon} name="shield" size=${10} /></span>`}
+      ${port.lock && html`<span class=${"flag-lock" + (port.lock.drift ? " drift" : "")} title=${port.lock.drift ? "Locked - but changed in UniFi" : "Locked by an admin"}><${Icon} name=${port.lock.drift ? "alert" : "lock"} size=${10} /></span>`}
     </span>
     <span class="p-led"></span>
   </button>`;
@@ -175,7 +178,23 @@ const sig = (p) => `${p.native_network_id}|${p.tagged_mode}|${[...p.excluded_net
 function PortDrawer({ env, access, device, port, networks, colors, me, settings, onClose, onApplied }) {
   const restricted = !access.all_vlans;
   const mayProtected = me.role === "admin" || (me.role === "supervisor" && env.supervisors_protected);
-  const canEdit = rank(me.role) >= 1 && (!port.protected || mayProtected);
+  const isAdmin = me.role === "admin";
+  const lock = port.lock;
+  const canEdit = rank(me.role) >= 1 && (!port.protected || mayProtected) && (!lock || isAdmin);
+  const [lockNote, setLockNote] = useState("");
+  const [lockBusy, setLockBusy] = useState(false);
+  const portUrl = `/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}`;
+  async function lockAction(method, path, body, msg) {
+    setLockBusy(true);
+    try {
+      const r = await api(portUrl + path, { method, body });
+      toast(msg);
+      if (r && r.warning) toast(r.warning, "warn");
+      setLockNote("");
+      onApplied();
+    } catch (e) { toast(e.message, "err"); }
+    setLockBusy(false);
+  }
   const defMode = restricted && settings.default_tagged_mode === "auto" ? "block_all" : (settings.default_tagged_mode || "block_all");
   const allowed = networks.filter((n) => n.allowed);
   const [native, setNative] = useState(port.native_network_id);
@@ -220,6 +239,10 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
         const ok = await ask({ title: "Detach port profile?", confirm: "Detach and apply",
           body: html`<p>This port uses the port profile <b>${e.data.profile}</b>. Setting its VLAN here detaches the profile from this port.</p>` });
         if (ok) return apply({ ...extra, detach_profile: true });
+      } else if (e.status === 409 && e.data.confirm === "locked") {
+        const ok = await ask({ title: "Change a locked port?", confirm: "Change and keep locked",
+          body: html`<p>You locked this port${e.data.note ? html` (<b>${e.data.note}</b>)` : ""}. It stays locked, to the new settings.</p>` });
+        if (ok) return apply({ ...extra, confirm_locked: true });
       } else if (e.status === 409 && e.data.confirm === "changed") {
         const ok = await ask({ title: "Port changed in UniFi", danger: true, confirm: "Apply mine anyway",
           body: html`<p>Someone changed this port in UniFi after you opened it. It's now <b>${e.data.current.native}</b>, ${e.data.current.tagged}.</p>
@@ -260,7 +283,16 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
       ${changedElsewhere && html`<div class="notice warn"><${Icon} name="refresh" /><div><b>Changed in UniFi.</b> This port is now
         ${cur ? `${cur.name} (${cur.vlan})` : "?"}, ${MODE_LABEL[port.tagged_mode]}.
         <button class="link-btn" onClick=${reset}>Start over from that</button></div></div>`}
-      ${port.protected && html`<div class="notice warn"><${Icon} name="lock" /><div><b>Protected port.</b> ${port.protect_reasons.join(" · ")}.
+      ${lock && html`<div class=${"notice lock" + (lock.drift ? " warn" : "")}><${Icon} name="lock" /><div>
+        <b>Locked by an admin</b>${lock.note && html` — ${lock.note}`}.
+        ${(() => { const n = netOf(networks, lock.native_network_id); return html` Locked to <b>${n ? `${n.name} (${n.vlan})` : "?"}</b>, ${MODE_LABEL[lock.tagged_mode]}.`; })()}
+        ${lock.drift && html`<div class="warn-text"><b>It was changed in UniFi</b> and no longer matches the lock.</div>`}
+        ${!isAdmin && html`<div class="muted small">Only an admin can change it.</div>`}
+        ${isAdmin && html`<div class="lock-actions">
+          ${lock.drift && html`<button class="btn sm primary" disabled=${lockBusy} onClick=${() => lockAction("POST", "/lock/reapply", {}, "Locked settings re-applied")}><${Icon} name="refresh" size=${14} />Re-apply locked settings</button>`}
+          <button class="btn sm" disabled=${lockBusy} onClick=${() => lockAction("DELETE", "/lock", {}, `Port ${port.idx} unlocked`)}>Unlock</button>
+        </div>`}</div></div>`}
+      ${port.protected && html`<div class="notice warn"><${Icon} name="shield" /><div><b>Protected port.</b> ${port.protect_reasons.join(" · ")}.
         ${mayProtected ? " You can change it after confirming." : " Only an admin can change it."}</div></div>`}
       ${port.profile_name && html`<div class="notice"><${Icon} name="layers" /><div>Uses port profile <b>${port.profile_name}</b>. Applying a VLAN here detaches it.</div></div>`}
       ${canEdit && allowed.length === 0 && html`<div class="notice warn"><${Icon} name="info" /><div>You haven't been given any networks in this environment. Ask an admin.</div></div>`}
@@ -288,6 +320,14 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
         </div>`}
       </div>
 
+      ${isAdmin && !lock && html`<div class="panel lock-panel">
+        <div class="panel-title"><span><${Icon} name="lock" size=${15} /> Lock this port</span></div>
+        <p class="muted small">Only admins can change a locked port. Good for upstream trunks and dedicated ports. It's locked to the settings UniFi has right now.</p>
+        <div class="row"><input placeholder="Why? e.g. Upstream trunk from core port 17" value=${lockNote} maxlength="300" onInput=${(e) => setLockNote(e.target.value)} />
+          <button class="btn ghost" disabled=${lockBusy || dirty} title=${dirty ? "Apply or reset your changes first" : ""}
+            onClick=${() => lockAction("PUT", "/lock", { note: lockNote }, `Port ${port.idx} locked`)}><${Icon} name="lock" size=${14} />Lock</button></div>
+        ${dirty && html`<small class="hint">Apply or reset your changes first.</small>`}
+      </div>`}
       ${canEdit && dirty && next && html`<div class="diff">
         ${native !== port.native_network_id && html`<div><span class="muted">Native</span> ${cur ? cur.name : "?"} <span class="arrow">→</span> <b>${next.name} (${next.vlan})</b></div>`}
         ${(mode !== port.tagged_mode || (mode === "custom" && !sameEx)) && html`<div><span class="muted">Tagged</span> ${MODE_LABEL[port.tagged_mode]} <span class="arrow">→</span> <b>${MODE_LABEL[mode]}</b></div>`}
@@ -371,6 +411,7 @@ function App() {
   const [collapsed, setCollapsed] = useState(lsGet("vlanmgr.collapsed", {}));
   const [menu, setMenu] = useState(false);
   const [theme, setTheme] = useState(lsGet("vlanmgr.theme", "dark"));
+  const [bootErr, setBootErr] = useState(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -414,12 +455,18 @@ function App() {
   }, [envId]);
   const loadVersion = useCallback(async () => {
     const v = await api("/api/version");
+    // the server was upgraded while this page (or installed app) stayed open: load the new UI
+    if (v.build && BUILD && v.build !== BUILD) {
+      let seen = null;
+      try { seen = sessionStorage.getItem("vlanmgr.reloadedFor"); sessionStorage.setItem("vlanmgr.reloadedFor", v.build); } catch (e) { /* private mode */ }
+      if (seen !== v.build) location.reload();
+    }
     setVersion(v);
     return v;
   }, []);
 
   useEffect(() => {
-    loadMe(); loadEnvs();
+    Promise.all([loadMe(), loadEnvs()]).catch((e) => { if (e.message !== "Signed out") setBootErr(e.message); });
     loadVersion().then((v) => {
       if (lsGet("vlanmgr.seenVersion") !== v.version) { setModal("changelog"); lsSet("vlanmgr.seenVersion", v.version); }
     });
@@ -427,7 +474,7 @@ function App() {
   useEffect(() => { lsSet("vlanmgr.env", envId); setSel(null); setHighlight(null); setSt(null); load(true); }, [envId]);
   // back to the app (phone unlocked, tab focused): fetch what changed in UniFi meanwhile
   useEffect(() => {
-    const back = () => { if (!document.hidden) { load(true); loadEnvs(); } };
+    const back = () => { if (!document.hidden) { load(true); loadEnvs().catch(() => {}); loadVersion().catch(() => {}); } };
     document.addEventListener("visibilitychange", back);
     addEventListener("focus", back);
     return () => { document.removeEventListener("visibilitychange", back); removeEventListener("focus", back); };
@@ -443,9 +490,11 @@ function App() {
     else await api("/api/me/prefs", { method: "PUT", body: patch }).catch((e) => toast(e.message, "err"));
   }
 
+  if (bootErr) return html`<${BootError} error=${bootErr} />`;
   if (!me || !envList) {
     return html`<div class="boot"><${Logo} size=${48} /><${Spinner} /></div>`;
   }
+  window.__vlanmgrStarted = true;
 
   const settings = envList.settings;
   const prefs = me.prefs || {};
@@ -499,7 +548,8 @@ function App() {
         <span><span class="k-poe active"><${Icon} name="bolt" size=${11} fill /></span>PoE delivering</span>
         <span><span class="k-poe"><${Icon} name="bolt" size=${11} /></span>PoE on, idle</span>
         <span><${Icon} name="trunk" size=${12} />Tagged VLANs allowed</span>
-        <span><${Icon} name="layers" size=${12} />Port profile</span><span><${Icon} name="lock" size=${12} />Protected</span>
+        <span><${Icon} name="layers" size=${12} />Port profile</span><span><${Icon} name="shield" size=${12} />Protected</span>
+        <span class="k-lock"><${Icon} name="lock" size=${12} />Locked by an admin</span>
       </div>`;
   }
 
@@ -572,4 +622,20 @@ function App() {
     <${TipHost} /><${AskHost} /><${Toasts} />`;
 }
 
-render(html`<${App} />`, document.getElementById("app"));
+const BUILD = (document.querySelector('meta[name="vlanmgr-build"]') || {}).content || "";
+
+function BootError({ error }) {
+  window.__vlanmgrStarted = true;
+  return html`<div class="boot"><${Logo} size=${48} />
+    <div class="boot-error"><h2>Something went wrong</h2><p class="muted">${String(error)}</p>
+      <button class="btn primary" onClick=${() => location.reload()}><${Icon} name="refresh" />Reload</button></div></div>`;
+}
+
+// a crash anywhere in the UI shows the error instead of a frozen screen
+function Root() {
+  const [err] = useErrorBoundary((e) => console.error(e));
+  if (err) return html`<${BootError} error=${err.message || err} />`;
+  return html`<${App} />`;
+}
+
+render(html`<${Root} />`, document.getElementById("app"));

@@ -138,3 +138,51 @@ def set_user_access(user_id, entries):
                   (user_id, eid, 1 if e.get("all_vlans", True) else 0, json.dumps(vlans),
                    1 if e.get("all_devices", True) else 0, json.dumps(devices)))
     d.commit()
+
+
+# ----------------------------------------------------------------------------
+# Port locks (admin): a locked port can only be changed by an admin
+# ----------------------------------------------------------------------------
+
+def locks(env_id):
+    """{(mac, port_idx): lock dict} for an environment."""
+    rows = db.get().execute("SELECT * FROM port_locks WHERE env_id=?", (env_id,)).fetchall()
+    return {(r["device_mac"], r["port_idx"]): {
+        "native_network_id": r["native_network_id"], "tagged_mode": r["tagged_mode"],
+        "excluded_network_ids": _loads(r["excluded"], []), "note": r["note"],
+        "locked_by": r["locked_by"], "created_at": r["created_at"]} for r in rows}
+
+
+def lock_drift(lock, port):
+    """True when UniFi's current settings differ from what the port was locked to."""
+    if port["native_network_id"] != lock["native_network_id"] or port["tagged_mode"] != lock["tagged_mode"]:
+        return True
+    return lock["tagged_mode"] == "custom" and \
+        sorted(port["excluded_network_ids"]) != sorted(lock["excluded_network_ids"])
+
+
+def annotate_locks(env_id, devices):
+    """Attach `lock` (or None) to every port."""
+    lk = locks(env_id)
+    for d in devices:
+        for p in d["ports"]:
+            lock = lk.get((d["mac"], p["idx"]))
+            p["lock"] = {**lock, "drift": lock_drift(lock, p)} if lock else None
+    return devices
+
+
+def set_lock(env_id, mac, idx, native, mode, excluded, note, by):
+    d = db.get()
+    d.execute("INSERT INTO port_locks (env_id, device_mac, port_idx, native_network_id, tagged_mode, excluded, note, "
+              "locked_by, created_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(env_id, device_mac, port_idx) DO UPDATE SET "
+              "native_network_id=excluded.native_network_id, tagged_mode=excluded.tagged_mode, "
+              "excluded=excluded.excluded, note=excluded.note, locked_by=excluded.locked_by, created_at=excluded.created_at",
+              (env_id, mac.lower(), idx, native, mode, json.dumps(sorted(excluded or [])), (note or "")[:300], by, db.now()))
+    d.commit()
+
+
+def remove_lock(env_id, mac, idx):
+    d = db.get()
+    cur = d.execute("DELETE FROM port_locks WHERE env_id=? AND device_mac=? AND port_idx=?", (env_id, mac.lower(), idx))
+    d.commit()
+    return cur.rowcount > 0

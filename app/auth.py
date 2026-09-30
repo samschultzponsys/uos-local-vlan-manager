@@ -944,7 +944,7 @@ def init_app(app):
         o["client_secret_set"] = bool(o.pop("client_secret"))
         return jsonify({**{k: cfg[k] for k in DEFAULT_AUTH if k not in ("oidc",)}, "oidc": o,
                         "locked": cfg["locked"], "oidc_ready": oidc_ready(cfg),
-                        "redirect_uri": redirect_uri(), "icons": BUTTON_ICONS,
+                        "redirect_uri": redirect_uri(), "detected_base": external_base(), "icons": BUTTON_ICONS,
                         "signed_in_with": current()["method"]})
 
     @app.route("/api/settings/auth", methods=["PUT"])

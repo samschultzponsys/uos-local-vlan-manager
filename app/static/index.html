@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark light" />
   <meta name="theme-color" content="#0a0c11" />
+  <meta name="vlanmgr-build" content="__BUILD__" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -17,6 +18,23 @@
 </head>
 <body>
   <div id="app"></div>
+  <div id="boot-fail" hidden>
+    <h2>The app didn't start</h2>
+    <p>This is usually an old copy cached by the browser or a proxy. Reload to fetch the current version.</p>
+    <pre id="boot-err"></pre>
+    <button onclick="location.reload()">Reload</button>
+  </div>
+  <script>
+    // if the app hasn't started after a few seconds, say so instead of spinning forever
+    window.__bootErrors = [];
+    addEventListener("error", function (e) { __bootErrors.push(String(e.message || e)); });
+    addEventListener("unhandledrejection", function (e) { __bootErrors.push(String(e.reason && e.reason.message || e.reason)); });
+    setTimeout(function () {
+      if (window.__vlanmgrStarted) return;
+      document.getElementById("boot-err").textContent = __bootErrors.join("\n") || "Timed out while loading.";
+      document.getElementById("boot-fail").hidden = false;
+    }, 12000);
+  </script>
   <noscript>VLAN Manager needs JavaScript.</noscript>
   <script type="module" src="/static/app.js"></script>
 </body>
