@@ -103,7 +103,14 @@ in. API keys are never sent to any browser, not even an admin's.
 | Connection | Use it for | You need |
 |---|---|---|
 | **Direct** | a console or UniFi OS instance this server can reach (a UniFi-hosted console works via its own URL) | Its address (e.g. `https://10.1.2.3` or `https://10.1.2.3:11443`) and an API key from **Network → Settings → Control Plane → Integrations** in that console |
-| **UniFi cloud** *(experimental)* | a console this server can't reach directly | An **account** API key from [unifi.ui.com/api](https://unifi.ui.com/api) (not the console's Network → Integrations key), then **Find my consoles**, or paste the address of any unifi.ui.com page of that console and the ID is worked out for you. Requests go through `api.ui.com/v1/connector`. |
+| **UniFi cloud** *(experimental)* | a console this server can't reach directly | A **Site Manager** API key from [unifi.ui.com/api](https://unifi.ui.com/api), made by the console's owner or a super admin (not the console's Network → Integrations key). Then **Find my consoles**, or paste the address of any unifi.ui.com page of that console and the ID is worked out for you. Needs UniFi OS 5.0.3+ with Remote Access on. Requests go through `api.ui.com/v1/connector/consoles/<id>/network/…`. |
+
+**Cloud and VLAN changes:** UniFi's cloud connector officially only carries the Network
+**Integration API**, which can list devices, ports and networks but has **no way to change a
+port's VLAN**. **Test connection** checks four steps (key → console → connector → switch-port
+API) and tells you if the last one is refused. If it is, use a **Direct** connection to that
+console, reachable from this server (e.g. over a VPN). Direct needs the console's own local
+API key.
 
 - **Site** is UniFi's internal site name, usually `default`. **Test connection** lists the
   sites to pick from.

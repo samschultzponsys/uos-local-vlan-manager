@@ -5,6 +5,29 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 1.5 — 2026-09-30
+
+### Fixed
+- **Cloud environments used the wrong connector address** (`…/consoles/<id>/proxy/network`),
+  so every request was refused. They now use the address UniFi documents,
+  `api.ui.com/v1/connector/consoles/<id>/network/…`, with the Site Manager key.
+
+### Added
+- **Test connection checks cloud setups step by step** and shows each result:
+  1. Site Manager API key accepted
+  2. Console found on that account, with its UniFi OS version and your role on it
+  3. Cloud connector reaches the console's Network app (needs UniFi OS 5.0.3+ and Remote
+     Access on)
+  4. Switch-port API reachable through the cloud
+
+  A failed step says what to do.
+
+### Known limitation
+- UniFi's cloud connector officially only carries the **Integration API**, and that API has no
+  way to change a port's VLAN. If step 4 fails for your console, VLAN changes need a
+  **Direct** connection: the console's own address and its local API key, reachable from
+  this server, for example over a VPN.
+
 ## 1.4 — 2026-09-30
 
 ### Added

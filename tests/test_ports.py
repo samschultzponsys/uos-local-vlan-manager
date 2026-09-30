@@ -264,3 +264,58 @@ def test_lock_survives_readoption(fake, admin):
     dev = next(d for d in fake.config["STATE"]["devices"] if d["_id"] == "dev-sw8")
     dev["_id"] = "dev-sw8-new"
     assert _port(_state(admin, eid, True), "dev-sw8-new", 5)["lock"]["note"] == "desk phone"
+
+
+class _R:
+    def __init__(self, code, body=None):
+        self.status_code, self._b = code, body or {}
+
+    def json(self):
+        return self._b
+
+
+class _CloudHTTP:
+    """api.ui.com stand-in: routes by URL suffix."""
+    def __init__(self, routes):
+        self.routes, self.verify, self.urls = routes, False, []
+
+    def get(self, url, **kw):
+        self.urls.append(url)
+        for suffix, resp in self.routes.items():
+            if url.endswith(suffix):
+                return resp
+        return _R(404)
+
+    def request(self, method, url, **kw):
+        return self.get(url)
+
+
+HOSTS = _R(200, {"data": [{"id": "HOST:1", "hardwareId": "3be578f1-aaaa", "isBlocked": False,
+                           "reportedState": {"name": "UOS-Nick", "version": "5.0.6"},
+                           "userData": {"role": "owner", "permissions": {"network.management": ["admin"]}}}]})
+
+
+def test_cloud_uses_documented_connector_path():
+    c = unifi.UniFi(mode="cloud", api_key="k", console_id="HOST:1")
+    assert c.base() == "https://api.ui.com/v1/connector/consoles/HOST:1/network"
+
+
+def test_cloud_diagnosis_explains_each_step():
+    c = unifi.UniFi(mode="cloud", api_key="k", console_id="HOST:1")
+    c.http = _CloudHTTP({"/v1/hosts": _R(401)})
+    steps = c.diagnose_cloud("default")
+    assert steps[0]["name"] == "Site Manager API key" and not steps[0]["ok"]
+    # key fine, connector fine, switch-port API refused (integration-only)
+    c.http = _CloudHTTP({"/v1/hosts": HOSTS, "/integration/v1/info": _R(200, {"applicationVersion": "10.0.160"}),
+                         "/stat/device": _R(403)})
+    steps = c.diagnose_cloud("default")
+    assert [s["ok"] for s in steps] == [True, True, True, False]
+    assert "can't change port VLANs" in steps[-1]["detail"]
+    assert "role: owner" in steps[1]["detail"]
+    # everything through
+    c.http = _CloudHTTP({"/v1/hosts": HOSTS, "/integration/v1/info": _R(200, {}), "/stat/device": _R(200, {"data": []})})
+    assert all(s["ok"] for s in c.diagnose_cloud("default"))
+    # console not on this account
+    c.console_id = "OTHER:2"
+    c.http = _CloudHTTP({"/v1/hosts": HOSTS})
+    assert not c.diagnose_cloud("default")[1]["ok"]

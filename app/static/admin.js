@@ -131,7 +131,9 @@ function EnvEditor({ env, onDone }) {
       hint="Uplinks, links to other UniFi devices, LAG and mirror ports. Off: only admins, after a warning." />
     <${Field} label="Notes (visible to this environment's supervisors)"><input value=${s.notes} onInput=${(e) => set("notes", e.target.value)} /></${Field}>
     ${test && html`<div class=${"notice " + (test.ok ? "good" : "err")}><${Icon} name=${test.ok ? "check" : "alert"} /><div>
-      ${test.ok ? html`Connected — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks on site <b>${s.site}</b>.` : test.error}</div></div>`}
+      ${test.ok ? html`Connected — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks on site <b>${s.site}</b>.` : test.steps ? "A check above failed — its note says what to do." : test.error}</div></div>`}
+    ${test && test.steps && html`<div class="steps-check">${test.steps.map((st) => html`<div class=${"check-row " + (st.ok ? "ok" : "bad")}>
+      <${Icon} name=${st.ok ? "check" : "x"} size=${15} /><div><b>${st.name}</b><div class="muted small">${st.detail}</div></div></div>`)}</div>`}
     ${test && test.ok && test.console_id && test.console_id !== s.console_id && html`<div class="muted small">Console ID resolved to <span class="mono">${test.console_id}</span> — it's saved that way.</div>`}
 
     ${catalog && catalog.networks.length > 0 && html`<h4 class="section">Default VLAN colors</h4>

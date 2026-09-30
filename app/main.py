@@ -583,6 +583,12 @@ def api_admin_env_test():
         c = _candidate_client(request.get_json(silent=True) or {})
     except ValueError as e:
         return _deny(str(e))
+    steps = None
+    if c.mode == "cloud":
+        steps = c.diagnose_cloud(c.site)
+        if not all(s["ok"] for s in steps):
+            return jsonify({"ok": False, "steps": steps, "console_id": c.console_id,
+                            "error": next(s for s in steps if not s["ok"])["detail"]})
     try:
         sites = c.sites()
     except unifi.UniFiError as e:
@@ -592,7 +598,7 @@ def api_admin_env_test():
     except unifi.UniFiError as e:
         return jsonify({"ok": False, "sites": sites, "error": f"Connected, but site '{c.site}': {e}"})
     return jsonify({"ok": True, "sites": sites, "devices": len(data["devices"]), "networks": len(data["networks"]),
-                    "console_id": c.console_id if c.mode == "cloud" else None})
+                    "console_id": c.console_id if c.mode == "cloud" else None, "steps": steps})
 
 
 @app.route("/api/admin/envs/consoles", methods=["POST"])

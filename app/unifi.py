@@ -7,9 +7,14 @@ Connection modes
             Server, or a UniFi-hosted console via its own URL):
             https://<host>/proxy/network/api/s/<site>/...
     cloud   through UniFi's cloud connector, for a console you can't reach
-            directly: https://api.ui.com/v1/connector/consoles/<id>/proxy/network/...
+            directly: https://api.ui.com/v1/connector/consoles/<id>/network/...
+            (a Site Manager key; <id> from api.ui.com/v1/hosts; UniFi OS >= 5.0.3).
+            UniFi documents only the official Integration API through the
+            connector, and that API can't change port VLANs - diagnose_cloud()
+            checks whether the switch-port API gets through.
 
-Both use an API key (Network app -> Settings -> Control Plane -> Integrations)
+Local mode uses the console's API key (Network app -> Settings -> Control Plane ->
+Integrations); cloud mode uses a Site Manager key (unifi.ui.com -> API). Both are
 sent as X-API-KEY.
 
 Port VLAN settings live in the device's `port_overrides` list. On current
@@ -85,7 +90,8 @@ class UniFi:
 
     def base(self):
         if self.mode == "cloud":
-            return f"{CLOUD_BASE}/v1/connector/consoles/{self.console_id}/proxy/network"
+            # the connector maps .../consoles/<id>/<path> to the console's /proxy/<path>
+            return f"{CLOUD_BASE}/v1/connector/consoles/{self.console_id}/network"
         # a classic self-hosted Network application (port 8443) has no /proxy/network
         if self.host.endswith(":8443"):
             return self.host
@@ -104,9 +110,8 @@ class UniFi:
             raise UniFiError(f"Can't reach UniFi: {e.__class__.__name__}")
         if r.status_code in (401, 403):
             if self.mode == "cloud":
-                raise UniFiError("The UniFi cloud rejected the API key (HTTP %d). Cloud mode needs an account key from "
-                                 "unifi.ui.com → API (Site Manager), not the console's Network → Integrations key."
-                                 % r.status_code)
+                raise UniFiError("The UniFi cloud connector refused the request (HTTP %d). Press Test connection in "
+                                 "Settings → Environments to see which step fails." % r.status_code)
             raise UniFiError("UniFi rejected the API key (HTTP %d) - check the key and that it "
                              "belongs to an admin with Network access" % r.status_code)
         if r.status_code == 404:
@@ -153,11 +158,76 @@ class UniFi:
         out = []
         for h in r.json().get("data") or []:
             rs = h.get("reportedState") or {}
+            ud = h.get("userData") or {}
             hw = h.get("hardwareId") or rs.get("hardwareId") or ""
-            out.append({"id": h.get("id"), "name": rs.get("name") or rs.get("hostname") or h.get("id"),
+            out.append({"id": h.get("id"), "name": rs.get("name") or rs.get("hostname") or ud.get("fullName") or h.get("id"),
+                        "version": rs.get("version") or rs.get("firmwareVersion") or "",
+                        "blocked": bool(h.get("isBlocked")), "role": ud.get("role") or "",
+                        "network_role": ",".join((ud.get("permissions") or {}).get("network.management") or []),
                         "ip": h.get("ipAddress") or "", "type": h.get("type") or "",
                         "hardware_id": hw, "online": (rs.get("state") or "connected") == "connected"})
         return out
+
+    def diagnose_cloud(self, site):
+        """Check a cloud connection one step at a time, so a failure says exactly where:
+        1. the Site Manager key (api.ui.com/v1/hosts)
+        2. the console on that account (id, blocked, firmware >= 5.0.3, your role)
+        3. the cloud connector reaching the console's official Network API
+        4. the connector reaching the console's switch-port API (needed to change VLANs)"""
+        steps = []
+
+        def step(name, ok, detail):
+            steps.append({"name": name, "ok": ok, "detail": detail})
+            return ok
+
+        try:
+            hosts = self.cloud_consoles()
+        except UniFiError as e:
+            step("Site Manager API key", False, f"{e} Create one at unifi.ui.com → API (Site Manager), "
+                                                "signed in as the console's owner or a super admin.")
+            return steps
+        step("Site Manager API key", True, f"Accepted - {len(hosts)} console{'s' if len(hosts) != 1 else ''} on this account.")
+        host = next((h for h in hosts if h["id"] == self.console_id), None)
+        if host is None:
+            step("Console", False, "This console isn't on the key's account. Use Find my consoles, and make sure the key "
+                                   "was made by the console's owner or a super admin.")
+            return steps
+        if host["blocked"]:
+            step("Console", False, f"{host['name']} is blocked from cloud access (UniFi OS → Settings → Remote Access).")
+            return steps
+        role = host["role"] or "unknown"
+        step("Console", True, f"{host['name']}{' · UniFi OS ' + host['version'] if host['version'] else ''} · your role: {role}"
+                              f"{' · Network: ' + host['network_role'] if host['network_role'] else ''}")
+
+        def get(path):
+            try:
+                r = self.http.get(self.base() + path, timeout=self.timeout,
+                                  headers={"X-API-KEY": self.api_key, "Accept": "application/json"})
+            except requests.RequestException as e:
+                return None, e.__class__.__name__
+            return r, None
+
+        r, err = get("/integration/v1/info")
+        if r is None or r.status_code >= 400:
+            code = f"HTTP {r.status_code}" if r is not None else err
+            step("Cloud connector", False, f"The connector couldn't reach the console's Network app ({code}). It needs "
+                                           "UniFi OS 5.0.3 or newer, the console online with Remote Access on, and the "
+                                           "key's account to be an owner or super admin of it.")
+            return steps
+        try:
+            ver = (r.json() or {}).get("applicationVersion") or ""
+        except ValueError:
+            ver = ""
+        step("Cloud connector", True, f"Reached the Network app{' ' + ver if ver else ''}.")
+        r, err = get(f"/api/s/{self.site}/stat/device")
+        if r is None or r.status_code >= 400:
+            code = f"HTTP {r.status_code}" if r is not None else err
+            step("Switch ports", False, f"UniFi's cloud connector refused the switch-port API ({code}). It only allows UniFi's "
+                                        "official Integration API, which can't change port VLANs. Use a Direct connection "
+                                        "to this console (its address, reachable from this server - e.g. over a VPN).")
+            return steps
+        step("Switch ports", True, "The switch-port API works through the cloud - VLAN changes will work.")
+        return steps
 
     def resolve_console_id(self, value):
         """Accept a console ID, or a unifi.ui.com page URL / console UUID copied from the

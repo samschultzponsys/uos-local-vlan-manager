@@ -701,3 +701,9 @@ details.more summary { cursor: pointer; color: var(--accent); font-weight: 550; 
 .cap-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .cap-dot.on { background: var(--good); box-shadow: 0 0 6px var(--good); }
 .cap-line .segmented button { padding: 5px 10px; font-size: 12.5px; }
+
+.steps-check { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.check-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); }
+.check-row.ok .icon { color: var(--good); margin-top: 2px; }
+.check-row.bad { border-color: rgba(248, 113, 113, .4); }
+.check-row.bad .icon { color: var(--err); margin-top: 2px; }
