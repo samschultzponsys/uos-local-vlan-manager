@@ -15,7 +15,7 @@ def test_first_admin_seeded_and_password_banner(app, client):
 def test_unauthenticated_is_redirected_to_login(client):
     r = client.get("/")
     assert r.status_code == 302 and r.headers["Location"].startswith("/login")
-    assert client.get("/api/state").status_code == 401
+    assert client.get("/api/envs").status_code == 401
     assert client.get("/login").status_code == 200
     assert client.get("/healthz").status_code == 200
 
@@ -35,10 +35,10 @@ def test_role_gates(app, admin):
     admin.post("/api/users", json={"username": "vic", "password": "vicpass123"})
     c = app.test_client()
     login(c, "vic", "vicpass123")
-    assert c.get("/api/state").status_code == 200
+    assert c.get("/api/envs").status_code == 200
     assert c.get("/api/audit").status_code == 403
     assert c.get("/api/users").status_code == 403
-    assert c.put("/api/devices/x/ports/1", json={}).status_code == 403
+    assert c.put("/api/envs/1/devices/x/ports/1", json={}).status_code == 403
 
 
 def test_last_admin_cannot_be_demoted(admin):
@@ -121,11 +121,16 @@ def test_oidc_user_is_created_as_viewer(app):
         # same sub signs into the same user
         row2, _ = auth._oidc_user({"sub": "abc", "preferred_username": "bob"})
         assert row2["id"] == row["id"]
-        # group mapping, when configured, sets the role
-        cfg["oidc"].update(admin_groups="vlan-admins")
+        # SSO only signs in: groups never change the role an admin set here
+        db.get().execute("UPDATE users SET role='supervisor' WHERE id=?", (row["id"],))
+        db.get().commit()
+        row3, _ = auth._oidc_user({"sub": "abc", "groups": ["vlan-admins", "authentik Admins"]})
+        assert row3["role"] == "supervisor"
+        # allowed groups still gate who may sign in at all
+        cfg["oidc"].update(allowed_groups="vlan-users")
         db.set_json("auth", cfg)
-        row3, _ = auth._oidc_user({"sub": "abc", "groups": ["vlan-admins"]})
-        assert row3["role"] == "admin"
+        _, err = auth._oidc_user({"sub": "abc", "groups": ["other"]})
+        assert err
         db.close()
 
 
@@ -168,3 +173,44 @@ def test_token_link_session_keeps_token_role_and_dies_on_revoke(app, admin):
     assert kiosk.get("/api/users").status_code == 403
     admin.delete(f"/api/me/tokens/{tid}", json={})
     assert kiosk.get("/api/me").status_code == 401
+
+
+def test_admin_can_rename_seeded_admin(app, admin):
+    me = admin.get("/api/me").get_json()
+    r = admin.put(f"/api/users/{me['id']}", json={"username": "sam", "display_name": "Sam"})
+    assert r.status_code == 200 and r.get_json()["user"]["username"] == "sam"
+    assert admin.get("/api/me").get_json()["username"] == "sam"   # still signed in
+    c = app.test_client()
+    assert login(c, "sam", app.config["ADMIN_PASSWORD"]).status_code == 200
+    assert login(app.test_client(), "admin", app.config["ADMIN_PASSWORD"]).status_code == 401
+    # own profile: admins may rename themselves too
+    assert admin.put("/api/me/profile", json={"username": "sam2"}).status_code == 200
+
+
+def test_users_edit_display_name_but_not_username(app, admin):
+    admin.post("/api/users", json={"username": "tina", "password": "tinapass12"})
+    c = app.test_client()
+    login(c, "tina", "tinapass12")
+    assert c.put("/api/me/profile", json={"display_name": "Tina T"}).status_code == 200
+    assert c.get("/api/me").get_json()["display_name"] == "Tina T"
+    assert c.put("/api/me/profile", json={"username": "boss"}).status_code == 403
+    assert admin.put("/api/users/1", json={"username": "tina"}).status_code == 400   # taken
+
+
+def test_single_console_from_1_0_becomes_an_environment(app):
+    import main
+    d = db.connect()
+    d.execute("DELETE FROM environments")
+    for k, v in (("unifi_host", "https://10.0.0.1"), ("unifi_api_key", "k"), ("unifi_site", "default"),
+                 ("vlan_colors", '{"net-a": "#ff0000"}')):
+        d.execute("INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
+    d.commit()
+    d.close()
+    main.startup()
+    d = db.connect()
+    env = d.execute("SELECT * FROM environments").fetchone()
+    assert env["name"] == "Default" and env["host"] == "https://10.0.0.1" and env["api_key"] == "k"
+    assert env["vlan_colors"] == '{"net-a": "#ff0000"}'
+    assert d.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'unifi_%'").fetchone()[0] == 0
+    d.close()
+    db.close()

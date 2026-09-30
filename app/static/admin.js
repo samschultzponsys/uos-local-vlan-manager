@@ -4,23 +4,28 @@ import {
   vlanColors, ROLE_LABEL, MODE_LABEL, ago, when, rank,
 } from "./ui.js";
 
+const ROLE_HELP = {
+  admin: "Everything: environments and API keys, users and their access, settings.",
+  supervisor: "Changes ports and reads the settings of their environments. Sees their activity.",
+  viewer: "Sees their devices. Nothing else.",
+};
+
 const ROLES = ["viewer", "supervisor", "admin"];
 
 // ============================================================================
 // Settings
 // ============================================================================
 
-export function SettingsModal({ networks, onClose, onSaved }) {
-  const [tab, setTab] = useState("unifi");
-  const tabs = [["unifi", "UniFi", "server"], ["auth", "Sign-in", "shield"], ["behavior", "Ports", "grid"],
-    ["colors", "VLAN colors", "palette"], ["updates", "Updates", "sparkle"]];
+export function SettingsModal({ onClose, onSaved }) {
+  const [tab, setTab] = useState("envs");
+  const tabs = [["envs", "Environments", "server"], ["auth", "Sign-in", "shield"], ["behavior", "Ports", "grid"],
+    ["updates", "Updates", "sparkle"]];
   return html`<${Modal} title="Settings" icon="settings" onClose=${onClose} wide>
     <nav class="tabs">${tabs.map(([k, l, i]) => html`<button class=${tab === k ? "on" : ""} onClick=${() => setTab(k)}><${Icon} name=${i} size=${15} />${l}</button>`)}</nav>
     <div class="tab-body">
-      ${tab === "unifi" && html`<${UnifiTab} onSaved=${onSaved} />`}
+      ${tab === "envs" && html`<${EnvironmentsTab} onSaved=${onSaved} />`}
       ${tab === "auth" && html`<${AuthTab} />`}
       ${tab === "behavior" && html`<${BehaviorTab} onSaved=${onSaved} />`}
-      ${tab === "colors" && html`<${SiteColorsTab} networks=${networks} onSaved=${onSaved} />`}
       ${tab === "updates" && html`<${UpdatesTab} />`}
     </div></${Modal}>`;
 }
@@ -31,48 +36,113 @@ function useSettings() {
   return [s, setS];
 }
 
-function UnifiTab({ onSaved }) {
-  const [s, setS] = useSettings();
+// --- environments ------------------------------------------------------------
+
+const NEW_ENV = { id: null, name: "", mode: "local", host: "", site: "default", console_id: "", verify_ssl: false,
+  supervisors_protected: false, notes: "", vlan_colors: {}, api_key_set: false };
+
+function EnvironmentsTab({ onSaved }) {
+  const [list, setList] = useState(null);
+  const [edit, setEdit] = useState(null);
+  const load = () => api("/api/admin/envs").then((r) => setList(r.envs)).catch((e) => toast(e.message, "err"));
+  useEffect(() => { load(); }, []);
+  if (edit) return html`<${EnvEditor} env=${edit} onDone=${(changed) => { setEdit(null); load(); if (changed) onSaved(); }} />`;
+  if (!list) return html`<${Spinner} />`;
+  return html`<div class="form">
+    <p class="muted">Each environment is one UniFi console or UniFi OS instance, reached with its own API key. Only admins see or set keys.
+      Give people access under <b>Users → Access</b>.</p>
+    <div class="env-list">
+      ${list.map((e) => html`<button class="env-card" key=${e.id} onClick=${() => setEdit(e)}>
+        <span class="env-icon"><${Icon} name="server" size=${18} /></span>
+        <div class="env-main"><b>${e.name}</b>
+          <span class="muted small">${e.mode === "cloud" ? `UniFi cloud · ${e.console_id || "no console"}` : e.host || "no address"} · site ${e.site}</span></div>
+        ${!e.api_key_set && html`<span class="badge warn">no API key</span>`}
+        <span class="badge">${e.users} user${e.users === 1 ? "" : "s"}</span>
+        <${Icon} name="chevron" size=${16} cls="rot" /></button>`)}
+      ${list.length === 0 && html`<div class="empty-sm">No environments yet.</div>`}
+    </div>
+    <div class="form-actions"><button class="btn primary" onClick=${() => setEdit(NEW_ENV)}><${Icon} name="plus" />Add environment</button></div>
+  </div>`;
+}
+
+function EnvEditor({ env, onDone }) {
+  const [s, setS] = useState({ ...env });
   const [key, setKey] = useState("");
   const [test, setTest] = useState(null);
   const [busy, setBusy] = useState(false);
   const [consoles, setConsoles] = useState(null);
-  if (!s) return html`<${Spinner} />`;
+  const [catalog, setCatalog] = useState(null);
   const set = (k, v) => setS({ ...s, [k]: v });
-  const body = () => ({ unifi_mode: s.unifi_mode, unifi_host: s.unifi_host, unifi_site: s.unifi_site,
-    unifi_console_id: s.unifi_console_id, unifi_verify_ssl: s.unifi_verify_ssl, unifi_api_key: key || undefined });
-  const cloud = s.unifi_mode === "cloud";
+  const cloud = s.mode === "cloud";
+  const body = () => ({ env_id: s.id || undefined, name: s.name, mode: s.mode, host: s.host, site: s.site,
+    console_id: s.console_id, verify_ssl: s.verify_ssl, supervisors_protected: s.supervisors_protected,
+    notes: s.notes, vlan_colors: s.vlan_colors || {}, api_key: key || undefined });
+  useEffect(() => { if (s.id) api(`/api/admin/envs/${s.id}/catalog`).then(setCatalog).catch(() => {}); }, []);
+
+  async function save() {
+    try {
+      const b = body();
+      delete b.env_id;
+      if (s.id) await api(`/api/admin/envs/${s.id}`, { method: "PUT", body: b });
+      else await api("/api/admin/envs", { method: "POST", body: b });
+      toast(`${s.name} saved`);
+      onDone(true);
+    } catch (e) { toast(e.message, "err"); }
+  }
+  const auto = catalog ? vlanColors(catalog.networks, {}, {}) : {};
+  const colors = s.vlan_colors || {};
   return html`<div class="form">
-    <${Field} label="Connection">
-      <${Segmented} value=${s.unifi_mode} onChange=${(v) => set("unifi_mode", v)}
-        options=${[{ value: "local", label: "Console on my network" }, { value: "cloud", label: "Through UniFi cloud" }]} /></${Field}>
-    ${!cloud ? html`<${Field} label="Console address" hint="Your UDM / UCG / Cloud Key / UniFi OS Server, e.g. https://192.168.1.1. A UniFi-hosted console works with its own URL too.">
-        <input value=${s.unifi_host} placeholder="https://192.168.1.1" onInput=${(e) => set("unifi_host", e.target.value)} /></${Field}>`
-      : html`<${Field} label="Console ID" hint="Uses api.ui.com/v1/connector (experimental). The API key must come from unifi.ui.com → API.">
-        <div class="row"><input value=${s.unifi_console_id} placeholder="console id" onInput=${(e) => set("unifi_console_id", e.target.value)} />
+    <button class="link-btn back" onClick=${() => onDone(false)}><${Icon} name="chevron" size=${14} cls="back-chev" />All environments</button>
+    <div class="grid2">
+      <${Field} label="Name" hint="What users see, e.g. “Jake's staging rack”."><input value=${s.name} onInput=${(e) => set("name", e.target.value)} /></${Field}>
+      <${Field} label="Connection"><${Segmented} value=${s.mode} onChange=${(v) => set("mode", v)}
+        options=${[{ value: "local", label: "Direct" }, { value: "cloud", label: "UniFi cloud" }]} /></${Field}>
+    </div>
+    ${!cloud ? html`<${Field} label="Console address" hint="UDM / UCG / Cloud Key / UniFi OS Server or a UniFi OS container, e.g. https://10.1.2.3 or https://10.1.2.3:11443">
+        <input value=${s.host} placeholder="https://192.168.1.1" onInput=${(e) => set("host", e.target.value)} /></${Field}>`
+      : html`<${Field} label="Console ID" hint="Goes through api.ui.com/v1/connector (experimental). The API key comes from unifi.ui.com → API.">
+        <div class="row"><input value=${s.console_id} placeholder="console id" onInput=${(e) => set("console_id", e.target.value)} />
           <button class="btn ghost" onClick=${async () => {
-            const r = await api("/api/settings/unifi/consoles", { method: "POST", body: body() });
+            const r = await api("/api/admin/envs/consoles", { method: "POST", body: body() });
             if (r.ok) setConsoles(r.consoles); else toast(r.error, "err");
           }}>Find consoles</button></div>
-        ${consoles && html`<div class="choices">${consoles.map((c) => html`<button class="chip" onClick=${() => { set("unifi_console_id", c.id); setConsoles(null); }}>${c.name}<span class="muted">${c.type}</span></button>`)}
+        ${consoles && html`<div class="choices">${consoles.map((c) => html`<button class="chip" onClick=${() => { set("console_id", c.id); setConsoles(null); }}>${c.name}<span class="muted">${c.type}</span></button>`)}
           ${consoles.length === 0 && html`<span class="muted">No consoles on this key.</span>`}</div>`}</${Field}>`}
-    <${Field} label="API key" hint=${cloud ? "unifi.ui.com → API → Create API key" : "Network app → Settings → Control Plane → Integrations → Create API key"}>
-      <div class="row"><input type="password" autocomplete="new-password" value=${key} placeholder=${s.unifi_api_key_set ? "✓ saved — leave blank to keep" : "paste the key"}
+    <${Field} label="API key" hint=${cloud ? "unifi.ui.com → API → Create API key" : "In that console: Network → Settings → Control Plane → Integrations → Create API key"}>
+      <div class="row"><input type="password" autocomplete="new-password" value=${key} placeholder=${s.api_key_set ? "✓ saved — leave blank to keep" : "paste the key"}
         onInput=${(e) => setKey(e.target.value)} />
-        ${s.unifi_api_key_set && html`<button class="btn ghost" onClick=${async () => { await api("/api/settings", { method: "PUT", body: { clear_unifi_api_key: true } }); set("unifi_api_key_set", false); }}>Clear</button>`}</div></${Field}>
-    <${Field} label="Site" hint="Internal site name — usually 'default'. Test the connection to pick from a list.">
-      <input value=${s.unifi_site} onInput=${(e) => set("unifi_site", e.target.value)} />
-      ${test && test.sites && test.sites.length > 1 && html`<div class="choices">${test.sites.map((x) => html`<button class=${"chip" + (x.name === s.unifi_site ? " on" : "")} onClick=${() => set("unifi_site", x.name)}>${x.desc}<span class="muted">${x.name}</span></button>`)}</div>`}
+        ${s.id && s.api_key_set && html`<button class="btn ghost" onClick=${async () => {
+          if (!await ask({ title: "Remove the API key?", body: "Nobody can use this environment until a new key is added.", danger: true, confirm: "Remove" })) return;
+          await api(`/api/admin/envs/${s.id}`, { method: "PUT", body: { clear_api_key: true } }); set("api_key_set", false);
+        }}>Remove</button>`}</div></${Field}>
+    <${Field} label="Site" hint="UniFi's internal site name, usually 'default'. Test the connection to pick from a list.">
+      <input value=${s.site} onInput=${(e) => set("site", e.target.value)} />
+      ${test && test.sites && test.sites.length > 1 && html`<div class="choices">${test.sites.map((x) => html`<button class=${"chip" + (x.name === s.site ? " on" : "")} onClick=${() => set("site", x.name)}>${x.desc}<span class="muted">${x.name}</span></button>`)}</div>`}
     </${Field}>
-    ${!cloud && html`<${Toggle} checked=${s.unifi_verify_ssl} onChange=${(v) => set("unifi_verify_ssl", v)} label="Verify TLS certificate" hint="Leave off for the console's self-signed certificate." />`}
+    ${!cloud && html`<${Toggle} checked=${s.verify_ssl} onChange=${(v) => set("verify_ssl", v)} label="Verify TLS certificate" hint="Leave off for a self-signed certificate." />`}
+    <${Toggle} checked=${s.supervisors_protected} onChange=${(v) => set("supervisors_protected", v)} label="Supervisors may change protected ports"
+      hint="Uplinks, links to other UniFi devices, LAG and mirror ports. Off: only admins, after a warning." />
+    <${Field} label="Notes (visible to this environment's supervisors)"><input value=${s.notes} onInput=${(e) => set("notes", e.target.value)} /></${Field}>
     ${test && html`<div class=${"notice " + (test.ok ? "good" : "err")}><${Icon} name=${test.ok ? "check" : "alert"} /><div>
-      ${test.ok ? html`Connected — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks on site <b>${s.unifi_site}</b>.` : test.error}</div></div>`}
-    <div class="form-actions">
-      <button class="btn ghost" disabled=${busy} onClick=${async () => { setBusy(true); try { setTest(await api("/api/settings/unifi/test", { method: "POST", body: body() })); } catch (e) { toast(e.message, "err"); } setBusy(false); }}>
+      ${test.ok ? html`Connected — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks on site <b>${s.site}</b>.` : test.error}</div></div>`}
+
+    ${catalog && catalog.networks.length > 0 && html`<h4 class="section">Default VLAN colors</h4>
+      <p class="muted small">For everyone using this environment. Each user can still pick their own.</p>
+      <div class="color-list">${catalog.networks.map((n) => html`<label class="color-row" key=${n.id}>
+        <input type="color" value=${colors[n.id] || auto[n.id]} onInput=${(e) => set("vlan_colors", { ...colors, [n.id]: e.target.value })} />
+        <span class="color-name">${n.name}</span><span class="chip-vlan">VLAN ${n.vlan}</span>
+        ${colors[n.id] && html`<button class="link-btn" onClick=${(e) => { e.preventDefault(); const v = { ...colors }; delete v[n.id]; set("vlan_colors", v); }}>auto</button>`}
+      </label>`)}</div>`}
+
+    <div class="form-actions sticky">
+      ${s.id && html`<button class="btn ghost danger-text" onClick=${async () => {
+        if (!await ask({ title: `Delete ${s.name}?`, body: "Everyone loses access to it. The UniFi console itself isn't touched.", danger: true, confirm: "Delete" })) return;
+        await api(`/api/admin/envs/${s.id}`, { method: "DELETE" }); toast("Deleted"); onDone(true);
+      }}><${Icon} name="trash" />Delete</button>`}
+      <span class="grow"></span>
+      <button class="btn ghost" disabled=${busy} onClick=${async () => { setBusy(true); try { setTest(await api("/api/admin/envs/test", { method: "POST", body: body() })); } catch (e) { toast(e.message, "err"); } setBusy(false); }}>
         ${busy ? html`<${Spinner} />` : html`<${Icon} name="refresh" />`}Test connection</button>
-      <button class="btn primary" onClick=${async () => {
-        try { await api("/api/settings", { method: "PUT", body: body() }); setKey(""); setS({ ...s, unifi_api_key_set: s.unifi_api_key_set || !!key }); toast("UniFi settings saved"); onSaved(); } catch (e) { toast(e.message, "err"); }
-      }}>Save</button>
+      <button class="btn primary" onClick=${save}>Save</button>
     </div></div>`;
 }
 
@@ -124,10 +194,8 @@ function AuthTab() {
         <div class="row"><input value=${a.oidc.redirect_uri} placeholder=${a.redirect_uri} onInput=${(e) => setO("redirect_uri", e.target.value)} /><${Copy} text=${a.oidc.redirect_uri || a.redirect_uri} /></div></${Field}>
       <${Field} label="Groups claim"><input value=${a.oidc.groups_claim} onInput=${(e) => setO("groups_claim", e.target.value)} /></${Field}>
       <${Field} label="Allowed groups" hint="Comma-separated. Empty = anyone your provider lets through."><input value=${a.oidc.allowed_groups} onInput=${(e) => setO("allowed_groups", e.target.value)} /></${Field}>
-      <${Field} label="Admin groups" hint="Optional. When admin or supervisor groups are set, roles follow the provider on every sign-in."><input value=${a.oidc.admin_groups} onInput=${(e) => setO("admin_groups", e.target.value)} /></${Field}>
-      <${Field} label="Supervisor groups"><input value=${a.oidc.supervisor_groups} onInput=${(e) => setO("supervisor_groups", e.target.value)} /></${Field}>
     </div>
-    <${Toggle} checked=${a.oidc.auto_create} onChange=${(v) => setO("auto_create", v)} label="Create users on first SSO sign-in" hint="New users start as Viewer. Off: an admin adds them first (username or email must match)." />
+    <${Toggle} checked=${a.oidc.auto_create} onChange=${(v) => setO("auto_create", v)} label="Create users on first SSO sign-in" hint="SSO only signs people in. New users start as Viewer with no environments until an admin gives them access. Off: an admin adds them first (username or email must match)." />
     <${Toggle} checked=${a.oidc_auto_login} onChange=${(v) => set("oidc_auto_login", v)} label="Sign in automatically with SSO"
       hint="Visiting the app goes straight to your provider. /login always shows the login page as a fallback." />
     <div class="row">
@@ -188,24 +256,6 @@ function BehaviorTab({ onSaved }) {
     }}>Save</button></div></div>`;
 }
 
-function SiteColorsTab({ networks, onSaved }) {
-  const [s, setS] = useSettings();
-  if (!s) return html`<${Spinner} />`;
-  const auto = vlanColors(networks, {}, {});
-  const val = s.vlan_colors || {};
-  const setC = (id, v) => setS({ ...s, vlan_colors: { ...val, [id]: v } });
-  return html`<div class="form">
-    <p class="muted">Default port colors for everyone. Each user can still pick their own under their name → My VLAN colors.</p>
-    <div class="color-list">${networks.map((n) => html`<label class="color-row" key=${n.id}>
-      <input type="color" value=${val[n.id] || auto[n.id]} onInput=${(e) => setC(n.id, e.target.value)} />
-      <span class="color-name">${n.name}</span><span class="chip-vlan">VLAN ${n.vlan}</span>
-      ${val[n.id] && html`<button class="link-btn" onClick=${(e) => { e.preventDefault(); const v = { ...val }; delete v[n.id]; setS({ ...s, vlan_colors: v }); }}>auto</button>`}
-    </label>`)}</div>
-    <div class="form-actions"><button class="btn primary" onClick=${async () => {
-      try { await api("/api/settings", { method: "PUT", body: { vlan_colors: val } }); toast("Colors saved"); onSaved(); } catch (e) { toast(e.message, "err"); }
-    }}>Save</button></div></div>`;
-}
-
 function UpdatesTab() {
   const [s, setS] = useSettings();
   const [v, setV] = useState(null);
@@ -234,17 +284,28 @@ function UpdatesTab() {
 export function UsersModal({ me, onClose }) {
   const [data, setData] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [view, setView] = useState(null);   // { kind: "access" | "edit", user }
   const [form, setForm] = useState({ username: "", display_name: "", email: "", password: "", role: "viewer" });
   const load = () => api("/api/users").then(setData).catch((e) => toast(e.message, "err"));
   useEffect(() => { load(); }, []);
 
   async function update(u, body, msg) {
-    try { await api(`/api/users/${u.id}`, { method: "PUT", body }); toast(msg || "Saved"); load(); } catch (e) { toast(e.message, "err"); }
+    try { await api(`/api/users/${u.id}`, { method: "PUT", body }); toast(msg || "Saved"); load(); return true; } catch (e) { toast(e.message, "err"); return false; }
   }
+  const back = () => { setView(null); load(); };
 
+  if (view && view.kind === "access") {
+    return html`<${Modal} title=${`Access · ${view.user.display_name || view.user.username}`} icon="shield" onClose=${onClose} wide>
+      <${AccessEditor} user=${view.user} onDone=${back} /></${Modal}>`;
+  }
+  if (view && view.kind === "edit") {
+    return html`<${Modal} title=${`Edit · ${view.user.username}`} icon="user" onClose=${onClose}>
+      <${UserEditor} user=${view.user} onSave=${async (b) => { if (await update(view.user, b, "Saved")) back(); }} onCancel=${back} /></${Modal}>`;
+  }
   return html`<${Modal} title="Users" icon="users" onClose=${onClose} wide
-    footer=${html`<span class="muted grow">New users start as Viewer. SSO users are created on their first sign-in.</span>
+    footer=${html`<span class="muted grow">Everyone starts as Viewer with no environments. SSO users appear here after their first sign-in.</span>
       <button class="btn primary" onClick=${() => setAdding(!adding)}><${Icon} name="plus" />Add user</button>`}>
+    <div class="role-help">${ROLES.slice().reverse().map((r) => html`<div><span class=${"role-badge " + r}>${ROLE_LABEL[r]}</span><span class="muted small">${ROLE_HELP[r]}</span></div>`)}</div>
     ${adding && html`<div class="panel add-user">
       <div class="grid3">
         <${Field} label="Username"><input value=${form.username} onInput=${(e) => setForm({ ...form, username: e.target.value })} /></${Field}>
@@ -253,29 +314,138 @@ export function UsersModal({ me, onClose }) {
         <${Field} label="Password" hint="Leave blank for an SSO-only user."><input type="password" autocomplete="new-password" value=${form.password} onInput=${(e) => setForm({ ...form, password: e.target.value })} /></${Field}>
         <${Field} label="Role"><select value=${form.role} onChange=${(e) => setForm({ ...form, role: e.target.value })}>${ROLES.map((r) => html`<option value=${r}>${ROLE_LABEL[r]}</option>`)}</select></${Field}>
         <div class="field end"><button class="btn primary" onClick=${async () => {
-          try { await api("/api/users", { method: "POST", body: form }); toast(`Added ${form.username}`); setForm({ username: "", display_name: "", email: "", password: "", role: "viewer" }); setAdding(false); load(); } catch (e) { toast(e.message, "err"); }
+          try {
+            const r = await api("/api/users", { method: "POST", body: form });
+            toast(`Added ${form.username}`); setForm({ username: "", display_name: "", email: "", password: "", role: "viewer" }); setAdding(false);
+            if (r.user.role !== "admin") setView({ kind: "access", user: r.user }); else load();
+          } catch (e) { toast(e.message, "err"); }
         }}>Create</button></div>
       </div></div>`}
     ${!data ? html`<${Spinner} />` : html`<div class="table-wrap"><table class="table">
-      <thead><tr><th>User</th><th>Role</th><th>Sign-in</th><th>Last sign-in</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>User</th><th>Role</th><th>Access</th><th>Last sign-in</th><th>Status</th><th></th></tr></thead>
       <tbody>${data.users.map((u) => html`<tr key=${u.id} class=${u.disabled ? "disabled" : ""}>
         <td><div class="u-cell"><span class="avatar sm">${(u.display_name || u.username)[0].toUpperCase()}</span>
-          <div><b>${u.display_name || u.username}</b>${u.seeded && html` <span class="badge">first admin</span>`}<div class="muted small">${u.username}${u.email ? ` · ${u.email}` : ""}</div></div></div></td>
+          <div><b>${u.display_name || u.username}</b>${u.seeded && html` <span class="badge">first admin</span>`}
+            <div class="muted small">${u.username}${u.email ? ` · ${u.email}` : ""}${u.sso ? " · SSO" : ""}</div></div></div></td>
         <td><select class="sm" value=${u.role} onChange=${(e) => update(u, { role: e.target.value }, `${u.username} is now ${ROLE_LABEL[e.target.value]}`)}>
           ${ROLES.map((r) => html`<option value=${r}>${ROLE_LABEL[r]}</option>`)}</select></td>
-        <td>${u.sso && html`<span class="badge">SSO</span>`} ${u.has_password && html`<span class="badge">Password</span>`}</td>
+        <td>${u.role === "admin" ? html`<span class="badge good">All environments</span>`
+          : html`<button class=${"btn sm " + (u.envs ? "ghost" : "primary")} onClick=${() => setView({ kind: "access", user: u })}>
+              <${Icon} name="shield" size=${14} />${u.envs ? `${u.envs} environment${u.envs > 1 ? "s" : ""}` : "Give access"}</button>`}</td>
         <td class="muted small">${ago(u.last_login)}${u.sessions ? html`<div>${u.sessions} active session${u.sessions > 1 ? "s" : ""}</div>` : null}</td>
         <td>${u.id !== me.id ? html`<${Toggle} checked=${!u.disabled} onChange=${(on) => update(u, { disabled: !on }, on ? "Enabled" : "Disabled")} label=${u.disabled ? "Disabled" : "Active"} />` : html`<span class="muted small">you</span>`}</td>
         <td class="actions">
+          <button class="icon-btn sm" title="Rename / edit" onClick=${() => setView({ kind: "edit", user: u })}><${Icon} name="user" size=${15} /></button>
           <button class="icon-btn sm" title="Set password" onClick=${() => { const pw = prompt(`New password for ${u.username} (8+ characters):`); if (pw) update(u, { password: pw }, "Password set"); }}><${Icon} name="key" size=${15} /></button>
           ${u.sessions > 0 && html`<button class="icon-btn sm" title="Sign out everywhere" onClick=${() => update(u, { sign_out: true }, "Signed out")}><${Icon} name="logout" size=${15} /></button>`}
           ${u.id !== me.id && html`<button class="icon-btn sm danger" title="Delete" onClick=${async () => {
-            if (await ask({ title: `Delete ${u.username}?`, body: "Their sessions and API tokens are removed too.", danger: true, confirm: "Delete" })) {
+            if (await ask({ title: `Delete ${u.username}?`, body: "Their sessions, API tokens and access are removed too.", danger: true, confirm: "Delete" })) {
               try { await api(`/api/users/${u.id}`, { method: "DELETE" }); toast("Deleted"); load(); } catch (e) { toast(e.message, "err"); }
             }
           }}><${Icon} name="trash" size=${15} /></button>`}
         </td></tr>`)}</tbody></table></div>`}
   </${Modal}>`;
+}
+
+function UserEditor({ user, onSave, onCancel }) {
+  const [f, setF] = useState({ username: user.username, display_name: user.display_name || "", email: user.email || "" });
+  return html`<div class="form">
+    <${Field} label="Username" hint=${user.sso ? "SSO users are matched by their provider ID, so renaming is safe." : "Used to sign in with a password."}>
+      <input value=${f.username} autocomplete="off" onInput=${(e) => setF({ ...f, username: e.target.value })} /></${Field}>
+    <${Field} label="Display name"><input value=${f.display_name} onInput=${(e) => setF({ ...f, display_name: e.target.value })} /></${Field}>
+    <${Field} label="Email"><input value=${f.email} onInput=${(e) => setF({ ...f, email: e.target.value })} /></${Field}>
+    <div class="form-actions"><button class="btn ghost" onClick=${onCancel}>Cancel</button><button class="btn primary" onClick=${() => onSave(f)}>Save</button></div>
+  </div>`;
+}
+
+// which environments a user may use, and which networks / devices inside them
+function AccessEditor({ user, onDone }) {
+  const [envList, setEnvList] = useState(null);
+  const [acc, setAcc] = useState({});        // env id -> access entry
+  const [catalogs, setCatalogs] = useState({});
+  useEffect(() => {
+    Promise.all([api("/api/admin/envs"), api(`/api/users/${user.id}/access`)]).then(([e, a]) => {
+      setEnvList(e.envs);
+      const m = {};
+      for (const x of a.envs) m[x.env_id] = x;
+      setAcc(m);
+    }).catch((err) => toast(err.message, "err"));
+  }, []);
+  // networks + devices of each environment the user has, fetched once when first needed
+  useEffect(() => {
+    for (const id of Object.keys(acc)) {
+      if (catalogs[id] !== undefined) continue;
+      setCatalogs((c) => ({ ...c, [id]: null }));
+      api(`/api/admin/envs/${id}/catalog`).then((r) => setCatalogs((c) => ({ ...c, [id]: r })))
+        .catch((e) => setCatalogs((c) => ({ ...c, [id]: { error: e.message, networks: [], devices: [] } })));
+    }
+  }, [Object.keys(acc).join()]);
+  const catalog = (id) => catalogs[id];
+  const put = (id, patch) => setAcc({ ...acc, [id]: { ...acc[id], ...patch } });
+  const toggleIn = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+  if (!envList) return html`<${Spinner} />`;
+  return html`<div class="form">
+    ${user.role === "admin" && html`<div class="notice"><${Icon} name="info" /><div>Admins always have every environment. This only matters if you change their role.</div></div>`}
+    <p class="muted">${ROLE_LABEL[user.role]}s ${user.role === "viewer" ? "only see the devices you pick." : "change ports on the devices you pick, using the networks you pick."}
+      ${" "}Networks and devices come live from each console.</p>
+    ${envList.length === 0 && html`<div class="empty-sm">Add an environment under Settings → Environments first.</div>`}
+    <div class="access-list">
+    ${envList.map((env) => {
+      const a = acc[env.id];
+      const cat = a ? catalog(env.id) : null;
+      return html`<div class=${"access-env" + (a ? " on" : "")} key=${env.id}>
+        <div class="access-head">
+          <${Toggle} checked=${!!a} onChange=${(on) => { const m = { ...acc }; if (on) m[env.id] = { env_id: env.id, all_vlans: true, vlans: [], all_devices: true, devices: [] }; else delete m[env.id]; setAcc(m); }}
+            label=${env.name} hint=${env.mode === "cloud" ? "UniFi cloud" : env.host} />
+        </div>
+        ${a && html`<div class="access-body">
+          <div class="access-col">
+            <div class="field-label">Networks they can use</div>
+            <${Segmented} value=${a.all_vlans ? "all" : "some"} onChange=${(v) => put(env.id, { all_vlans: v === "all" })}
+              options=${[{ value: "all", label: "All" }, { value: "some", label: "Only these" }]} />
+            ${!a.all_vlans && (!cat ? html`<${Spinner} />` : cat.error ? html`<span class="err-text small">${cat.error}</span>` : html`<div class="tag-list">
+              ${cat.networks.map((n) => html`<label class="tag-row" key=${n.id}><input type="checkbox" checked=${a.vlans.includes(n.id)}
+                onChange=${() => put(env.id, { vlans: toggleIn(a.vlans, n.id) })} />${n.name}<span class="chip-vlan">${n.vlan}</span></label>`)}</div>`)}
+          </div>
+          <div class="access-col">
+            <div class="field-label">Devices they can see</div>
+            <${Segmented} value=${a.all_devices ? "all" : "some"} onChange=${(v) => put(env.id, { all_devices: v === "all" })}
+              options=${[{ value: "all", label: "All" }, { value: "some", label: "Only these" }]} />
+            ${!a.all_devices && (!cat ? html`<${Spinner} />` : cat.error ? html`<span class="err-text small">${cat.error}</span>` : html`<div class="tag-list">
+              ${cat.devices.map((d) => html`<label class="tag-row" key=${d.mac}><input type="checkbox" checked=${a.devices.includes(d.mac)}
+                onChange=${() => put(env.id, { devices: toggleIn(a.devices, d.mac) })} /><span class=${"status-dot " + (d.online ? "on" : "")}></span>
+                ${d.name}<span class="muted small">${d.model_name}</span></label>`)}</div>`)}
+          </div>
+        </div>`}
+      </div>`;
+    })}
+    </div>
+    <div class="form-actions sticky"><button class="btn ghost" onClick=${onDone}>Cancel</button>
+      <button class="btn primary" onClick=${async () => {
+        try { await api(`/api/users/${user.id}/access`, { method: "PUT", body: { envs: Object.values(acc) } }); toast("Access saved"); onDone(); } catch (e) { toast(e.message, "err"); }
+      }}>Save access</button></div>
+  </div>`;
+}
+
+// read-only view of an environment for its supervisors (and admins)
+export function EnvInfoModal({ env, networks, devices, onClose }) {
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => { api(`/api/envs/${env.id}/config`).then(setCfg).catch((e) => toast(e.message, "err")); }, []);
+  const a = env.access;
+  return html`<${Modal} title=${env.name} icon="server" onClose=${onClose}>
+    ${!cfg ? html`<${Spinner} />` : html`<div class="form">
+      <div class="kv"><span>Connection</span><b>${cfg.mode === "cloud" ? "UniFi cloud" : "Direct"}</b></div>
+      ${cfg.mode === "cloud" ? html`<div class="kv"><span>Console ID</span><span class="mono">${cfg.console_id}</span></div>`
+        : html`<div class="kv"><span>Console</span><span class="mono">${cfg.host}</span></div>`}
+      <div class="kv"><span>Site</span><span class="mono">${cfg.site}</span></div>
+      <div class="kv"><span>API key</span><span>${cfg.api_key_set ? "set by an admin" : "missing"}</span></div>
+      <div class="kv"><span>Protected ports</span><span>${cfg.supervisors_protected ? "supervisors may change them" : "admins only"}</span></div>
+      ${cfg.notes && html`<div class="notice"><${Icon} name="info" /><div>${cfg.notes}</div></div>`}
+      <h4 class="section">Your access</h4>
+      <div class="kv"><span>Networks</span><span>${a.all_vlans ? "all" : networks.filter((n) => n.allowed).map((n) => `${n.name} (${n.vlan})`).join(", ") || "none"}</span></div>
+      <div class="kv"><span>Devices</span><span>${a.all_devices ? "all" : devices.map((d) => d.name).join(", ") || "none online"}</span></div>
+      <p class="muted small">Only an admin can change the connection or your access.</p>
+    </div>`}</${Modal}>`;
 }
 
 // ============================================================================
@@ -293,6 +463,7 @@ export function AccountModal({ me, onClose }) {
     <div class="account-head"><span class="avatar lg">${(me.display_name || me.username)[0].toUpperCase()}</span>
       <div><h3>${me.display_name || me.username}</h3><div class="muted">${me.username}${me.email ? ` · ${me.email}` : ""} · <span class=${"role-badge " + me.role}>${ROLE_LABEL[me.role]}</span></div></div></div>
 
+    <${ProfileForm} me=${me} />
     ${me.method !== "token" && html`<h4 class="section">${me.has_password ? "Change password" : "Set a password"}</h4>
     <div class="grid3">
       ${me.has_password && html`<${Field} label="Current password"><input type="password" autocomplete="current-password" value=${pw.current} onInput=${(e) => setPw({ ...pw, current: e.target.value })} /></${Field}>`}
@@ -330,6 +501,22 @@ export function AccountModal({ me, onClose }) {
   </${Modal}>`;
 }
 
+function ProfileForm({ me }) {
+  const [f, setF] = useState({ display_name: me.display_name || "", username: me.username });
+  const isAdmin = me.role === "admin";
+  return html`<h4 class="section">Profile</h4>
+    <div class="grid3">
+      <${Field} label="Display name"><input value=${f.display_name} onInput=${(e) => setF({ ...f, display_name: e.target.value })} /></${Field}>
+      <${Field} label="Username" hint=${isAdmin ? "" : "Only an admin can change it."}><input value=${f.username} disabled=${!isAdmin} autocomplete="off"
+        onInput=${(e) => setF({ ...f, username: e.target.value })} /></${Field}>
+      <div class="field end"><button class="btn ghost" onClick=${async () => {
+        const body = { display_name: f.display_name };
+        if (isAdmin) body.username = f.username;
+        try { await api("/api/me/profile", { method: "PUT", body }); toast("Profile saved"); } catch (e) { toast(e.message, "err"); }
+      }}>Save profile</button></div>
+    </div>`;
+}
+
 // ============================================================================
 // Activity (audit log)
 // ============================================================================
@@ -339,6 +526,8 @@ const ACTION_LABEL = {
   "user.created": "User added", "user.updated": "User changed", "user.deleted": "User deleted",
   "user.password_changed": "Password changed", "token.created": "Token created", "token.revoked": "Token revoked",
   "settings.app": "Settings changed", "settings.auth": "Sign-in settings changed",
+  "user.access": "Access changed", "env.created": "Environment added", "env.updated": "Environment changed",
+  "env.deleted": "Environment deleted",
 };
 
 export function AuditModal({ onClose }) {

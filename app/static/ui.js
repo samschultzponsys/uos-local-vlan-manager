@@ -187,8 +187,8 @@ export function Toggle({ checked, onChange, disabled, label, hint }) {
 
 export function Segmented({ value, options, onChange, disabled }) {
   return html`<div class=${"segmented" + (disabled ? " disabled" : "")} role="radiogroup">
-    ${options.map((o) => html`<button type="button" role="radio" aria-checked=${value === o.value}
-      class=${value === o.value ? "on" : ""} disabled=${disabled} onClick=${() => onChange(o.value)}>${o.label}</button>`)}
+    ${options.map((o) => html`<button type="button" role="radio" aria-checked=${value === o.value} title=${o.title || ""}
+      class=${value === o.value ? "on" : ""} disabled=${disabled || o.disabled} onClick=${() => onChange(o.value)}>${o.label}</button>`)}
   </div>`;
 }
 

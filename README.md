@@ -4,11 +4,15 @@
 [![Build](https://github.com/samschultzponsys/uos-local-vlan-manager/actions/workflows/release.yml/badge.svg)](https://github.com/samschultzponsys/uos-local-vlan-manager/actions/workflows/release.yml)
 
 Set a switch port's **native VLAN** from your phone. It's a small, self-hosted web app that
-talks to your UniFi console. Pick the switches you care about, tap a port, choose the
+talks to your UniFi consoles. Pick the switches you care about, tap a port, choose the
 network, done.
 
 The UniFi mobile app only lets you apply port *profiles*. This brings back the simple
 "Native VLAN / Network" + "Tagged VLAN Management" setting, with a UI built for phones first.
+
+One instance serves many UniFi consoles. For example, give every technician their own UniFi OS
+instance for their staging rack, add each one here with its API key, and let each technician
+manage only their own switches and only the VLANs you allow.
 
 <p>
   <img src="docs/phone.png" width="260" alt="Switches on a phone" />
@@ -35,6 +39,10 @@ The UniFi mobile app only lets you apply port *profiles*. This brings back the s
 - **Safety rails**: uplinks, links to other UniFi devices, LAG and mirror ports can only be
   changed by an admin, after a warning. Ports with a port profile ask before detaching it.
 - **Activity log**: who changed which port, from what to what, and whether UniFi confirmed it.
+- **Many environments, scoped per user**: see [Environments & access](#environments--access).
+- **Always current**: nothing about your switches is stored here. Every view is read live
+  from UniFi, so changes made in the UniFi console or cloud UI show up within seconds (see
+  [Staying in sync](#staying-in-sync-with-unifi)).
 - **Users & roles**: see [Sign-in, users & roles](#sign-in-users--roles).
 - **Looks like an app** when launched from its icon (PWA), in dark or light.
 - **Changelog** in the app (click the version). It opens by itself after an update, and a
@@ -55,7 +63,10 @@ The image is built by GitHub Actions and published to GHCR for amd64 and arm64:
    ```
 4. Open `http://<host>:20090`, sign in as `admin`, and change the password (a banner reminds
    you until you do).
-5. **Settings → UniFi**: enter the console address and an API key, **Test connection**, **Save**.
+5. **Settings → Environments → Add environment**: enter the console address and an API key,
+   **Test connection**, then **Save**. Repeat for each console.
+6. **Users**: add people (or let them sign in with SSO once), set their role, and use
+   **Access** to give them environments.
 
 **Update:** `docker compose pull && docker compose up -d`. You can pin a version (`:1.0`)
 instead of `:latest`.
@@ -66,12 +77,12 @@ Everything lives in `./data` (a bind mount) on the host:
 
 | path | what |
 |---|---|
-| `data/vlanmgr.db` | SQLite: users, sessions, API tokens (hashed), settings, UniFi API key, activity log |
+| `data/vlanmgr.db` | SQLite: users, sessions, API tokens (hashed), settings, environments with their UniFi API keys, who may use which environment, activity log |
 | `data/backups/` | a copy of the DB taken automatically before each version upgrade (newest 10 kept) |
 
 Schema changes are additive only, so a newer image keeps using your existing DB. To roll
 back, stop the container, copy a backup over `data/vlanmgr.db`, and run the older tag.
-Secrets (the UniFi API key, the OIDC client secret) are stored in the DB and protected by file
+Secrets (the UniFi API keys, the OIDC client secret) are stored in the DB and protected by file
 permissions, so keep `./data` off shared or synced storage.
 
 The app only contacts your UniFi console (or `api.ui.com` in cloud mode), your OIDC provider,
@@ -79,38 +90,93 @@ and `api.github.com` every 6 hours for the update dot (turn off in Settings → 
 `VLANMGR_UPDATE_CHECK=false`). The UI loads nothing from the internet: fonts and scripts are
 served by the container.
 
-## Connecting to UniFi
+## Environments & access
 
-| Mode | Use it for | You need |
+An **environment** is one UniFi Network connection: a UDM / UCG / Cloud Key, a UniFi OS
+Server, or a UniFi OS container (for example one per technician's staging desk). Each one
+has its own API key.
+
+**Only admins** add, change or remove environments, see whether a key is set, or type one
+in. API keys are never sent to any browser, not even an admin's.
+
+| Connection | Use it for | You need |
 |---|---|---|
-| **Console on my network** | UDM / UCG / UDR / UX / Cloud Key / UniFi OS Server, or a UniFi-hosted console via its own URL | Console address (e.g. `https://192.168.1.1`) and an API key from **Network → Settings → Control Plane → Integrations** |
-| **Through UniFi cloud** *(experimental)* | a console you can't reach directly | An API key from **unifi.ui.com → API**, then **Find consoles** to pick it. Requests go through `api.ui.com/v1/connector`. |
+| **Direct** | a console or UniFi OS instance this server can reach (a UniFi-hosted console works via its own URL) | Its address (e.g. `https://10.1.2.3` or `https://10.1.2.3:11443`) and an API key from **Network → Settings → Control Plane → Integrations** in that console |
+| **UniFi cloud** *(experimental)* | a console this server can't reach directly | An API key from **unifi.ui.com → API**, then **Find consoles** to pick it. Requests go through `api.ui.com/v1/connector`. |
 
-- **Site** is UniFi's internal site name, usually `default`. **Test connection** lists your
+- **Site** is UniFi's internal site name, usually `default`. **Test connection** lists the
   sites to pick from.
-- Leave **Verify TLS** off for the console's self-signed certificate.
-- The API key should belong to an account with admin rights on the Network app, because
-  changing ports is a write.
+- Leave **Verify TLS** off for a self-signed certificate.
+- The key should belong to an account with admin rights on the Network app, because changing
+  ports is a write.
+- **Notes** show to that environment's supervisors, e.g. "Desk 4, trunk from core port 17".
+- **Default VLAN colors** are set per environment. Each user can still pick their own.
 
-How a change is made: the app reads the switch's `port_overrides`, changes that one port's
+### Who gets what
+
+![Access editor](docs/access.png)
+
+Under **Users → Access**, an admin picks the environments each person may use. Inside each
+environment they can also pick:
+
+- **Networks they can use**: *All*, or only the ones ticked. Other networks never show up
+  as a choice for that person.
+  - With a list, **Allow All** tagging is unavailable because it would tag networks they
+    don't have.
+  - **Custom** tagging only ever includes networks from the list. The server enforces this,
+    not just the UI.
+- **Devices they can see**: *All*, or only the ones ticked. Stored by MAC, so a switch that's
+  forgotten and re-adopted keeps its access.
+
+| Role | In their environments | Anywhere else |
+|---|---|---|
+| **Admin** | everything, in every environment | environments and API keys, users, roles, access, all settings |
+| **Supervisor** | change ports on their devices using their networks; read the environment's settings (never the key); see the activity log for their environments | – |
+| **Viewer** | see their devices and ports, nothing else | – |
+
+Protected ports (uplinks, links to other UniFi devices, LAG and mirror ports) can only be
+changed by an admin, after a warning. Per environment, an admin can allow its supervisors
+to change them too.
+
+Upgrading from 1.0 turns the single UniFi connection into an environment called **Default**.
+
+### How a port change is made
+
+The app reads the switch's `port_overrides` fresh from UniFi, changes that one port's
 `native_networkconf_id`, `tagged_vlan_mgmt` and `excluded_networkconf_ids`, writes the list
 back, and reads it again to verify. The switch then re-provisions, which is the same thing
 the UniFi UI does. Older controllers that still use `forward` / `tagged_networkconf_ids` get
 those fields too.
 
+### Staying in sync with UniFi
+
+This app keeps no copy of your switches, ports or networks. They're read live from each
+console:
+
+- Every open page refreshes every 10 seconds (adjustable under Settings → Ports) and right
+  away when you come back to it, e.g. when you unlock your phone.
+- Networks and devices added, renamed or removed in UniFi appear here on the next refresh,
+  and so do port changes made in the UniFi UI.
+- An open port panel follows changes made in UniFi until you start editing it. If the port
+  changes in UniFi *after* you started, it tells you, and applying asks before replacing
+  the other change.
+- Every change starts from what UniFi has at that moment, and only touches the one port.
+  Changes made meanwhile to other ports on the same switch are kept.
+
 ## Sign-in, users & roles
 
-| Role | Can |
-|---|---|
-| **Admin** | everything: users, settings, UniFi connection, protected ports |
-| **Supervisor** | change port VLANs, see the activity log |
-| **Viewer** | look (read-only) |
+Roles are described under [Who gets what](#who-gets-what).
 
 - The first user, `admin`, is created on first start and is the only one that starts as
-  Admin. **Every other user starts as Viewer**, whether an admin adds them or they sign in
-  with SSO.
-- An admin changes roles, disables, deletes, resets passwords and signs users out under
-  **Users**. The last admin can't be demoted or removed.
+  Admin. **Every other user starts as Viewer with no environments**, whether an admin adds
+  them or they sign in with SSO.
+- Under **Users**, an admin can:
+  - change roles and access
+  - rename anyone, including the first `admin`
+  - disable, delete, reset passwords and sign users out
+
+  The last admin can't be demoted or removed. Everyone can change their own display name
+  under **My account**.
 
 Set up under **Settings → Sign-in**. Any combination works:
 
@@ -120,10 +186,11 @@ Set up under **Settings → Sign-in**. Any combination works:
     the login page**, so it's the fallback when SSO is down (and where sign-out lands).
   - **The button is yours to style**: text, background and text color, and an icon (Authentik,
     key, shield, lock, sign-in, none, or your own image URL), with a live preview.
-  - New SSO users are created as Viewer on first sign-in. Or turn that off and have an admin
-    add them first (matched by username or email).
-  - Optional **allowed groups**, plus **admin** / **supervisor** groups: when either is set, roles
-    follow your provider on every sign-in.
+  - **SSO only signs people in.** Roles and environments always come from an admin in this
+    app, never from the provider.
+  - New SSO users are created as Viewer with no environments on first sign-in. Or turn that
+    off and have an admin add them first (matched by username or email).
+  - Optional **allowed groups** limits who may sign in at all.
 - **API tokens**: every user, Viewers included, can create their own under **My account**.
   - Pick a random token or type your own (16+ characters) for a link you can remember.
   - Use it as `Authorization: Bearer <token>` in scripts, or open
@@ -142,8 +209,9 @@ Set up under **Settings → Sign-in**. Any combination works:
      Settings → Sign-in).
 2. In the app: **Issuer URL** `https://auth.example.com/application/o/<slug>/`, plus the client
    ID and secret. Click **Test provider**, turn on SSO (and auto sign-in if you like), then save.
-3. For group-based roles, fill in the admin / supervisor group names. Authentik's default
-   `profile` scope already sends a `groups` claim.
+3. Optional: to limit who can sign in, put an Authentik group in **Allowed groups**. Authentik's
+   default `profile` scope already sends a `groups` claim. Roles and access are then given
+   in **Users**.
 
 ### No-auth mode (dangerous)
 
@@ -209,7 +277,8 @@ Stack: Flask + Waitress + SQLite, and a no-build frontend (Preact + htm, vendore
 
 ```
 app/
-  main.py        routes: pages, state, port changes, settings, audit, manifest
+  main.py        routes: pages, environments, port changes, access, settings, audit, manifest
+  envs.py        environments, per-user access (networks / devices), cached snapshots
   auth.py        users, roles, sessions, OIDC, API tokens, no-auth
   unifi.py       UniFi client (local + cloud connector), normalizing, port overrides
   versioning.py  changelog parsing + GitHub release check

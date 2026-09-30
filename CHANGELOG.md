@@ -5,6 +5,49 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 1.1 — 2026-09-30
+
+### Added
+- **Environments**: one app for many UniFi consoles. Each environment is a UniFi console or a
+  UniFi OS instance (for example one per technician's staging rack), with its own API key.
+  - Admins add, test, change and remove environments under Settings → Environments.
+  - Only admins ever see or set API keys. Keys never reach the browser.
+- **Access per user and environment**: under Users → Access, admins pick which environments
+  each person gets. Inside each one they can pick:
+  - which **networks** that person may put on a port (the rest never show up as a choice)
+  - which **devices** that person sees
+- With a network allow-list, **Allow All** tagging is unavailable because it would tag networks
+  the user doesn't have. **Custom** tagging only ever includes allowed networks.
+- Device access is stored by MAC, so a switch that's forgotten and re-adopted keeps its access.
+- **Environment switcher** at the top when you have more than one environment. Device choices
+  and collapsed cards are remembered per environment.
+- **About this environment** (supervisors): the connection, site, notes and your own access,
+  read-only.
+- Per environment, admins can let supervisors change protected ports (uplinks, device links,
+  LAG/mirror ports).
+- Default VLAN colors are now set per environment.
+- **Rename users**: admins can change anyone's username, including the first `admin`.
+  Everyone can edit their own display name under My account.
+- **Stays in sync with the UniFi consoles**:
+  - The app refreshes when you come back to it (phone unlocked, tab focused).
+  - An open port panel follows changes made in UniFi until you start editing.
+  - If a port was changed in UniFi after you opened it, you're asked before your change
+    replaces it.
+  - The default refresh interval is now 10 seconds.
+
+### Changed
+- **Roles are scoped to environments.** Supervisors change ports and read the settings of the
+  environments they're given, and see the activity log for those environments only.
+  Viewers only see their devices.
+- **SSO only signs people in.** Roles and access always come from an admin in the app. The
+  "admin groups / supervisor groups" SSO options are gone. New SSO users start as Viewer
+  with no environments. "Allowed groups" still limits who may sign in at all.
+- Upgrading from 1.0 turns the existing UniFi connection into an environment called
+  **Default**, with its API key and VLAN colors. A backup of the database is taken first, as
+  with every upgrade.
+- The activity log shows which environment each change was in, and records environment and
+  access changes.
+
 ## 1.0 — 2026-09-30
 
 First release.

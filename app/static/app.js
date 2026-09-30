@@ -3,7 +3,7 @@ import {
   html, api, Icon, Modal, Segmented, Toasts, toast, Spinner, useInterval, Logo, markdown,
   vlanColors, readable, speedLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost,
 } from "./ui.js";
-import { SettingsModal, UsersModal, AccountModal, AuditModal } from "./admin.js";
+import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
 
 // --- tooltip ------------------------------------------------------------------
 
@@ -169,17 +169,31 @@ function ColorsModal({ networks, colors, mine, onSave, onClose }) {
 
 // --- port drawer ----------------------------------------------------------------
 
-function PortDrawer({ device, port, networks, colors, me, settings, onClose, onApplied }) {
-  const canEdit = rank(me.role) >= 1 && (!port.protected || me.role === "admin");
+const cfgOf = (p) => ({ native_network_id: p.native_network_id, tagged_mode: p.tagged_mode, excluded_network_ids: p.excluded_network_ids });
+const sig = (p) => `${p.native_network_id}|${p.tagged_mode}|${[...p.excluded_network_ids].sort().join()}`;
+
+function PortDrawer({ env, access, device, port, networks, colors, me, settings, onClose, onApplied }) {
+  const restricted = !access.all_vlans;
+  const mayProtected = me.role === "admin" || (me.role === "supervisor" && env.supervisors_protected);
+  const canEdit = rank(me.role) >= 1 && (!port.protected || mayProtected);
+  const defMode = restricted && settings.default_tagged_mode === "auto" ? "block_all" : (settings.default_tagged_mode || "block_all");
+  const allowed = networks.filter((n) => n.allowed);
   const [native, setNative] = useState(port.native_network_id);
-  const [mode, setMode] = useState(settings.default_tagged_mode || "block_all");
+  const [mode, setMode] = useState(defMode);
   const [excluded, setExcluded] = useState(port.tagged_mode === "custom" ? port.excluded_network_ids : []);
+  const [base, setBase] = useState(cfgOf(port));     // what the user saw when they started
+  const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    setNative(port.native_network_id);
-    setMode(settings.default_tagged_mode || "block_all");
+  const reset = () => {
+    setNative(port.native_network_id); setMode(defMode);
     setExcluded(port.tagged_mode === "custom" ? port.excluded_network_ids : []);
-  }, [device.id, port.idx]);
+    setBase(cfgOf(port)); setTouched(false);
+  };
+  useEffect(reset, [device.id, port.idx]);
+  // someone changed this port in UniFi while the panel is open: follow along until the user edits
+  useEffect(() => { if (!touched) reset(); }, [sig(port)]);
+  const changedElsewhere = touched && sig(port) !== sig({ ...base });
+  const edit = (fn) => (v) => { setTouched(true); fn(v); };
 
   const cur = netOf(networks, port.native_network_id);
   const next = netOf(networks, native);
@@ -189,10 +203,12 @@ function PortDrawer({ device, port, networks, colors, me, settings, onClose, onA
   async function apply(extra = {}) {
     setBusy(true);
     try {
-      const r = await api(`/api/devices/${device.id}/ports/${port.idx}`, { method: "PUT",
-        body: { native_network_id: native, tagged_mode: mode, excluded_network_ids: mode === "custom" ? excluded : [], ...extra } });
+      const r = await api(`/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}`, { method: "PUT",
+        body: { native_network_id: native, tagged_mode: mode, excluded_network_ids: mode === "custom" ? excluded : [],
+          expected: base, ...extra } });
       toast(`Port ${port.idx} → ${next.name} (${next.vlan}), ${MODE_LABEL[mode]}`);
       if (r.warning) toast(r.warning, "warn");
+      setTouched(false);
       onApplied();
     } catch (e) {
       if (e.status === 409 && e.data.confirm === "protected") {
@@ -204,6 +220,12 @@ function PortDrawer({ device, port, networks, colors, me, settings, onClose, onA
         const ok = await ask({ title: "Detach port profile?", confirm: "Detach and apply",
           body: html`<p>This port uses the port profile <b>${e.data.profile}</b>. Setting its VLAN here detaches the profile from this port.</p>` });
         if (ok) return apply({ ...extra, detach_profile: true });
+      } else if (e.status === 409 && e.data.confirm === "changed") {
+        const ok = await ask({ title: "Port changed in UniFi", danger: true, confirm: "Apply mine anyway",
+          body: html`<p>Someone changed this port in UniFi after you opened it. It's now <b>${e.data.current.native}</b>, ${e.data.current.tagged}.</p>
+            <p>Apply your change over it?</p>` });
+        if (ok) return apply({ ...extra, confirm_changed: true });
+        onApplied();
       } else toast(e.message, "err");
     } finally { setBusy(false); }
     return null;
@@ -235,38 +257,45 @@ function PortDrawer({ device, port, networks, colors, me, settings, onClose, onA
         ${port.lldp && !port.device_link && html`<div class="client"><${Icon} name="link" size=${14} /><b>${port.lldp.name || port.lldp.chassis_id}</b><span class="muted">LLDP ${port.lldp.port}</span></div>`}
       </div>`}
 
+      ${changedElsewhere && html`<div class="notice warn"><${Icon} name="refresh" /><div><b>Changed in UniFi.</b> This port is now
+        ${cur ? `${cur.name} (${cur.vlan})` : "?"}, ${MODE_LABEL[port.tagged_mode]}.
+        <button class="link-btn" onClick=${reset}>Start over from that</button></div></div>`}
       ${port.protected && html`<div class="notice warn"><${Icon} name="lock" /><div><b>Protected port.</b> ${port.protect_reasons.join(" · ")}.
-        ${me.role === "admin" ? " You can change it as an admin, after confirming." : " Only an admin can change it."}</div></div>`}
+        ${mayProtected ? " You can change it after confirming." : " Only an admin can change it."}</div></div>`}
       ${port.profile_name && html`<div class="notice"><${Icon} name="layers" /><div>Uses port profile <b>${port.profile_name}</b>. Applying a VLAN here detaches it.</div></div>`}
+      ${canEdit && allowed.length === 0 && html`<div class="notice warn"><${Icon} name="info" /><div>You haven't been given any networks in this environment. Ask an admin.</div></div>`}
 
       <div class="panel">
         <div class="panel-title">Core settings ${!canEdit && html`<span class="badge">View only</span>`}</div>
         <label class="field"><span class="field-label">Native VLAN / Network</span>
           <div class="select-wrap"><span class="dot" style=${`background:${colors[native]}`}></span>
-            <select value=${native} disabled=${!canEdit} onChange=${(e) => setNative(e.target.value)}>
-              ${networks.map((n) => html`<option value=${n.id}>${n.name} (${n.vlan})</option>`)}
+            <select value=${native} disabled=${!canEdit} onChange=${(e) => edit(setNative)(e.target.value)}>
+              ${networks.filter((n) => n.allowed || n.id === native || n.id === port.native_network_id).map((n) =>
+                html`<option value=${n.id} disabled=${!n.allowed}>${n.name} (${n.vlan})${n.allowed ? "" : " — not yours"}</option>`)}
             </select><${Icon} name="chevron" cls="select-chev" /></div></label>
         <div class="field"><span class="field-label">Tagged VLAN Management</span>
-          <${Segmented} value=${mode} disabled=${!canEdit} onChange=${setMode}
-            options=${[{ value: "auto", label: "Allow All" }, { value: "block_all", label: "Block All" }, { value: "custom", label: "Custom" }]} />
+          <${Segmented} value=${mode} disabled=${!canEdit} onChange=${edit(setMode)}
+            options=${[{ value: "auto", label: "Allow All", disabled: restricted, title: restricted ? "Would tag networks you don't have" : "" },
+              { value: "block_all", label: "Block All" }, { value: "custom", label: "Custom" }]} />
           <small class="hint">${mode === "block_all" ? "Access port: only the native VLAN, nothing tagged." : mode === "auto" ? "Trunk: every network is tagged on this port." : "Trunk: only the networks ticked below are tagged."}</small>
         </div>
         ${mode === "custom" && html`<div class="tag-list">
-          ${networks.filter((n) => n.id !== native).map((n) => html`<label class="tag-row" key=${n.id}>
+          ${allowed.filter((n) => n.id !== native).map((n) => html`<label class="tag-row" key=${n.id}>
             <input type="checkbox" disabled=${!canEdit} checked=${!excluded.includes(n.id)}
-              onChange=${(e) => setExcluded(e.target.checked ? excluded.filter((x) => x !== n.id) : [...excluded, n.id])} />
+              onChange=${(e) => edit(setExcluded)(e.target.checked ? excluded.filter((x) => x !== n.id) : [...excluded, n.id])} />
             <span class="dot" style=${`background:${colors[n.id]}`}></span>${n.name}<span class="chip-vlan">${n.vlan}</span></label>`)}
+          ${allowed.filter((n) => n.id !== native).length === 0 && html`<span class="muted small">No other networks to tag.</span>`}
         </div>`}
       </div>
 
-      ${canEdit && dirty && html`<div class="diff">
+      ${canEdit && dirty && next && html`<div class="diff">
         ${native !== port.native_network_id && html`<div><span class="muted">Native</span> ${cur ? cur.name : "?"} <span class="arrow">→</span> <b>${next.name} (${next.vlan})</b></div>`}
         ${(mode !== port.tagged_mode || (mode === "custom" && !sameEx)) && html`<div><span class="muted">Tagged</span> ${MODE_LABEL[port.tagged_mode]} <span class="arrow">→</span> <b>${MODE_LABEL[mode]}</b></div>`}
       </div>`}
     </div>
     ${canEdit && html`<footer class="drawer-foot">
-      <button class="btn ghost" disabled=${busy || !dirty} onClick=${() => { setNative(port.native_network_id); setMode(port.tagged_mode); setExcluded(port.excluded_network_ids); }}>Reset</button>
-      <button class="btn primary" disabled=${busy || !dirty} onClick=${() => apply()}>${busy ? html`<${Spinner} /> Applying…` : "Apply changes"}</button>
+      <button class="btn ghost" disabled=${busy || !dirty} onClick=${reset}>Reset</button>
+      <button class="btn primary" disabled=${busy || !dirty || !(next && next.allowed)} onClick=${() => apply()}>${busy ? html`<${Spinner} /> Applying…` : "Apply changes"}</button>
     </footer>`}
   </aside>`;
 }
@@ -285,21 +314,21 @@ function PickerModal({ devices, selected, onSave, onClose }) {
   };
   return html`<${Modal} title="Choose devices to show" icon="grid" onClose=${onClose} wide
     footer=${html`<span class="muted grow">${sel.length} selected</span>
-      <button class="btn ghost" onClick=${() => setSel(devices.filter((d) => d.type === "usw").map((d) => d.id))}>All switches</button>
+      <button class="btn ghost" onClick=${() => setSel(devices.filter((d) => d.type === "usw").map((d) => d.mac))}>All switches</button>
       <button class="btn ghost" onClick=${() => setSel([])}>None</button>
       <button class="btn primary" onClick=${() => onSave(sel)}>Show selected</button>`}>
     <div class="search"><${Icon} name="search" /><input placeholder="Search name, model, IP or MAC" value=${q} onInput=${(e) => setQ(e.target.value)} /></div>
     <div class="pick-list">
       ${list.map((d) => {
-        const on = sel.includes(d.id);
-        return html`<div class=${"pick" + (on ? " on" : "")} key=${d.id} onClick=${() => toggle(d.id)}>
+        const on = sel.includes(d.mac);
+        return html`<div class=${"pick" + (on ? " on" : "")} key=${d.mac} onClick=${() => toggle(d.mac)}>
           <span class=${"check" + (on ? " on" : "")}>${on && html`<${Icon} name="check" size=${14} />`}</span>
           <span class=${"status-dot " + (d.online ? "on" : "")}></span>
           <div class="pick-main"><b>${d.name}</b><span class="muted">${d.model_name} · ${d.type_label} · ${d.ip || d.mac}</span></div>
           <span class="badge">${d.port_count} ports</span>
           ${on && html`<span class="order" onClick=${(e) => e.stopPropagation()}>
-            <button class="icon-btn sm" title="Move up" onClick=${() => move(d.id, -1)}><${Icon} name="chevron" size=${14} cls="up" /></button>
-            <button class="icon-btn sm" title="Move down" onClick=${() => move(d.id, 1)}><${Icon} name="chevron" size=${14} /></button></span>`}
+            <button class="icon-btn sm" title="Move up" onClick=${() => move(d.mac, -1)}><${Icon} name="chevron" size=${14} cls="up" /></button>
+            <button class="icon-btn sm" title="Move down" onClick=${() => move(d.mac, 1)}><${Icon} name="chevron" size=${14} /></button></span>`}
         </div>`;
       })}
       ${list.length === 0 && html`<div class="empty-sm">No devices match.</div>`}
@@ -331,6 +360,8 @@ function ChangelogModal({ version, onClose, isAdmin, onCheck }) {
 
 function App() {
   const [me, setMe] = useState(null);
+  const [envList, setEnvList] = useState(null);
+  const [envId, setEnvId] = useState(lsGet("vlanmgr.env", null));
   const [st, setSt] = useState(null);
   const [version, setVersion] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -363,11 +394,24 @@ function App() {
     if (m.method === "none") m.prefs = lsGet("vlanmgr.prefs", {});
     setMe(m);
   }, []);
-  const load = useCallback(async (refresh) => {
-    setLoading(true);
-    try { setSt(await api("/api/state" + (refresh ? "?refresh=1" : ""))); } catch (e) { /* toast on explicit refresh */ if (refresh) toast(e.message, "err"); }
-    setLoading(false);
+  const loadEnvs = useCallback(async () => {
+    const r = await api("/api/envs");
+    setEnvList(r);
+    setEnvId((cur) => (r.envs.some((e) => e.id === cur) ? cur : (r.envs[0] ? r.envs[0].id : null)));
+    return r;
   }, []);
+  const load = useCallback(async (refresh) => {
+    if (!envId) return;
+    setLoading(true);
+    try {
+      const s = await api(`/api/envs/${envId}/state` + (refresh ? "?refresh=1" : ""));
+      setSt((prev) => (s.env.id === envId ? s : prev));
+    } catch (e) {
+      if (e.status === 404) loadEnvs();          // access was removed meanwhile
+      else if (refresh) toast(e.message, "err");
+    }
+    setLoading(false);
+  }, [envId]);
   const loadVersion = useCallback(async () => {
     const v = await api("/api/version");
     setVersion(v);
@@ -375,12 +419,21 @@ function App() {
   }, []);
 
   useEffect(() => {
-    loadMe(); load();
+    loadMe(); loadEnvs();
     loadVersion().then((v) => {
       if (lsGet("vlanmgr.seenVersion") !== v.version) { setModal("changelog"); lsSet("vlanmgr.seenVersion", v.version); }
     });
   }, []);
-  useInterval(() => { if (!document.hidden && !modal) load(); }, ((st && st.settings.poll_seconds) || 15) * 1000);
+  useEffect(() => { lsSet("vlanmgr.env", envId); setSel(null); setHighlight(null); setSt(null); load(true); }, [envId]);
+  // back to the app (phone unlocked, tab focused): fetch what changed in UniFi meanwhile
+  useEffect(() => {
+    const back = () => { if (!document.hidden) { load(true); loadEnvs(); } };
+    document.addEventListener("visibilitychange", back);
+    addEventListener("focus", back);
+    return () => { document.removeEventListener("visibilitychange", back); removeEventListener("focus", back); };
+  }, [load]);
+  const poll = ((envList && envList.settings.poll_seconds) || 10) * 1000;
+  useInterval(() => { if (!document.hidden && !modal) load(); }, poll);
   useInterval(() => { if (!document.hidden) loadVersion(); }, 30 * 60 * 1000);
 
   async function savePrefs(patch) {
@@ -390,22 +443,65 @@ function App() {
     else await api("/api/me/prefs", { method: "PUT", body: patch }).catch((e) => toast(e.message, "err"));
   }
 
-  if (!me || !st) {
+  if (!me || !envList) {
     return html`<div class="boot"><${Logo} size=${48} /><${Spinner} /></div>`;
   }
 
-  const settings = st.settings;
+  const settings = envList.settings;
   const prefs = me.prefs || {};
-  const colors = vlanColors(st.networks, settings.vlan_colors, prefs.vlan_colors || {});
-  const chosen = Array.isArray(prefs.devices) ? prefs.devices : null;
-  const shown = chosen
-    ? chosen.map((id) => st.devices.find((d) => d.id === id)).filter(Boolean)
-    : st.devices.filter((d) => d.type === "usw");
-  const selDev = sel && st.devices.find((d) => d.id === sel.d);
-  const selPort = selDev && selDev.ports.find((p) => p.idx === sel.i);
   const isAdmin = me.role === "admin";
+  const env = envList.envs.find((e) => e.id === envId);
+  const ready = st && env && st.env.id === env.id;
+  const networks = ready ? st.networks : [];
+  const devices = ready ? st.devices : [];
+  const colors = vlanColors(networks, env ? env.vlan_colors : {}, prefs.vlan_colors || {});
+  const picks = prefs.devices && !Array.isArray(prefs.devices) ? prefs.devices : {};
+  const chosen = env && Array.isArray(picks[env.id]) ? picks[env.id] : null;
+  const shown = chosen
+    ? chosen.map((mac) => devices.find((d) => d.mac === mac)).filter(Boolean)
+    : devices.filter((d) => d.type === "usw" || (env && !env.access.all_devices));
+  const selDev = sel && devices.find((d) => d.id === sel.d);
+  const selPort = selDev && selDev.ports.find((p) => p.idx === sel.i);
   const upd = version && version.update && version.update.update_available;
   const pick = (d, i) => setSel(sel && sel.d === d && sel.i === i ? null : { d, i });
+  const onEnvsChanged = () => { loadEnvs(); load(true); };
+
+  let body;
+  if (envList.envs.length === 0) {
+    body = html`<div class="empty"><div class="empty-icon"><${Icon} name="server" size=${40} /></div>
+      ${isAdmin ? html`<h2>Add your first environment</h2>
+          <p class="muted">An environment is one UniFi console or UniFi OS instance, reached with its own API key.</p>
+          <button class="btn primary" onClick=${() => setModal("settings")}><${Icon} name="plus" />Add environment</button>`
+        : html`<h2>Nothing here yet</h2><p class="muted">An admin hasn't given you access to any switches yet.</p>`}</div>`;
+  } else if (!ready) {
+    body = html`<div class="empty"><${Spinner} /></div>`;
+  } else if (st.error === "not_configured") {
+    body = html`<div class="empty"><div class="empty-icon"><${Icon} name="key" size=${40} /></div>
+      <h2>${env.name} isn't connected yet</h2>
+      <p class="muted">${isAdmin ? "Add the console address and an API key for this environment." : "An admin still needs to add this environment's API key."}</p>
+      ${isAdmin && html`<button class="btn primary" onClick=${() => setModal("settings")}><${Icon} name="settings" />Open settings</button>`}</div>`;
+  } else if (st.error) {
+    body = html`<div class="notice err big"><${Icon} name="alert" /><div><b>Can't load ${env.name} from UniFi.</b> ${st.error}
+      <div><button class="link-btn" onClick=${() => load(true)}>Try again</button>${isAdmin && html` · <button class="link-btn" onClick=${() => setModal("settings")}>Settings</button>`}</div></div></div>`;
+  } else {
+    body = html`
+      <${Legend} networks=${networks} colors=${colors} devices=${shown} highlight=${highlight} setHighlight=${setHighlight} onColors=${() => setModal("colors")} />
+      ${!chosen && devices.length > 1 && html`<div class="notice"><${Icon} name="info" /><div>Showing ${env.access.all_devices ? "all switches" : "your devices"}. <button class="link-btn" onClick=${() => setModal("picker")}>Choose which to show</button></div></div>`}
+      ${shown.length === 0 ? html`<div class="empty"><div class="empty-icon"><${Icon} name="grid" size=${40} /></div>
+          <h2>${devices.length ? "No devices selected" : "No devices"}</h2>
+          <p class="muted">${devices.length ? "Pick the switches you want to see." : env.access.all_devices ? "This environment has no devices with ports yet." : "None of your devices are on the controller right now."}</p>
+          ${devices.length > 0 && html`<button class="btn primary" onClick=${() => setModal("picker")}>Choose devices</button>`}</div>`
+        : html`<div class="devices">${shown.map((d) => html`<${DeviceCard} key=${d.id} device=${d} networks=${networks} colors=${colors}
+            highlight=${highlight} sel=${sel} onPick=${pick} collapsed=${!!collapsed[d.mac]}
+            onCollapse=${() => { const c = { ...collapsed, [d.mac]: !collapsed[d.mac] }; setCollapsed(c); lsSet("vlanmgr.collapsed", c); }} />`)}</div>`}
+      <div class="key">
+        <span><span class="k-tile up"></span>Link up</span><span><span class="k-tile"></span>No link</span>
+        <span><span class="k-poe active"><${Icon} name="bolt" size=${11} fill /></span>PoE delivering</span>
+        <span><span class="k-poe"><${Icon} name="bolt" size=${11} /></span>PoE on, idle</span>
+        <span><${Icon} name="trunk" size=${12} />Tagged VLANs allowed</span>
+        <span><${Icon} name="layers" size=${12} />Port profile</span><span><${Icon} name="lock" size=${12} />Protected</span>
+      </div>`;
+  }
 
   return html`
     ${me.no_auth && html`<div class="danger-banner"><${Icon} name="alert" />
@@ -415,11 +511,11 @@ function App() {
       <button class="link-btn" onClick=${() => setModal("account")}>Change it now</button></div>`}
     <header class="topbar">
       <div class="brand"><${Logo} /><div><div class="brand-name">${settings.app_name}</div>
-        <div class="brand-sub">${settings.unifi_configured ? `UniFi · ${settings.unifi_mode === "cloud" ? "cloud" : "local"} · site ${settings.unifi_site}` : "Not connected"}</div></div></div>
+        <div class="brand-sub">${env ? `${env.name} · ${env.mode === "cloud" ? "UniFi cloud" : "UniFi"}${ready && st.fetched_at ? ` · updated ${ago(st.fetched_at)}` : ""}` : "No environment"}</div></div></div>
       <div class="top-actions">
-        <button class="btn ghost" onClick=${() => load(true)} title=${st.fetched_at ? `Updated ${ago(st.fetched_at)}` : "Refresh"}>
+        <button class="btn ghost" disabled=${!env} onClick=${() => load(true)} title="Refresh from UniFi">
           <${Icon} name="refresh" cls=${loading ? "spin" : ""} /><span class="hide-sm">Refresh</span></button>
-        <button class="btn ghost" onClick=${() => setModal("picker")} disabled=${!st.devices.length}><${Icon} name="grid" /><span class="hide-sm">Devices</span></button>
+        <button class="btn ghost" onClick=${() => setModal("picker")} disabled=${!devices.length}><${Icon} name="grid" /><span class="hide-sm">Devices</span></button>
         ${rank(me.role) >= 1 && html`<button class="btn ghost hide-sm" onClick=${() => setModal("audit")}><${Icon} name="list" /><span class="hide-sm">Activity</span></button>`}
         ${isAdmin && html`<button class="btn ghost hide-sm" onClick=${() => setModal("users")}><${Icon} name="users" /><span class="hide-sm">Users</span></button>`}
         ${isAdmin && html`<button class="icon-btn hide-sm" onClick=${() => setModal("settings")} title="Settings"><${Icon} name="settings" /></button>`}
@@ -431,11 +527,12 @@ function App() {
           ${menu && html`<div class="menu-scrim" onClick=${() => setMenu(false)}></div>`}
           ${menu && html`<div class="menu" onMouseLeave=${canHover ? () => setMenu(false) : undefined}>
             <div class="menu-head"><b>${me.display_name || me.username}</b><span class="muted">${me.username} · ${me.method === "oidc" ? "SSO" : me.method === "token" ? "token" : me.method === "none" ? "not signed in" : "password"}</span></div>
+            ${rank(me.role) >= 1 && env && html`<button onClick=${() => { setMenu(false); setModal("envinfo"); }}><${Icon} name="server" />About ${env.name}</button>`}
             ${rank(me.role) >= 1 && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("audit"); }}><${Icon} name="list" />Activity</button>`}
             ${isAdmin && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("users"); }}><${Icon} name="users" />Users</button>`}
             ${isAdmin && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("settings"); }}><${Icon} name="settings" />Settings</button>`}
             ${me.id ? html`<button onClick=${() => { setMenu(false); setModal("account"); }}><${Icon} name="user" />My account</button>` : null}
-            <button onClick=${() => { setMenu(false); setModal("colors"); }}><${Icon} name="palette" />My VLAN colors</button>
+            ${env && html`<button onClick=${() => { setMenu(false); setModal("colors"); }}><${Icon} name="palette" />My VLAN colors</button>`}
             <button onClick=${() => setTheme(theme === "dark" ? "light" : "dark")}><${Icon} name=${theme === "dark" ? "sun" : "moon"} />${theme === "dark" ? "Light" : "Dark"} theme</button>
             ${me.method !== "none" ? html`<button onClick=${async () => { const r = await api("/api/auth/logout", { method: "POST" }); location.href = r.redirect; }}><${Icon} name="logout" />Sign out</button>`
               : html`<a href="/login?manual=1"><${Icon} name="login" />Sign in</a>`}
@@ -445,32 +542,17 @@ function App() {
     </header>
 
     <main class=${"main" + (selPort ? " with-drawer" : "")}>
-      ${st.error === "not_configured" ? html`<div class="empty">
-          <div class="empty-icon"><${Icon} name="server" size=${40} /></div>
-          <h2>Connect your UniFi console</h2>
-          <p class="muted">${isAdmin ? "Add the console address and an API key to get started." : "An admin needs to connect a UniFi console first."}</p>
-          ${isAdmin && html`<button class="btn primary" onClick=${() => setModal("settings")}><${Icon} name="settings" />Open settings</button>`}
-        </div>`
-      : st.error ? html`<div class="notice err big"><${Icon} name="alert" /><div><b>Can't load from UniFi.</b> ${st.error}
-          <div><button class="link-btn" onClick=${() => load(true)}>Try again</button>${isAdmin && html` · <button class="link-btn" onClick=${() => setModal("settings")}>Settings</button>`}</div></div></div>`
-      : html`
-        <${Legend} networks=${st.networks} colors=${colors} devices=${shown} highlight=${highlight} setHighlight=${setHighlight} onColors=${() => setModal("colors")} />
-        ${!chosen && st.devices.length > 0 && html`<div class="notice"><${Icon} name="info" /><div>Showing all switches. <button class="link-btn" onClick=${() => setModal("picker")}>Choose which devices to show</button></div></div>`}
-        ${shown.length === 0 ? html`<div class="empty"><div class="empty-icon"><${Icon} name="grid" size=${40} /></div><h2>No devices selected</h2>
-            <p class="muted">Pick the switches you want to see.</p><button class="btn primary" onClick=${() => setModal("picker")}>Choose devices</button></div>`
-          : html`<div class="devices">${shown.map((d) => html`<${DeviceCard} key=${d.id} device=${d} networks=${st.networks} colors=${colors}
-              highlight=${highlight} sel=${sel} onPick=${pick} collapsed=${!!collapsed[d.id]}
-              onCollapse=${() => { const c = { ...collapsed, [d.id]: !collapsed[d.id] }; setCollapsed(c); lsSet("vlanmgr.collapsed", c); }} />`)}</div>`}
-        <div class="key">
-          <span><span class="k-tile up"></span>Link up</span><span><span class="k-tile"></span>No link</span>
-          <span><span class="k-poe active"><${Icon} name="bolt" size=${11} fill /></span>PoE delivering</span>
-          <span><span class="k-poe"><${Icon} name="bolt" size=${11} /></span>PoE on, idle</span>
-          <span><${Icon} name="trunk" size=${12} />Tagged VLANs allowed</span>
-          <span><${Icon} name="layers" size=${12} />Port profile</span><span><${Icon} name="lock" size=${12} />Protected</span>
-        </div>`}
+      ${env && html`<div class="env-bar">
+        ${envList.envs.length > 1 ? html`<label class="env-select"><${Icon} name="server" size=${16} />
+          <select value=${envId || ""} onChange=${(e) => setEnvId(Number(e.target.value))} aria-label="Environment">
+            ${envList.envs.map((e) => html`<option value=${e.id}>${e.name}</option>`)}</select></label>`
+          : html`<span class="env-select single"><${Icon} name="server" size=${16} /><b>${env.name}</b></span>`}
+        ${ready && st.fetched_at ? html`<span class="muted small env-updated">Updated ${ago(st.fetched_at)}</span>` : null}
+      </div>`}
+      ${body}
     </main>
 
-    ${selPort && html`<${PortDrawer} device=${selDev} port=${selPort} networks=${st.networks} colors=${colors} me=${me}
+    ${selPort && html`<${PortDrawer} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
       settings=${settings} onClose=${() => setSel(null)} onApplied=${() => load(true)} />`}
 
     <button class=${"version" + (upd ? " has-update" : "")} onClick=${() => setModal("changelog")} title=${upd ? `Version ${version.update.latest} is available` : "Changelog"}>
@@ -478,14 +560,15 @@ function App() {
 
     ${modal === "changelog" && version && html`<${ChangelogModal} version=${version} isAdmin=${isAdmin} onClose=${() => setModal(null)}
       onCheck=${async () => { const r = await api("/api/version/check", { method: "POST" }); setVersion({ ...version, update: r.update }); toast(r.update.update_available ? `Version ${r.update.latest} is available` : "You're up to date"); }} />`}
-    ${modal === "picker" && html`<${PickerModal} devices=${st.devices} selected=${chosen || shown.map((d) => d.id)} onClose=${() => setModal(null)}
-      onSave=${(ids) => { savePrefs({ devices: ids }); setModal(null); }} />`}
-    ${modal === "colors" && html`<${ColorsModal} networks=${st.networks} colors=${vlanColors(st.networks, settings.vlan_colors, {})} mine=${prefs.vlan_colors || {}}
+    ${modal === "picker" && env && html`<${PickerModal} devices=${devices} selected=${chosen || shown.map((d) => d.mac)} onClose=${() => setModal(null)}
+      onSave=${(macs) => { savePrefs({ devices: { ...picks, [env.id]: macs } }); setModal(null); }} />`}
+    ${modal === "colors" && html`<${ColorsModal} networks=${networks} colors=${vlanColors(networks, env ? env.vlan_colors : {}, {})} mine=${prefs.vlan_colors || {}}
       onClose=${() => setModal(null)} onSave=${(v) => { savePrefs({ vlan_colors: v }); setModal(null); toast("Colors saved"); }} />`}
-    ${modal === "settings" && html`<${SettingsModal} networks=${st.networks} onClose=${() => setModal(null)} onSaved=${() => load(true)} />`}
-    ${modal === "users" && html`<${UsersModal} me=${me} onClose=${() => setModal(null)} />`}
+    ${modal === "settings" && html`<${SettingsModal} onClose=${() => setModal(null)} onSaved=${onEnvsChanged} />`}
+    ${modal === "users" && html`<${UsersModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "account" && html`<${AccountModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "audit" && html`<${AuditModal} onClose=${() => setModal(null)} />`}
+    ${modal === "envinfo" && env && html`<${EnvInfoModal} env=${env} networks=${networks} devices=${devices} onClose=${() => setModal(null)} />`}
     <${TipHost} /><${AskHost} /><${Toasts} />`;
 }
 

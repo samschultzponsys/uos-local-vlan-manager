@@ -15,6 +15,7 @@ for k in ("VLANMGR_NO_AUTH", "VLANMGR_FORCE_LOCAL_LOGIN", "VLANMGR_RESET_ADMIN")
     os.environ.pop(k, None)
 
 import db  # noqa: E402
+import envs  # noqa: E402
 import fake_unifi  # noqa: E402
 import main  # noqa: E402
 import unifi  # noqa: E402
@@ -64,7 +65,7 @@ def app(capsys):
     out = capsys.readouterr().out
     main.app.config["ADMIN_PASSWORD"] = next(
         (line.split(":", 1)[1].strip().rstrip("║").strip() for line in out.splitlines() if "password :" in line), None)
-    main.snapshot.invalidate()
+    envs._snapshots.clear()
     main.app.testing = True
     return main.app
 
@@ -85,7 +86,19 @@ def admin(app, client):
     return client
 
 
-def configure_unifi(client):
-    r = client.put("/api/settings", json={"unifi_host": "http://fake:18443", "unifi_api_key": fake_unifi.API_KEY,
-                                          "unifi_site": "default"})
+def configure_unifi(client, name="Rack 7"):
+    """Add an environment pointing at the fake controller; returns its id."""
+    r = client.post("/api/admin/envs", json={"name": name, "host": "http://fake:18443",
+                                             "api_key": fake_unifi.API_KEY, "site": "default"})
     assert r.status_code == 200, r.get_json()
+    return r.get_json()["env"]["id"]
+
+
+def make_user(admin, app, username, role="viewer", password="userpass123"):
+    """Create a user with a role; returns (user id, a signed-in test client)."""
+    uid = admin.post("/api/users", json={"username": username, "password": password}).get_json()["user"]["id"]
+    if role != "viewer":
+        admin.put(f"/api/users/{uid}", json={"role": role})
+    c = app.test_client()
+    assert login(c, username, password).status_code == 200
+    return uid, c

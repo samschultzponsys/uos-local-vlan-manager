@@ -16,6 +16,7 @@ from flask import Flask, g, jsonify, redirect, request, send_from_directory
 
 import auth
 import db
+import envs
 import unifi
 import versioning
 from versioning import VERSION, CHANGELOG
@@ -29,7 +30,6 @@ app.config.update(SESSION_COOKIE_NAME="vlanmgr_flow", SESSION_COOKIE_HTTPONLY=Tr
                   SESSION_COOKIE_SAMESITE="Lax", MAX_CONTENT_LENGTH=1024 * 1024)
 app.secret_key = secrets.token_hex(32)
 auth.init_app(app)
-snapshot = unifi.Snapshot(ttl=5)
 
 
 @app.teardown_appcontext
@@ -39,15 +39,6 @@ def _close_db(exc):
 
 def _deny(msg, code=400, **extra):
     return jsonify({"ok": False, "error": msg, **extra}), code
-
-
-def client_from(values=None):
-    s = {k: db.get_setting(k) for k in ("unifi_mode", "unifi_host", "unifi_api_key", "unifi_site",
-                                         "unifi_console_id", "unifi_verify_ssl")}
-    s.update({k: v for k, v in (values or {}).items() if v is not None})
-    return unifi.UniFi(mode=s["unifi_mode"], host=s["unifi_host"], api_key=s["unifi_api_key"],
-                       site=s["unifi_site"], console_id=s["unifi_console_id"],
-                       verify_ssl=str(s["unifi_verify_ssl"]) in ("1", "true", "True"))
 
 
 # ----------------------------------------------------------------------------
@@ -142,36 +133,66 @@ def _update_loop():
 
 
 # ----------------------------------------------------------------------------
-# State
+# Environments the signed-in user can open
 # ----------------------------------------------------------------------------
 
 def public_settings():
     return {
         "app_name": db.get_setting("app_name"),
         "default_tagged_mode": db.get_setting("default_tagged_mode"),
-        "poll_seconds": int(db.get_setting("poll_seconds") or 15),
+        "poll_seconds": int(db.get_setting("poll_seconds") or 10),
         "protect_uplinks": db.setting_bool("protect_uplinks"),
-        "vlan_colors": db.get_json("vlan_colors", {}),
-        "unifi_configured": client_from().configured(),
-        "unifi_mode": db.get_setting("unifi_mode"),
-        "unifi_site": db.get_setting("unifi_site"),
     }
 
 
-@app.route("/api/state")
+def _env_or_404(env_id):
+    acc = envs.access(auth.current(), env_id)
+    if acc is None:
+        return None, None, _deny("No such environment", 404)
+    return envs.get(env_id), acc, None
+
+
+@app.route("/api/envs")
 @auth.require("viewer")
-def api_state():
-    out = {"settings": public_settings(), "networks": [], "devices": [], "error": None}
-    c = client_from()
+def api_envs():
+    me = auth.current()
+    return jsonify({"settings": public_settings(),
+                    "envs": [{**envs.public(e, me["role"] == "admin"), "access": acc}
+                             for e, acc in envs.accessible(me)]})
+
+
+@app.route("/api/envs/<int:env_id>/state")
+@auth.require("viewer")
+def api_env_state(env_id):
+    env, acc, err = _env_or_404(env_id)
+    if err:
+        return err
+    out = {"env": envs.public(env), "access": acc, "settings": public_settings(),
+           "networks": [], "devices": [], "error": None}
+    c = envs.client(env)
     if not c.configured():
         out["error"] = "not_configured"
         return jsonify(out)
     try:
-        data, _ = snapshot.get(c, db.setting_bool("protect_uplinks"), force=request.args.get("refresh") == "1")
-        out.update(data)
+        data, _ = envs.snapshot(env_id).get(c, db.setting_bool("protect_uplinks"),
+                                            force=request.args.get("refresh") == "1")
     except unifi.UniFiError as e:
         out["error"] = str(e)
+        return jsonify(out)
+    out.update(data)
+    out["networks"] = [{**n, "allowed": envs.vlan_allowed(acc, n["id"])} for n in data["networks"]]
+    out["devices"] = [d for d in data["devices"] if envs.device_allowed(acc, d["mac"])]
     return jsonify(out)
+
+
+@app.route("/api/envs/<int:env_id>/config")
+@auth.require("supervisor")
+def api_env_config(env_id):
+    """Read-only view of an environment's settings for its supervisors (no API key)."""
+    env, acc, err = _env_or_404(env_id)
+    if err:
+        return err
+    return jsonify({**envs.public(env, True), "access": acc})
 
 
 # ----------------------------------------------------------------------------
@@ -183,10 +204,13 @@ def _net_label(nets, nid):
     return f"{n['name']} ({n['vlan']})" if n else (nid or "?")
 
 
-@app.route("/api/devices/<device_id>/ports/<int:idx>", methods=["PUT"])
+@app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>", methods=["PUT"])
 @auth.require("supervisor")
-def api_set_port(device_id, idx):
+def api_set_port(env_id, device_id, idx):
     me = auth.current()
+    env, acc, err = _env_or_404(env_id)
+    if err:
+        return err
     body = request.get_json(silent=True) or {}
     native = body.get("native_network_id")
     mode = body.get("tagged_mode") or db.get_setting("default_tagged_mode")
@@ -195,38 +219,53 @@ def api_set_port(device_id, idx):
         return _deny("Pick Allow All, Block All or Custom")
     if not isinstance(excluded, list):
         return _deny("excluded_network_ids must be a list")
-    c = client_from()
+    c = envs.client(env)
     try:
+        # always work from what UniFi has right now, not from a cache
         raw_devs = c.raw_devices()
         dev = next((d for d in raw_devs if d.get("_id") == device_id), None)
-        if dev is None:
+        if dev is None or not envs.device_allowed(acc, dev.get("mac")):
             return _deny("That device is no longer on the controller", 404)
-        raw_nets = c.raw_networks()
-        raw_profiles = c.raw_portconfs()
-        norm = unifi.normalize(raw_devs, raw_nets, raw_profiles, [], db.setting_bool("protect_uplinks"))
+        norm = unifi.normalize(raw_devs, c.raw_networks(), c.raw_portconfs(), [], db.setting_bool("protect_uplinks"))
     except unifi.UniFiError as e:
         return _deny(str(e), 502)
     nets = norm["networks"]
+    net_ids = [n["id"] for n in nets]
     ndev = next((d for d in norm["devices"] if d["id"] == device_id), None)
     port = next((p for p in (ndev or {}).get("ports", []) if p["idx"] == idx), None)
     if port is None:
         return _deny("No such port", 404)
-    net_ids = [n["id"] for n in nets]
     if native not in net_ids:
         return _deny("Pick a network from the list")
+    if not envs.vlan_allowed(acc, native):
+        return _deny("You can't put ports on that network", 403)
+    if not acc["all_vlans"]:
+        if mode == "auto":
+            return _deny("Allow All would tag networks you can't use - pick Block All or Custom", 403)
+        if mode == "custom":   # networks you can't use are never tagged
+            excluded = list(set(excluded) | {i for i in net_ids if not envs.vlan_allowed(acc, i)})
     if port["protected"]:
-        if not auth.role_at_least(me["role"], "admin"):
+        may = me["role"] == "admin" or (bool(env["supervisors_protected"]) and me["role"] == "supervisor")
+        if not may:
             return _deny("This port is protected (" + "; ".join(port["protect_reasons"]) +
                          "). Only an admin can change it.", 403)
         if not body.get("confirm_protected"):
             return _deny("Protected port", 409, confirm="protected", reasons=port["protect_reasons"])
     if port["profile_id"] and not body.get("detach_profile"):
         return _deny("Port profile attached", 409, confirm="profile", profile=port["profile_name"])
+    exp = body.get("expected")
+    if isinstance(exp, dict) and not body.get("confirm_changed"):
+        seen = (exp.get("native_network_id"), exp.get("tagged_mode"), sorted(exp.get("excluded_network_ids") or []))
+        now_ = (port["native_network_id"], port["tagged_mode"], sorted(port["excluded_network_ids"]))
+        if seen != now_:
+            return _deny("Changed elsewhere", 409, confirm="changed",
+                         current={"native": _net_label(nets, port["native_network_id"]),
+                                  "tagged": unifi.MODE_LABEL[port["tagged_mode"]]})
 
     overrides, before, after = unifi.build_override(dev, idx, native, mode, excluded, net_ids, True)
-    target = f"{ndev['name']} / port {idx}"
+    target = f"{env['name']} / {ndev['name']} / port {idx}"
     detail = {
-        "device": ndev["name"], "device_id": device_id, "port": idx, "port_name": port["name"],
+        "env": env["name"], "device": ndev["name"], "device_id": device_id, "port": idx, "port_name": port["name"],
         "before": {"native": _net_label(nets, port["native_network_id"]),
                    "tagged": unifi.MODE_LABEL[port["tagged_mode"]],
                    "excluded": [_net_label(nets, i) for i in port["excluded_network_ids"]],
@@ -237,7 +276,7 @@ def api_set_port(device_id, idx):
     try:
         c.put_port_overrides(device_id, overrides)
     except unifi.UniFiError as e:
-        auth.audit("port.set", target, {**detail, "error": str(e)}, ok=False)
+        auth.audit("port.set", target, {**detail, "error": str(e)}, ok=False, env_id=env_id)
         return _deny(str(e), 502)
     verified = False
     try:
@@ -248,9 +287,9 @@ def api_set_port(device_id, idx):
                 break
     except unifi.UniFiError:
         pass
-    snapshot.invalidate()
+    envs.invalidate(env_id)
     detail["verified"] = verified
-    auth.audit("port.set", target, detail, ok=True)
+    auth.audit("port.set", target, detail, ok=True, env_id=env_id)
     return jsonify({"ok": True, "verified": verified,
                     "warning": None if verified else
                     "UniFi accepted the change but didn't report it back yet. Refresh in a moment to check."})
@@ -263,63 +302,40 @@ def api_set_port(device_id, idx):
 @app.route("/api/audit")
 @auth.require("supervisor")
 def api_audit():
+    me = auth.current()
     limit = max(1, min(500, int(request.args.get("limit") or 200)))
-    before = int(request.args.get("before") or 0)
-    q = "SELECT * FROM audit"
-    args = []
-    if before:
-        q += " WHERE id < ?"
-        args.append(before)
-    if not auth.role_at_least(auth.current()["role"], "admin"):
-        q += (" AND" if before else " WHERE") + " action LIKE 'port.%'"
-    q += " ORDER BY id DESC LIMIT ?"
-    args.append(limit)
-    rows = db.get().execute(q, args).fetchall()
+    where, args = [], []
+    if request.args.get("before"):
+        where.append("a.id < ?")
+        args.append(int(request.args["before"]))
+    if me["role"] != "admin":
+        # supervisors: port changes in their own environments
+        ids = [e["id"] for e, _ in envs.accessible(me)] or [-1]
+        where.append("a.action LIKE 'port.%' AND a.env_id IN (" + ",".join("?" * len(ids)) + ")")
+        args += ids
+    q = ("SELECT a.*, e.name AS env_name FROM audit a LEFT JOIN environments e ON e.id = a.env_id"
+         + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY a.id DESC LIMIT ?")
+    rows = db.get().execute(q, args + [limit]).fetchall()
     return jsonify({"entries": [{**dict(r), "detail": json.loads(r["detail"] or "{}"), "ok": bool(r["ok"])}
                                 for r in rows]})
 
 
 # ----------------------------------------------------------------------------
-# Settings (admin)
+# App settings (admin)
 # ----------------------------------------------------------------------------
 
 @app.route("/api/settings")
 @auth.require("admin")
 def api_settings():
-    out = public_settings()
-    for k in ("unifi_mode", "unifi_host", "unifi_site", "unifi_console_id"):
-        out[k] = db.get_setting(k)
-    out["unifi_verify_ssl"] = db.setting_bool("unifi_verify_ssl")
-    out["unifi_api_key_set"] = bool(db.get_setting("unifi_api_key"))
-    out["update_check"] = db.setting_bool("update_check")
-    out["update_allowed"] = versioning.UPDATE_ALLOWED
-    return jsonify(out)
-
-
-def _unifi_candidate(data):
-    vals = {}
-    for k in ("unifi_mode", "unifi_host", "unifi_site", "unifi_console_id"):
-        if k in data:
-            vals[k] = str(data[k] or "").strip()
-    if "unifi_verify_ssl" in data:
-        vals["unifi_verify_ssl"] = "1" if data["unifi_verify_ssl"] else "0"
-    if data.get("unifi_api_key"):
-        vals["unifi_api_key"] = str(data["unifi_api_key"]).strip()
-    if vals.get("unifi_mode") and vals["unifi_mode"] not in ("local", "cloud"):
-        raise ValueError("Mode must be local or cloud")
-    return vals
+    return jsonify({**public_settings(), "update_check": db.setting_bool("update_check"),
+                    "update_allowed": versioning.UPDATE_ALLOWED})
 
 
 @app.route("/api/settings", methods=["PUT"])
 @auth.require("admin")
 def api_settings_put():
     data = request.get_json(silent=True) or {}
-    try:
-        vals = _unifi_candidate(data)
-    except ValueError as e:
-        return _deny(str(e))
-    if data.get("clear_unifi_api_key"):
-        vals["unifi_api_key"] = ""
+    vals = {}
     if "app_name" in data:
         vals["app_name"] = (str(data["app_name"] or "").strip() or "VLAN Manager")[:40]
     if "default_tagged_mode" in data:
@@ -334,24 +350,118 @@ def api_settings_put():
     for k in ("protect_uplinks", "update_check"):
         if k in data:
             vals[k] = "1" if data[k] else "0"
-    if "vlan_colors" in data:
-        colors = data["vlan_colors"] or {}
-        if not isinstance(colors, dict) or not all(isinstance(v, str) and HEX.match(v) for v in colors.values()):
-            return _deny("Colors must be #rrggbb")
-        vals["vlan_colors"] = json.dumps(colors)
     for k, v in vals.items():
         db.set_setting(k, v)
-    snapshot.invalidate()
-    auth.audit("settings.app", "", {k: ("•••" if k == "unifi_api_key" else v) for k, v in vals.items()})
+    for e in envs.all_envs():
+        envs.invalidate(e["id"])
+    auth.audit("settings.app", "", vals)
     return jsonify({"ok": True})
 
 
-@app.route("/api/settings/unifi/test", methods=["POST"])
+# ----------------------------------------------------------------------------
+# Environments (admin)
+# ----------------------------------------------------------------------------
+
+ENV_TEXT = ("name", "mode", "host", "site", "console_id", "notes")
+
+
+def _env_fields(data, partial):
+    """Validated column values from a request body."""
+    vals = {}
+    for k in ENV_TEXT:
+        if k in data:
+            vals[k] = str(data[k] or "").strip()[:500]
+    if "name" in vals and not vals["name"]:
+        raise ValueError("Give the environment a name")
+    if not partial and not vals.get("name"):
+        raise ValueError("Give the environment a name")
+    if vals.get("mode") and vals["mode"] not in ("local", "cloud"):
+        raise ValueError("Connection must be local or cloud")
+    if "site" in vals:
+        vals["site"] = vals["site"] or "default"
+    for k in ("verify_ssl", "supervisors_protected"):
+        if k in data:
+            vals[k] = 1 if data[k] else 0
+    if data.get("api_key"):
+        vals["api_key"] = str(data["api_key"]).strip()
+    if data.get("clear_api_key"):
+        vals["api_key"] = ""
+    if "vlan_colors" in data:
+        colors = data["vlan_colors"] or {}
+        if not isinstance(colors, dict) or not all(isinstance(v, str) and HEX.match(v) for v in colors.values()):
+            raise ValueError("Colors must be #rrggbb")
+        vals["vlan_colors"] = json.dumps(colors)
+    return vals
+
+
+def _safe(vals):
+    return {k: ("•••" if k == "api_key" else v) for k, v in vals.items()}
+
+
+@app.route("/api/admin/envs")
 @auth.require("admin")
-def api_unifi_test():
-    data = request.get_json(silent=True) or {}
+def api_admin_envs():
+    counts = {r["env_id"]: r["n"] for r in db.get().execute(
+        "SELECT env_id, COUNT(*) AS n FROM user_env GROUP BY env_id")}
+    return jsonify({"envs": [{**envs.public(e, True), "users": counts.get(e["id"], 0)} for e in envs.all_envs()]})
+
+
+@app.route("/api/admin/envs", methods=["POST"])
+@auth.require("admin")
+def api_admin_env_create():
     try:
-        c = client_from(_unifi_candidate(data))
+        vals = _env_fields(request.get_json(silent=True) or {}, partial=False)
+    except ValueError as e:
+        return _deny(str(e))
+    vals.setdefault("mode", "local")
+    vals["created_at"] = db.now()
+    d = db.get()
+    cur = d.execute(f"INSERT INTO environments ({', '.join(vals)}) VALUES ({', '.join('?' * len(vals))})",
+                    list(vals.values()))
+    d.commit()
+    auth.audit("env.created", vals["name"], _safe(vals), env_id=cur.lastrowid)
+    return jsonify({"ok": True, "env": envs.public(envs.get(cur.lastrowid), True)})
+
+
+@app.route("/api/admin/envs/<int:env_id>", methods=["PUT", "DELETE"])
+@auth.require("admin")
+def api_admin_env(env_id):
+    env = envs.get(env_id)
+    if env is None:
+        return _deny("No such environment", 404)
+    d = db.get()
+    if request.method == "DELETE":
+        d.execute("DELETE FROM environments WHERE id=?", (env_id,))
+        d.commit()
+        envs.invalidate(env_id)
+        auth.audit("env.deleted", env["name"], env_id=env_id)
+        return jsonify({"ok": True})
+    try:
+        vals = _env_fields(request.get_json(silent=True) or {}, partial=True)
+    except ValueError as e:
+        return _deny(str(e))
+    if vals:
+        d.execute(f"UPDATE environments SET {', '.join(k + '=?' for k in vals)} WHERE id=?",
+                  list(vals.values()) + [env_id])
+        d.commit()
+        envs.invalidate(env_id)
+        auth.audit("env.updated", env["name"], _safe(vals), env_id=env_id)
+    return jsonify({"ok": True, "env": envs.public(envs.get(env_id), True)})
+
+
+def _candidate_client(data):
+    """A client from the form, falling back to the saved environment (for its API key)."""
+    env = envs.get(int(data["env_id"])) if data.get("env_id") else None
+    vals = _env_fields({**data, "name": data.get("name") or "x"}, partial=True)
+    vals.pop("name", None)
+    return envs.client(env, vals)
+
+
+@app.route("/api/admin/envs/test", methods=["POST"])
+@auth.require("admin")
+def api_admin_env_test():
+    try:
+        c = _candidate_client(request.get_json(silent=True) or {})
     except ValueError as e:
         return _deny(str(e))
     try:
@@ -362,19 +472,55 @@ def api_unifi_test():
         data = unifi.normalize(c.raw_devices(), c.raw_networks(), [], [], True)
     except unifi.UniFiError as e:
         return jsonify({"ok": False, "sites": sites, "error": f"Connected, but site '{c.site}': {e}"})
-    return jsonify({"ok": True, "sites": sites, "devices": len(data["devices"]),
-                    "networks": len(data["networks"])})
+    return jsonify({"ok": True, "sites": sites, "devices": len(data["devices"]), "networks": len(data["networks"])})
 
 
-@app.route("/api/settings/unifi/consoles", methods=["POST"])
+@app.route("/api/admin/envs/consoles", methods=["POST"])
 @auth.require("admin")
-def api_unifi_consoles():
-    data = request.get_json(silent=True) or {}
+def api_admin_env_consoles():
     try:
-        c = client_from(_unifi_candidate(data))
-        return jsonify({"ok": True, "consoles": c.cloud_consoles()})
+        return jsonify({"ok": True, "consoles": _candidate_client(request.get_json(silent=True) or {}).cloud_consoles()})
     except (ValueError, unifi.UniFiError) as e:
         return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/api/admin/envs/<int:env_id>/catalog")
+@auth.require("admin")
+def api_admin_env_catalog(env_id):
+    """Networks and devices of an environment, for the access and color editors."""
+    env = envs.get(env_id)
+    if env is None:
+        return _deny("No such environment", 404)
+    try:
+        data, _ = envs.snapshot(env_id).get(envs.client(env), db.setting_bool("protect_uplinks"))
+    except unifi.UniFiError as e:
+        return jsonify({"ok": False, "error": str(e), "networks": [], "devices": []})
+    return jsonify({"ok": True, "networks": data["networks"],
+                    "devices": [{k: d[k] for k in ("id", "mac", "name", "model_name", "type_label", "port_count", "online")}
+                                for d in data["devices"]]})
+
+
+# ----------------------------------------------------------------------------
+# Who may use which environment (admin)
+# ----------------------------------------------------------------------------
+
+@app.route("/api/users/<int:uid>/access", methods=["GET", "PUT"])
+@auth.require("admin")
+def api_user_access(uid):
+    user = auth.get_user(uid)
+    if user is None:
+        return _deny("No such user", 404)
+    if request.method == "PUT":
+        entries = (request.get_json(silent=True) or {}).get("envs") or []
+        if not isinstance(entries, list):
+            return _deny("envs must be a list")
+        envs.set_user_access(uid, entries)
+        names = {e["id"]: e["name"] for e in envs.all_envs()}
+        auth.audit("user.access", user["username"], {"envs": [
+            {"env": names.get(int(e.get("env_id") or 0), "?"),
+             "vlans": "all" if e.get("all_vlans", True) else len(e.get("vlans") or []),
+             "devices": "all" if e.get("all_devices", True) else len(e.get("devices") or [])} for e in entries]})
+    return jsonify({"role": user["role"], "envs": envs.user_access_list(uid)})
 
 
 # ----------------------------------------------------------------------------

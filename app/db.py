@@ -74,23 +74,39 @@ CREATE TABLE IF NOT EXISTS audit (
     ok          INTEGER NOT NULL DEFAULT 1,
     ip          TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS environments (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL,
+    mode          TEXT NOT NULL DEFAULT 'local',
+    host          TEXT NOT NULL DEFAULT '',
+    api_key       TEXT NOT NULL DEFAULT '',
+    site          TEXT NOT NULL DEFAULT 'default',
+    console_id    TEXT NOT NULL DEFAULT '',
+    verify_ssl    INTEGER NOT NULL DEFAULT 0,
+    supervisors_protected INTEGER NOT NULL DEFAULT 0,
+    vlan_colors   TEXT NOT NULL DEFAULT '{}',
+    notes         TEXT NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL
+);
+-- which environments a user may use, and what inside them
+CREATE TABLE IF NOT EXISTS user_env (
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    env_id       INTEGER NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    all_vlans    INTEGER NOT NULL DEFAULT 1,
+    vlans        TEXT NOT NULL DEFAULT '[]',     -- network ids
+    all_devices  INTEGER NOT NULL DEFAULT 1,
+    devices      TEXT NOT NULL DEFAULT '[]',     -- device MACs (survive re-adoption)
+    PRIMARY KEY (user_id, env_id)
+);
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
 """
 
 SETTING_DEFAULTS = {
-    # UniFi connection
-    "unifi_mode": "local",            # local | cloud
-    "unifi_host": "",
-    "unifi_api_key": "",
-    "unifi_site": "default",
-    "unifi_console_id": "",           # cloud connector only
-    "unifi_verify_ssl": "0",
-    # behaviour
+    # behaviour (UniFi connections live in the environments table)
     "protect_uplinks": "1",           # uplinks / device links / LAGs need an admin
     "default_tagged_mode": "block_all",
-    "poll_seconds": "15",
-    "vlan_colors": "{}",              # site-wide defaults: {network_id: "#hex"}
+    "poll_seconds": "10",
     # appearance
     "app_name": "VLAN Manager",
     # updates
@@ -175,6 +191,7 @@ def backup(reason):
 COLUMNS = [
     ("sessions", "role_cap", "TEXT NOT NULL DEFAULT ''"),
     ("sessions", "token_id", "INTEGER"),
+    ("audit", "env_id", "INTEGER"),
 ]
 
 
@@ -185,31 +202,52 @@ def _add_columns(db):
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
 
 
+def _migrate_single_console(db):
+    """1.0 had one UniFi connection in settings: turn it into the first environment."""
+    if db.execute("SELECT COUNT(*) FROM environments").fetchone()[0]:
+        return
+    s = {r["key"]: r["value"] for r in db.execute(
+        "SELECT key, value FROM settings WHERE key LIKE 'unifi_%' OR key='vlan_colors'")}
+    if not (s.get("unifi_api_key") and (s.get("unifi_host") or s.get("unifi_console_id"))):
+        return
+    db.execute("INSERT INTO environments (name, mode, host, api_key, site, console_id, verify_ssl, vlan_colors, created_at) "
+               "VALUES (?,?,?,?,?,?,?,?,?)",
+               ("Default", s.get("unifi_mode") or "local", s.get("unifi_host") or "", s["unifi_api_key"],
+                s.get("unifi_site") or "default", s.get("unifi_console_id") or "",
+                1 if s.get("unifi_verify_ssl") in ("1", "true") else 0, s.get("vlan_colors") or "{}", now()))
+    db.execute("DELETE FROM settings WHERE key LIKE 'unifi_%' OR key='vlan_colors'")
+    print("[db] moved the UniFi connection into the environment 'Default'", flush=True)
+
+
 def init(version):
-    """Create / migrate the schema and back up the DB when the version changes."""
+    """Back up the DB when the version changes, then create / migrate the schema."""
     os.makedirs(DATA_DIR, exist_ok=True)
-    existed = os.path.isfile(DB_PATH) and os.path.getsize(DB_PATH) > 0
+    old = None
+    if os.path.isfile(DB_PATH) and os.path.getsize(DB_PATH) > 0:
+        with closing(connect()) as db:
+            try:
+                row = db.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()
+                old = row["value"] if row else None
+            except sqlite3.Error:
+                pass
+        if old and old != version:
+            dest = backup(f"v{old}")
+            print(f"[db] upgrading from {old} to {version}; backup written to {dest}", flush=True)
     with closing(connect()) as db:
         db.executescript(SCHEMA)
         _add_columns(db)
         for k, v in SETTING_DEFAULTS.items():
             db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?,?)", (k, v))
-        row = db.execute("SELECT value FROM settings WHERE key='schema_version'").fetchone()
-        old = row["value"] if row else None
-        db.commit()
-    if existed and old and old != version:
-        dest = backup(f"v{old}")
-        print(f"[db] upgrading from {old} to {version}; backup written to {dest}", flush=True)
-    with closing(connect()) as db:
+        _migrate_single_console(db)
         db.execute("INSERT INTO settings (key, value) VALUES ('schema_version', ?) "
                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (version,))
         db.commit()
 
 
-def audit(username, role, action, target="", detail=None, ok=True, ip=""):
+def audit(username, role, action, target="", detail=None, ok=True, ip="", env_id=None):
     db = get()
-    db.execute("INSERT INTO audit (ts, username, role, action, target, detail, ok, ip) "
-               "VALUES (?,?,?,?,?,?,?,?)",
+    db.execute("INSERT INTO audit (ts, username, role, action, target, detail, ok, ip, env_id) "
+               "VALUES (?,?,?,?,?,?,?,?,?)",
                (now(), username or "", role or "", action, target, json.dumps(detail or {}),
-                1 if ok else 0, ip or ""))
+                1 if ok else 0, ip or "", env_id))
     db.commit()

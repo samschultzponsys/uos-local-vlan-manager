@@ -65,7 +65,6 @@ DEFAULT_OIDC = {
     "issuer": "", "discovery_url": "", "client_id": "", "client_secret": "",
     "scopes": "openid profile email", "redirect_uri": "",
     "groups_claim": "groups", "allowed_groups": "",
-    "admin_groups": "", "supervisor_groups": "",
     "auto_create": True,
 }
 DEFAULT_BUTTON = {
@@ -496,9 +495,9 @@ def require(role):
     return deco
 
 
-def audit(action, target="", detail=None, ok=True):
+def audit(action, target="", detail=None, ok=True, env_id=None):
     u = current() or {}
-    db.audit(u.get("username", "?"), u.get("role", ""), action, target, detail, ok, client_ip())
+    db.audit(u.get("username", "?"), u.get("role", ""), action, target, detail, ok, client_ip(), env_id)
 
 
 # ----------------------------------------------------------------------------
@@ -520,10 +519,6 @@ def _oidc_user(claims):
     allowed = _groups_set(o["allowed_groups"])
     if allowed and not (groups & allowed):
         return None, "Your account isn't in a group that may use this app"
-    admin_g, sup_g = _groups_set(o["admin_groups"]), _groups_set(o["supervisor_groups"])
-    mapped = None
-    if admin_g or sup_g:
-        mapped = "admin" if groups & admin_g else "supervisor" if groups & sup_g else "viewer"
     email = str(claims.get("email") or "")
     name = str(claims.get("name") or claims.get("preferred_username") or "")
     d = db.get()
@@ -548,14 +543,11 @@ def _oidc_user(claims):
         while find_user(username):
             n += 1
             username = f"{base}{n}"
-        row = create_user(username, "", mapped or "viewer", name, email, oidc_sub=sub)
-        _log(f"SSO user '{username}' created as {row['role']}")
-    else:
-        role = mapped or row["role"]
-        if row["role"] == "admin" and role != "admin" and admin_count(row["id"]) == 0:
-            role = "admin"   # never demote the last admin via group mapping
-        d.execute("UPDATE users SET email=?, display_name=CASE WHEN ?!='' THEN ? ELSE display_name END, role=? WHERE id=?",
-                  (email or row["email"], name, name, role, row["id"]))
+        # SSO only proves who someone is: role and environments come from an admin here
+        row = create_user(username, "", "viewer", name, email, oidc_sub=sub)
+        _log(f"SSO user '{username}' created as viewer")
+    elif email and email != row["email"]:
+        d.execute("UPDATE users SET email=? WHERE id=?", (email, row["id"]))
         d.commit()
         row = get_user(row["id"])
     if row["disabled"]:
@@ -759,6 +751,34 @@ def init_app(app):
         d.commit()
         return jsonify({"ok": True, "prefs": prefs})
 
+    @app.route("/api/me/profile", methods=["PUT"])
+    def api_me_profile():
+        u = current()
+        if not u or not u["id"]:
+            return _deny("Sign in required", 401)
+        data = request.get_json(silent=True) or {}
+        row = get_user(u["id"])
+        changes = {}
+        if "display_name" in data:
+            changes["display_name"] = str(data["display_name"] or "").strip()[:128]
+        if "username" in data and str(data["username"] or "").strip() != row["username"]:
+            if not role_at_least(u["role"], "admin"):
+                return _deny("Ask an admin to change your username", 403)
+            new = str(data["username"] or "").strip()
+            if not USERNAME_RE.match(new):
+                return _deny("Username: 1-64 letters, digits, . _ @ -", 400)
+            other = find_user(new)
+            if other and other["id"] != row["id"]:
+                return _deny("That username is taken", 400)
+            changes["username"] = new
+        d = db.get()
+        for k, v in changes.items():
+            d.execute(f"UPDATE users SET {k}=? WHERE id=?", (v, row["id"]))
+        d.commit()
+        if changes:
+            audit("user.updated", row["username"], changes)
+        return jsonify({"ok": True})
+
     @app.route("/api/me/password", methods=["PUT"])
     def api_me_password():
         u = current()
@@ -835,8 +855,10 @@ def init_app(app):
         rows = db.get().execute("SELECT * FROM users ORDER BY seeded DESC, username").fetchall()
         sess = {r["user_id"]: r["n"] for r in db.get().execute(
             "SELECT user_id, COUNT(*) AS n FROM sessions WHERE expires_at > ? GROUP BY user_id", (db.now(),))}
-        return jsonify({"users": [{**public_user(r), "sessions": sess.get(r["id"], 0)} for r in rows],
-                        "roles": list(ROLES)})
+        env_n = {r["user_id"]: r["n"] for r in db.get().execute(
+            "SELECT user_id, COUNT(*) AS n FROM user_env GROUP BY user_id")}
+        return jsonify({"users": [{**public_user(r), "sessions": sess.get(r["id"], 0), "envs": env_n.get(r["id"], 0)}
+                                  for r in rows], "roles": list(ROLES)})
 
     @app.route("/api/users", methods=["POST"])
     @require("admin")
@@ -882,6 +904,14 @@ def init_app(app):
             if data["disabled"] and row["role"] == "admin" and admin_count(uid) == 0:
                 return _deny("That's the last admin", 400)
             changes["disabled"] = 1 if data["disabled"] else 0
+        if "username" in data and str(data["username"] or "").strip() != row["username"]:
+            new = str(data["username"] or "").strip()
+            if not USERNAME_RE.match(new):
+                return _deny("Username: 1-64 letters, digits, . _ @ -", 400)
+            other = find_user(new)
+            if other and other["id"] != uid:
+                return _deny("That username is taken", 400)
+            changes["username"] = new
         for k in ("display_name", "email"):
             if k in data:
                 changes[k] = str(data[k] or "").strip()[:128]
