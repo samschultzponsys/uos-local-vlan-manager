@@ -1,7 +1,7 @@
 import { render, useState, useEffect, useMemo, useCallback, useErrorBoundary } from "./vendor/preact-htm.module.js";
 import {
   html, api, Icon, Modal, Segmented, Toasts, toast, Spinner, useInterval, Logo, markdown,
-  vlanColors, readable, speedLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost,
+  vlanColors, readable, speedLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
 } from "./ui.js";
 import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
 
@@ -557,6 +557,9 @@ function App() {
     ${me.no_auth && html`<div class="danger-banner"><${Icon} name="alert" />
       <span><b>No-auth mode is on.</b> Anyone who can reach this page can ${rank(me.role) >= 1 ? "change switch ports" : "see your network"}${me.role === "admin" ? " and settings" : ""} without signing in.</span>
       ${me.method === "none" && html`<a href="/login?manual=1">Sign in</a>`}</div>`}
+    ${me.impersonator && html`<div class="imp-banner"><${Icon} name="eye" />
+      <span>You're viewing as <b>${me.display_name || me.username}</b> (${ROLE_LABEL[me.role]}). Anything you change is logged as ${me.impersonator.username} (as ${me.username}).</span>
+      <button class="btn sm" onClick=${async () => { await api("/api/impersonate/stop", { method: "POST" }); location.reload(); }}>Stop viewing as</button></div>`}
     ${me.initial_password && html`<div class="warn-banner"><${Icon} name="key" /><span>You're using the generated admin password.</span>
       <button class="link-btn" onClick=${() => setModal("account")}>Change it now</button></div>`}
     <header class="topbar">
@@ -569,14 +572,17 @@ function App() {
         ${rank(me.role) >= 1 && html`<button class="btn ghost hide-sm" onClick=${() => setModal("audit")}><${Icon} name="list" /><span class="hide-sm">Activity</span></button>`}
         ${isAdmin && html`<button class="btn ghost hide-sm" onClick=${() => setModal("users")}><${Icon} name="users" /><span class="hide-sm">Users</span></button>`}
         ${isAdmin && html`<button class="icon-btn hide-sm" onClick=${() => setModal("settings")} title="Settings"><${Icon} name="settings" /></button>`}
+        <button class="icon-btn theme-btn" onClick=${() => setTheme(theme === "dark" ? "light" : "dark")}
+          title=${theme === "dark" ? "Switch to light" : "Switch to dark"} aria-label="Toggle day / night">
+          <${Icon} name=${theme === "dark" ? "sun" : "moon"} /></button>
         <div class="menu-wrap">
           <button class="user-btn" onClick=${() => setMenu(!menu)}>
-            <span class="avatar">${(me.display_name || me.username).slice(0, 1).toUpperCase()}</span>
+            <${Avatar} user=${me} />
             <span class="hide-sm user-name">${me.display_name || me.username}</span>
             <span class=${"role-badge " + me.role}>${ROLE_LABEL[me.role]}</span></button>
           ${menu && html`<div class="menu-scrim" onClick=${() => setMenu(false)}></div>`}
           ${menu && html`<div class="menu" onMouseLeave=${canHover ? () => setMenu(false) : undefined}>
-            <div class="menu-head"><b>${me.display_name || me.username}</b><span class="muted">${me.username} · ${me.method === "oidc" ? "SSO" : me.method === "token" ? "token" : me.method === "none" ? "not signed in" : "password"}</span></div>
+            <div class="menu-head"><${Avatar} user=${me} size=${40} /><b>${me.display_name || me.username}</b><span class="muted">${me.username} · ${me.method === "oidc" ? "SSO" : me.method === "token" ? "token" : me.method === "none" ? "not signed in" : "password"}</span></div>
             ${rank(me.role) >= 1 && env && html`<button onClick=${() => { setMenu(false); setModal("envinfo"); }}><${Icon} name="server" />About ${env.name}</button>`}
             ${rank(me.role) >= 1 && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("audit"); }}><${Icon} name="list" />Activity</button>`}
             ${isAdmin && html`<button class="show-sm" onClick=${() => { setMenu(false); setModal("users"); }}><${Icon} name="users" />Users</button>`}

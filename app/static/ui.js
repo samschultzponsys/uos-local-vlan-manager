@@ -272,3 +272,41 @@ export function AskHost() {
     <div class="ask-body">${q.body}</div></${Modal}>`;
 }
 
+
+// --- profile pictures ---------------------------------------------------------
+
+export function Avatar({ user, size = 28, cls = "" }) {
+  const name = (user && (user.display_name || user.username)) || "?";
+  const style = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.44)}px`;
+  if (user && user.avatar) return html`<img class=${"avatar img " + cls} src=${user.avatar} alt="" style=${style} />`;
+  return html`<span class=${"avatar " + cls} style=${style}>${name.slice(0, 1).toUpperCase()}</span>`;
+}
+
+// let the user pick a photo, crop it to a centred square and shrink it (phones take huge photos)
+export function pickImage(size = 256) {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      if (!file) return resolve(null);
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const s = Math.min(img.naturalWidth, img.naturalHeight);
+        const c = document.createElement("canvas");
+        c.width = c.height = size;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#1a1f2a";
+        ctx.fillRect(0, 0, size, size);
+        ctx.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, size, size);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL("image/jpeg", 0.88));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file isn't a picture this browser can open")); };
+      img.src = url;
+    };
+    input.click();
+  });
+}

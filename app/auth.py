@@ -34,6 +34,7 @@ Environment overrides / recovery:
     VLANMGR_COOKIE_SECURE=true       HTTPS-only session cookie
 """
 
+import base64
 import copy
 import hashlib
 import hmac
@@ -66,6 +67,8 @@ DEFAULT_OIDC = {
     "scopes": "openid profile email", "redirect_uri": "",
     "groups_claim": "groups", "allowed_groups": "",
     "auto_create": True,
+    # how the client ID/secret are sent to the token endpoint
+    "token_auth_method": "client_secret_basic",
 }
 DEFAULT_BUTTON = {
     "text": "Sign in with SSO", "bg": "#fd4b2d", "fg": "#ffffff",
@@ -85,6 +88,7 @@ DEFAULT_AUTH = {
     "oidc": DEFAULT_OIDC,
     "oidc_button": DEFAULT_BUTTON,
 }
+TOKEN_AUTH_METHODS = ("client_secret_basic", "client_secret_post", "none")
 BUTTON_ICONS = ("none", "key", "shield", "lock", "login", "authentik", "custom")
 
 PUBLIC_PATHS = {"/login", "/healthz", "/favicon.svg", "/api/auth/config", "/api/auth/login",
@@ -178,7 +182,8 @@ def discovery_url(o):
 def _ensure_oauth(cfg):
     global _oauth, _oauth_sig
     o = cfg["oidc"]
-    sig = (discovery_url(o), o["client_id"], o["client_secret"], o["scopes"])
+    method = o.get("token_auth_method") if o.get("token_auth_method") in TOKEN_AUTH_METHODS else "client_secret_basic"
+    sig = (discovery_url(o), o["client_id"], o["client_secret"], o["scopes"], method)
     with _lock:
         if sig == _oauth_sig and _oauth is not None:
             return _oauth
@@ -186,9 +191,11 @@ def _ensure_oauth(cfg):
         if _oauth is None:
             _oauth = OAuth(_app)
         _oauth.register("idp", overwrite=True, server_metadata_url=sig[0],
-                        client_id=o["client_id"], client_secret=o["client_secret"] or None,
+                        client_id=o["client_id"],
+                        client_secret=(o["client_secret"] or None) if method != "none" else None,
                         client_kwargs={"scope": o["scopes"] or "openid profile email",
-                                       "code_challenge_method": "S256"})
+                                       "code_challenge_method": "S256",
+                                       "token_endpoint_auth_method": method})
         _oauth_sig = sig
         return _oauth
 
@@ -277,9 +284,15 @@ def _record_failure(ip):
 # Users
 # ----------------------------------------------------------------------------
 
+def avatar_url(row):
+    v = row["avatar_version"] if "avatar_version" in row.keys() else 0
+    return f"/avatar/{row['id']}?v={v}" if v else None
+
+
 def public_user(row):
     return {
         "id": row["id"], "username": row["username"], "display_name": row["display_name"],
+        "avatar": avatar_url(row), "avatar_locked": bool(row["avatar_locked"]),
         "email": row["email"], "role": row["role"], "disabled": bool(row["disabled"]),
         "seeded": bool(row["seeded"]), "sso": bool(row["oidc_sub"]),
         "has_password": bool(row["password_hash"]), "created_at": row["created_at"],
@@ -380,6 +393,60 @@ def bootstrap(app):
 
 
 # ----------------------------------------------------------------------------
+# Profile pictures: resized to a small square in the browser, checked here, stored in
+# /data/avatars/<user id>.<ext>. Only PNG, JPEG and WebP (by their file signature).
+# ----------------------------------------------------------------------------
+
+AVATAR_MAX = 600 * 1024
+AVATAR_TYPES = {"png": b"\x89PNG\r\n\x1a\n", "jpg": b"\xff\xd8\xff", "webp": b"RIFF"}
+AVATAR_MIME = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
+
+
+def _avatar_files(uid):
+    return [os.path.join(db.AVATAR_DIR, f"{uid}.{ext}") for ext in AVATAR_TYPES]
+
+
+def avatar_path(uid):
+    return next((p for p in _avatar_files(uid) if os.path.isfile(p)), None)
+
+
+def save_avatar(uid, data_url):
+    """Store a picture from a data: URL. Raises ValueError for anything that isn't a small image."""
+    m = re.match(r"^data:image/[a-z+.-]+;base64,([A-Za-z0-9+/=\s]+)$", data_url or "")
+    if not m:
+        raise ValueError("Send the picture as an image")
+    try:
+        raw = base64.b64decode(m.group(1), validate=False)
+    except ValueError:
+        raise ValueError("That picture couldn't be read")
+    if len(raw) > AVATAR_MAX:
+        raise ValueError("That picture is too big")
+    ext = next((e for e, sig in AVATAR_TYPES.items() if raw.startswith(sig)), None)
+    if ext == "webp" and raw[8:12] != b"WEBP":
+        ext = None
+    if not ext:
+        raise ValueError("Use a PNG, JPEG or WebP picture")
+    os.makedirs(db.AVATAR_DIR, exist_ok=True)
+    for p in _avatar_files(uid):
+        if os.path.isfile(p):
+            os.remove(p)
+    with open(os.path.join(db.AVATAR_DIR, f"{uid}.{ext}"), "wb") as fh:
+        fh.write(raw)
+    d = db.get()
+    d.execute("UPDATE users SET avatar_version=MAX(avatar_version + 1, ?) WHERE id=?", (db.now(), uid))
+    d.commit()
+
+
+def remove_avatar(uid):
+    for p in _avatar_files(uid):
+        if os.path.isfile(p):
+            os.remove(p)
+    d = db.get()
+    d.execute("UPDATE users SET avatar_version=0 WHERE id=?", (uid,))
+    d.commit()
+
+
+# ----------------------------------------------------------------------------
 # Sessions + tokens
 # ----------------------------------------------------------------------------
 
@@ -420,8 +487,16 @@ def _session_user():
     role = row["role"]
     if row["role_cap"]:   # a session opened with a token link keeps that token's limit
         role = min(role, row["role_cap"], key=lambda r: RANK.get(r, -1))
-    return {"id": row["user_id"], "username": row["username"], "display_name": row["display_name"],
-            "role": role, "method": row["method"]}
+    me = {"id": row["user_id"], "username": row["username"], "display_name": row["display_name"],
+          "role": role, "method": row["method"]}
+    # an admin viewing the app as someone else (only while they're still an admin)
+    if row["acting_as"] and role == "admin":
+        t = get_user(row["acting_as"])
+        if t is not None and not t["disabled"] and t["role"] != "admin":
+            return {"id": t["id"], "username": t["username"], "display_name": t["display_name"],
+                    "role": t["role"], "method": row["method"],
+                    "impersonator": {"id": me["id"], "username": me["username"], "display_name": me["display_name"]}}
+    return me
 
 
 def _token_user(value):
@@ -497,12 +572,51 @@ def require(role):
 
 def audit(action, target="", detail=None, ok=True, env_id=None):
     u = current() or {}
-    db.audit(u.get("username", "?"), u.get("role", ""), action, target, detail, ok, client_ip(), env_id)
+    who = u.get("username", "?")
+    if u.get("impersonator"):
+        who = f"{u['impersonator']['username']} (as {who})"
+    db.audit(who, u.get("role", ""), action, target, detail, ok, client_ip(), env_id)
 
 
 # ----------------------------------------------------------------------------
 # OIDC sign-in -> local user
 # ----------------------------------------------------------------------------
+
+def check_client(token_endpoint, client_id, secret):
+    """Ask the provider whether it accepts this client ID/secret, without signing anyone in:
+    exchange a made-up authorization code. Client authentication is checked before the code,
+    so `invalid_client` means the credentials are wrong and `invalid_grant` means they're fine."""
+    attempts = []
+    if secret:
+        attempts += [("client_secret_basic", {"auth": (client_id, secret)}, {}),
+                     ("client_secret_post", {}, {"client_id": client_id, "client_secret": secret})]
+    attempts.append(("none", {}, {"client_id": client_id}))
+    results = {}
+    for method, kw, extra in attempts:
+        try:
+            r = requests.post(token_endpoint, timeout=10, data={
+                "grant_type": "authorization_code", "code": "vlanmgr-credential-check",
+                "redirect_uri": "https://invalid.example/callback", **extra}, **kw)
+            err = (r.json() if r.headers.get("content-type", "").startswith("application/json") else {}).get("error")
+        except Exception as e:
+            results[method] = f"unreachable: {e.__class__.__name__}"
+            continue
+        results[method] = "rejected" if err == "invalid_client" or r.status_code == 401 else "accepted"
+    working = [m for m, v in results.items() if v == "accepted"]
+    if "client_secret_basic" in working or "client_secret_post" in working:
+        best = "client_secret_basic" if "client_secret_basic" in working else "client_secret_post"
+        return {"ok": True, "results": results, "suggest": best,
+                "message": f"Client ID and secret accepted ({'HTTP Basic' if best == 'client_secret_basic' else 'form POST'})."}
+    if working == ["none"]:
+        return {"ok": True, "results": results, "suggest": "none",
+                "message": "The provider treats this as a public client (no secret). Set client authentication to None."}
+    if not secret:
+        return {"ok": False, "results": results, "message": "No client secret saved or entered."}
+    return {"ok": False, "results": results,
+            "message": "The provider rejected this client ID/secret. Re-copy the Client Secret from the provider "
+                       "(Authentik: Applications → Providers → your provider → Edit), paste it here and save. "
+                       "Also check the Client ID and that the client type is Confidential."}
+
 
 def _groups_set(raw):
     return {x.strip() for x in str(raw or "").split(",") if x.strip()}
@@ -599,6 +713,9 @@ def init_app(app):
             _record_failure(ip)
 
         g.user = _session_user()
+        if g.user and g.user.get("impersonator") and path.startswith("/api/me/") \
+                and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            return _deny("You're viewing as someone else - their own account settings can't be changed", 403)
         if g.user is None and cfg["no_auth"]:
             g.user = {"id": 0, "username": "anonymous", "display_name": "Anonymous",
                       "role": cfg["anonymous_role"] if cfg["anonymous_role"] in ROLES else "viewer",
@@ -702,6 +819,14 @@ def init_app(app):
                     pass
         except Exception as e:
             _log(f"OIDC callback failed: {e}")
+            if "invalid_client" in str(e):
+                _log("HINT: the provider rejected this app's client ID/secret. Re-paste the client secret "
+                     "in Settings -> Sign-in and press 'Test provider' - it checks the credentials.")
+                return fail("Your identity provider rejected this app's client ID or secret. An admin should "
+                            "re-paste the client secret in Settings → Sign-in and press Test provider.")
+            if "redirect_uri" in str(e) or "invalid_grant" in str(e):
+                return fail("SSO sign-in failed: the redirect URI registered at your provider must match the one "
+                            "shown in Settings → Sign-in exactly.")
             return fail("SSO sign-in failed - check the server log")
         row, err = _oidc_user(claims)
         if err:
@@ -722,13 +847,17 @@ def init_app(app):
             return _deny("Sign in required", 401)
         cfg = config()
         out = {**{k: u[k] for k in ("id", "username", "display_name", "role", "method")},
+               "impersonator": u.get("impersonator"),
                "no_auth": bool(cfg["no_auth"]),
-               "initial_password": False, "prefs": {}, "has_password": False, "email": ""}
+               "initial_password": False, "prefs": {}, "has_password": False, "email": "",
+               "avatar": None, "avatar_locked": False}
         if u["id"]:
             row = get_user(u["id"])
             out["prefs"] = json.loads(row["prefs"] or "{}")
             out["has_password"] = bool(row["password_hash"])
             out["email"] = row["email"]
+            out["avatar"] = avatar_url(row)
+            out["avatar_locked"] = bool(row["avatar_locked"])
             pw = db.get_setting("initial_admin_password", "")
             out["initial_password"] = bool(row["seeded"] and pw)
         return jsonify(out)
@@ -778,6 +907,88 @@ def init_app(app):
         if changes:
             audit("user.updated", row["username"], changes)
         return jsonify({"ok": True})
+
+    @app.route("/api/users/<int:uid>/impersonate", methods=["POST"])
+    @require("admin")
+    def api_impersonate(uid):
+        me = current()
+        token = request.cookies.get(COOKIE)
+        if me.get("impersonator") or me["method"] not in ("local", "oidc") or not token:
+            return _deny("Sign in with a password or SSO to view as someone else", 400)
+        t = get_user(uid)
+        if t is None:
+            return _deny("No such user", 404)
+        if t["role"] == "admin" or t["disabled"]:
+            return _deny("You can only view as an active supervisor or viewer", 400)
+        d = db.get()
+        d.execute("UPDATE sessions SET acting_as=? WHERE token_hash=?", (uid, sha(token)))
+        d.commit()
+        audit("user.impersonate", t["username"])
+        return jsonify({"ok": True})
+
+    @app.route("/api/impersonate/stop", methods=["POST"])
+    def api_impersonate_stop():
+        token = request.cookies.get(COOKIE)
+        u = current()
+        if not token or not u or not u.get("impersonator"):
+            return _deny("You're not viewing as anyone", 400)
+        d = db.get()
+        d.execute("UPDATE sessions SET acting_as=NULL WHERE token_hash=?", (sha(token),))
+        d.commit()
+        db.audit(u["impersonator"]["username"], "admin", "user.impersonate_stop", u["username"], ip=client_ip())
+        return jsonify({"ok": True})
+
+    @app.route("/api/me/avatar", methods=["PUT", "DELETE"])
+    def api_me_avatar():
+        u = current()
+        if not u or not u["id"]:
+            return _deny("Sign in required", 401)
+        row = get_user(u["id"])
+        if row["avatar_locked"]:
+            return _deny("An admin set your picture", 403)
+        if request.method == "DELETE":
+            remove_avatar(u["id"])
+        else:
+            try:
+                save_avatar(u["id"], (request.get_json(silent=True) or {}).get("image"))
+            except ValueError as e:
+                return _deny(str(e), 400)
+        return jsonify({"ok": True, "avatar": avatar_url(get_user(u["id"]))})
+
+    @app.route("/avatar/<int:uid>")
+    def avatar_file(uid):
+        if not current():
+            return _deny("Sign in required", 401)
+        path = avatar_path(uid)
+        if not path:
+            return _deny("No picture", 404)
+        ext = path.rsplit(".", 1)[1]
+        with open(path, "rb") as fh:
+            resp = _app.response_class(fh.read(), mimetype=AVATAR_MIME[ext])
+        resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"   # URL carries ?v=
+        resp.headers["Content-Security-Policy"] = "default-src 'none'"
+        return resp
+
+    @app.route("/api/users/<int:uid>/avatar", methods=["PUT", "DELETE"])
+    @require("admin")
+    def api_user_avatar(uid):
+        row = get_user(uid)
+        if row is None:
+            return _deny("No such user", 404)
+        data = request.get_json(silent=True) or {}
+        if request.method == "DELETE":
+            remove_avatar(uid)
+        elif data.get("image"):
+            try:
+                save_avatar(uid, data["image"])
+            except ValueError as e:
+                return _deny(str(e), 400)
+        if "locked" in data:
+            d = db.get()
+            d.execute("UPDATE users SET avatar_locked=? WHERE id=?", (1 if data["locked"] else 0, uid))
+            d.commit()
+        audit("user.avatar", row["username"], {"removed": request.method == "DELETE", "locked": data.get("locked")})
+        return jsonify({"ok": True, "user": public_user(get_user(uid))})
 
     @app.route("/api/me/password", methods=["PUT"])
     def api_me_password():
@@ -888,6 +1099,7 @@ def init_app(app):
                 return _deny("That's the last admin", 400)
             d.execute("DELETE FROM users WHERE id=?", (uid,))
             d.commit()
+            remove_avatar(uid)
             audit("user.deleted", row["username"])
             return jsonify({"ok": True})
         data = request.get_json(silent=True) or {}
@@ -977,6 +1189,10 @@ def init_app(app):
                     cand["oidc"][k] = str(o[k]).strip()
             elif k == "auto_create":
                 cand["oidc"][k] = bool(o[k])
+            elif k == "token_auth_method":
+                if o[k] not in TOKEN_AUTH_METHODS:
+                    return _deny("Unknown client authentication method", 400)
+                cand["oidc"][k] = o[k]
             else:
                 cand["oidc"][k] = str(o[k] or "").strip()
         if o.get("clear_client_secret"):
@@ -1028,7 +1244,13 @@ def init_app(app):
         missing = [k for k in ("issuer", "authorization_endpoint", "token_endpoint", "jwks_uri") if not meta.get(k)]
         if missing:
             return jsonify({"ok": False, "error": f"Discovery document is missing {', '.join(missing)}"})
-        return jsonify({"ok": True, "issuer": meta["issuer"]})
+        out = {"ok": True, "issuer": meta["issuer"],
+               "methods_supported": meta.get("token_endpoint_auth_methods_supported") or []}
+        client_id = (o.get("client_id") or "").strip()
+        secret = (o.get("client_secret") or "").strip() or stored_config()["oidc"]["client_secret"]
+        if client_id:
+            out["credentials"] = check_client(meta["token_endpoint"], client_id, secret)
+        return jsonify(out)
 
     @app.route("/api/sessions", methods=["GET"])
     @require("admin")

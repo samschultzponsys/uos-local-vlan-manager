@@ -223,3 +223,77 @@ def test_pages_use_versioned_assets(app, client):
     r = client.get(f"/static/{main.BUILD}/ui.js")
     assert r.status_code == 200 and "immutable" in r.headers["Cache-Control"]
     assert client.get("/api/version").get_json()["build"] == main.BUILD
+
+
+PNG = "data:image/png;base64," + __import__("base64").b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 64).decode()
+
+
+def test_profile_picture_upload_and_admin_lock(app, admin):
+    admin.post("/api/users", json={"username": "pic", "password": "picpass123"})
+    c = app.test_client()
+    login(c, "pic", "picpass123")
+    r = c.put("/api/me/avatar", json={"image": PNG})
+    assert r.status_code == 200 and r.get_json()["avatar"].startswith("/avatar/")
+    img = c.get(r.get_json()["avatar"])
+    assert img.status_code == 200 and img.mimetype == "image/png"
+    # not an image / svg are refused
+    assert c.put("/api/me/avatar", json={"image": "data:image/svg+xml;base64,PHN2Zz4="}).status_code == 400
+    # an admin sets and locks it
+    uid = c.get("/api/me").get_json()["id"]
+    r = admin.put(f"/api/users/{uid}/avatar", json={"image": PNG, "locked": True})
+    assert r.get_json()["user"]["avatar_locked"]
+    assert c.put("/api/me/avatar", json={"image": PNG}).status_code == 403
+    assert c.delete("/api/me/avatar", json={}).status_code == 403
+    assert c.get("/api/me").get_json()["avatar_locked"]
+    admin.put(f"/api/users/{uid}/avatar", json={"locked": False})
+    assert c.delete("/api/me/avatar", json={}).status_code == 200
+    assert c.get("/api/me").get_json()["avatar"] is None
+
+
+def test_admin_can_view_as_lower_user(app, admin):
+    uid = admin.post("/api/users", json={"username": "vic2", "password": "vicpass123"}).get_json()["user"]["id"]
+    assert admin.post(f"/api/users/{uid}/impersonate", json={}).status_code == 200
+    me = admin.get("/api/me").get_json()
+    assert me["username"] == "vic2" and me["role"] == "viewer" and me["impersonator"]["username"] == "admin"
+    assert admin.get("/api/users").status_code == 403                     # sees what they see
+    assert admin.put("/api/me/password", json={"password": "hijack1234"}).status_code == 403
+    assert admin.post("/api/impersonate/stop", json={}).status_code == 200
+    assert admin.get("/api/me").get_json()["role"] == "admin"
+    actions = [e["action"] for e in admin.get("/api/audit").get_json()["entries"]]
+    assert "user.impersonate" in actions and "user.impersonate_stop" in actions
+    # never another admin
+    other = admin.post("/api/users", json={"username": "adm2", "password": "adm2pass12", "role": "admin"}).get_json()["user"]["id"]
+    assert admin.post(f"/api/users/{other}/impersonate", json={}).status_code == 400
+
+
+def test_oidc_credential_check(monkeypatch):
+    class R:
+        def __init__(self, err, code=400):
+            self.status_code, self._err = code, err
+            self.headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {"error": self._err}
+
+    calls = []
+
+    def fake_post(url, timeout=None, data=None, auth=None):
+        calls.append((auth, dict(data)))
+        ok = (auth == ("cid", "right")) or (data.get("client_secret") == "right")
+        return R("invalid_grant" if ok else "invalid_client", 400 if ok else 401)
+
+    monkeypatch.setattr(auth.requests, "post", fake_post)
+    good = auth.check_client("https://idp/token", "cid", "right")
+    assert good["ok"] and good["suggest"] == "client_secret_basic"
+    bad = auth.check_client("https://idp/token", "cid", "wrong")
+    assert not bad["ok"] and "rejected" in bad["message"]
+
+
+def test_cloud_console_id_from_pasted_url(monkeypatch):
+    import unifi
+    monkeypatch.setattr(unifi.UniFi, "cloud_consoles", lambda self: [
+        {"id": "70A741:111", "hardware_id": "3be578f1-fc61-4478-926e-441311aaaf64", "name": "UOS-Nick"}])
+    c = unifi.UniFi(mode="cloud", api_key="k")
+    url = "https://unifi.ui.com/consoles/3be578f1-fc61-4478-926e-441311aaaf64/network/default/integrations"
+    assert c.resolve_console_id(url) == "70A741:111"
+    assert c.resolve_console_id("70A741:111") == "70A741:111"

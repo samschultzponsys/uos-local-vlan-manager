@@ -18,6 +18,7 @@ from datetime import datetime
 DB_PATH = os.environ.get("VLANMGR_DB", "/data/vlanmgr.db")
 DATA_DIR = os.path.dirname(os.path.abspath(DB_PATH))
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+AVATAR_DIR = os.path.join(DATA_DIR, "avatars")
 BACKUPS_KEPT = 10
 
 _local = threading.local()
@@ -206,6 +207,9 @@ COLUMNS = [
     ("sessions", "role_cap", "TEXT NOT NULL DEFAULT ''"),
     ("sessions", "token_id", "INTEGER"),
     ("audit", "env_id", "INTEGER"),
+    ("users", "avatar_version", "INTEGER NOT NULL DEFAULT 0"),   # 0 = no picture
+    ("users", "avatar_locked", "INTEGER NOT NULL DEFAULT 0"),    # an admin chose it; user can't change it
+    ("sessions", "acting_as", "INTEGER"),                          # admin "view as" another user
 ]
 
 

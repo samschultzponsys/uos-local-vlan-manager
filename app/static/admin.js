@@ -1,6 +1,6 @@
 import { useState, useEffect } from "./vendor/preact-htm.module.js";
 import {
-  html, api, Icon, Modal, Toggle, Segmented, Field, Copy, toast, Spinner, SsoButton, ask,
+  html, api, Icon, Modal, Toggle, Segmented, Field, Copy, toast, Spinner, SsoButton, ask, Avatar, pickImage,
   vlanColors, ROLE_LABEL, MODE_LABEL, ago, when, rank,
 } from "./ui.js";
 
@@ -89,6 +89,13 @@ function EnvEditor({ env, onDone }) {
       onDone(true);
     } catch (e) { toast(e.message, "err"); }
   }
+  const keyField = html`<${Field} label=${cloud ? "Account API key (unifi.ui.com/api)" : "API key"} hint=${cloud ? "Site Manager → API → Create API key" : "In that console: Network → Settings → Control Plane → Integrations → Create API key"}>
+      <div class="row"><input type="password" autocomplete="new-password" value=${key} placeholder=${s.api_key_set ? "✓ saved — leave blank to keep" : "paste the key"}
+        onInput=${(e) => setKey(e.target.value)} />
+        ${s.id && s.api_key_set && html`<button class="btn ghost" onClick=${async () => {
+          if (!await ask({ title: "Remove the API key?", body: "Nobody can use this environment until a new key is added.", danger: true, confirm: "Remove" })) return;
+          await api(`/api/admin/envs/${s.id}`, { method: "PUT", body: { clear_api_key: true } }); set("api_key_set", false);
+        }}>Remove</button>`}</div></${Field}>`;
   const auto = catalog ? vlanColors(catalog.networks, {}, {}) : {};
   const colors = s.vlan_colors || {};
   return html`<div class="form">
@@ -100,21 +107,26 @@ function EnvEditor({ env, onDone }) {
     </div>
     ${!cloud ? html`<${Field} label="Console address" hint="UDM / UCG / Cloud Key / UniFi OS Server or a UniFi OS container, e.g. https://10.1.2.3 or https://10.1.2.3:11443">
         <input value=${s.host} placeholder="https://192.168.1.1" onInput=${(e) => set("host", e.target.value)} /></${Field}>`
-      : html`<${Field} label="Console ID" hint="Goes through api.ui.com/v1/connector (experimental). The API key comes from unifi.ui.com → API.">
-        <div class="row"><input value=${s.console_id} placeholder="console id" onInput=${(e) => set("console_id", e.target.value)} />
+      : html`<div class="steps">
+        <div class="step"><span class="step-n">1</span><div><b>Create an account API key</b> at${" "}<a href="https://unifi.ui.com/api" target="_blank" rel="noopener">unifi.ui.com/api</a> (Site Manager → API → Create API key) and paste it below.
+          <div class="muted small">Not the key under a console's Network → Integrations — that one is for the Direct connection.</div></div></div>
+        <div class="step"><span class="step-n">2</span><div><b>Pick the console</b>: press <i>Find my consoles</i>, or paste the address of any
+          unifi.ui.com page of that console (e.g. <span class="mono">unifi.ui.com/consoles/3be5…/network/…</span>) into Console.</div></div>
+      </div>
+      ${keyField}
+      <${Field} label="Console" hint="The ID is filled in for you when you pick from the list or paste a unifi.ui.com address.">
+        <div class="row"><input value=${s.console_id} placeholder="pick from the list, or paste a unifi.ui.com address"
+          onInput=${(e) => { const v = e.target.value; const m = v.match(/\/consoles\/([^/?#]+)/); set("console_id", m ? m[1] : v.trim()); }} />
           <button class="btn ghost" onClick=${async () => {
+            if (!key && !s.api_key_set) return toast("Paste the account API key first", "err");
             const r = await api("/api/admin/envs/consoles", { method: "POST", body: body() });
             if (r.ok) setConsoles(r.consoles); else toast(r.error, "err");
-          }}>Find consoles</button></div>
-        ${consoles && html`<div class="choices">${consoles.map((c) => html`<button class="chip" onClick=${() => { set("console_id", c.id); setConsoles(null); }}>${c.name}<span class="muted">${c.type}</span></button>`)}
-          ${consoles.length === 0 && html`<span class="muted">No consoles on this key.</span>`}</div>`}</${Field}>`}
-    <${Field} label="API key" hint=${cloud ? "unifi.ui.com → API → Create API key" : "In that console: Network → Settings → Control Plane → Integrations → Create API key"}>
-      <div class="row"><input type="password" autocomplete="new-password" value=${key} placeholder=${s.api_key_set ? "✓ saved — leave blank to keep" : "paste the key"}
-        onInput=${(e) => setKey(e.target.value)} />
-        ${s.id && s.api_key_set && html`<button class="btn ghost" onClick=${async () => {
-          if (!await ask({ title: "Remove the API key?", body: "Nobody can use this environment until a new key is added.", danger: true, confirm: "Remove" })) return;
-          await api(`/api/admin/envs/${s.id}`, { method: "PUT", body: { clear_api_key: true } }); set("api_key_set", false);
-        }}>Remove</button>`}</div></${Field}>
+          }}><${Icon} name="search" size=${14} />Find my consoles</button></div>
+        ${consoles && html`<div class="choices">${consoles.map((c) => html`<button class=${"chip" + (c.id === s.console_id ? " on" : "")} onClick=${() => { set("console_id", c.id); setConsoles(null); if (!s.name) set("name", c.name); }}>
+            <span class=${"status-dot " + (c.online ? "on" : "")}></span>${c.name}<span class="muted">${c.type}</span></button>`)}
+          ${consoles.length === 0 && html`<span class="muted">No consoles on this key.</span>`}</div>`}</${Field}>
+      <p class="muted small">Cloud mode goes through UniFi's cloud connector and is experimental. If this server can reach the console's address, <b>Direct</b> is faster and more reliable.</p>`}
+    ${!cloud && keyField}
     <${Field} label="Site" hint="UniFi's internal site name, usually 'default'. Test the connection to pick from a list.">
       <input value=${s.site} onInput=${(e) => set("site", e.target.value)} />
       ${test && test.sites && test.sites.length > 1 && html`<div class="choices">${test.sites.map((x) => html`<button class=${"chip" + (x.name === s.site ? " on" : "")} onClick=${() => set("site", x.name)}>${x.desc}<span class="muted">${x.name}</span></button>`)}</div>`}
@@ -125,6 +137,7 @@ function EnvEditor({ env, onDone }) {
     <${Field} label="Notes (visible to this environment's supervisors)"><input value=${s.notes} onInput=${(e) => set("notes", e.target.value)} /></${Field}>
     ${test && html`<div class=${"notice " + (test.ok ? "good" : "err")}><${Icon} name=${test.ok ? "check" : "alert"} /><div>
       ${test.ok ? html`Connected — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks on site <b>${s.site}</b>.` : test.error}</div></div>`}
+    ${test && test.ok && test.console_id && test.console_id !== s.console_id && html`<div class="muted small">Console ID resolved to <span class="mono">${test.console_id}</span> — it's saved that way.</div>`}
 
     ${catalog && catalog.networks.length > 0 && html`<h4 class="section">Default VLAN colors</h4>
       <p class="muted small">For everyone using this environment. Each user can still pick their own.</p>
@@ -182,7 +195,7 @@ function AuthTab() {
     <${Toggle} checked=${a.local_enabled} disabled=${locked("local_enabled")} onChange=${(v) => set("local_enabled", v)}
       label="Username + password" hint="Local users managed under Users." />
     <${Toggle} checked=${a.oidc_enabled} onChange=${(v) => set("oidc_enabled", v)} label="Single sign-on (OIDC)" hint="Authentik, Authelia, Keycloak, Pocket ID…" />
-    <${Toggle} checked=${a.token_enabled} onChange=${(v) => set("token_enabled", v)} label="API tokens" hint="Personal tokens for scripts (Bearer header) or a kiosk link." />
+    <${Toggle} checked=${a.token_enabled} onChange=${(v) => set("token_enabled", v)} label="Sign-in links (tokens)" hint="Each user can make personal links that sign a phone or tablet in without a password (My account → Sign-in links)." />
 
     <h4 class="section">Single sign-on (OIDC)</h4>
     <${RedirectBox} a=${a} onUseOrigin=${() => set("public_url", location.origin)} />
@@ -193,6 +206,12 @@ function AuthTab() {
       <${Field} label="Scopes"><input value=${a.oidc.scopes} onInput=${(e) => setO("scopes", e.target.value)} /></${Field}>
       <${Field} label="Redirect URI override (advanced)" hint="Leave empty to use the one shown above.">
         <input value=${a.oidc.redirect_uri} placeholder="detected automatically" onInput=${(e) => setO("redirect_uri", e.target.value)} /></${Field}>
+      <${Field} label="Client authentication" hint="How the ID and secret are sent. Test provider picks the one that works.">
+        <select value=${a.oidc.token_auth_method || "client_secret_basic"} onChange=${(e) => setO("token_auth_method", e.target.value)}>
+          <option value="client_secret_basic">HTTP Basic (default)</option>
+          <option value="client_secret_post">Form POST</option>
+          <option value="none">None (public client, PKCE only)</option>
+        </select></${Field}>
       <${Field} label="Groups claim"><input value=${a.oidc.groups_claim} onInput=${(e) => setO("groups_claim", e.target.value)} /></${Field}>
       <${Field} label="Allowed groups" hint="Comma-separated. Empty = anyone your provider lets through."><input value=${a.oidc.allowed_groups} onInput=${(e) => setO("allowed_groups", e.target.value)} /></${Field}>
     </div>
@@ -200,9 +219,18 @@ function AuthTab() {
     <${Toggle} checked=${a.oidc_auto_login} onChange=${(v) => set("oidc_auto_login", v)} label="Sign in automatically with SSO"
       hint="Visiting the app goes straight to your provider. /login always shows the login page as a fallback." />
     <div class="row">
-      <button class="btn ghost" onClick=${async () => setTestRes(await api("/api/settings/auth/test-oidc", { method: "POST", body: a.oidc }).catch((e) => ({ ok: false, error: e.message })))}>Test provider</button>
-      ${testRes && html`<span class=${testRes.ok ? "good-text" : "err-text"}>${testRes.ok ? `✓ ${testRes.issuer}` : testRes.error}</span>`}
+      <button class="btn ghost" onClick=${async () => {
+        const r = await api("/api/settings/auth/test-oidc", { method: "POST", body: { ...a.oidc, client_secret: secret || undefined } }).catch((e) => ({ ok: false, error: e.message }));
+        setTestRes(r);
+        if (r.credentials && r.credentials.ok && r.credentials.suggest !== a.oidc.token_auth_method) setO("token_auth_method", r.credentials.suggest);
+      }}><${Icon} name="refresh" size=${14} />Test provider</button>
     </div>
+    ${testRes && html`<div class="test-results">
+      <div class=${testRes.ok ? "good-text" : "err-text"}>${testRes.ok ? `✓ Found the provider: ${testRes.issuer}` : `✗ ${testRes.error}`}</div>
+      ${testRes.credentials && html`<div class=${testRes.credentials.ok ? "good-text" : "err-text"}>${testRes.credentials.ok ? "✓" : "✗"} ${testRes.credentials.message}</div>`}
+      ${testRes.ok && !testRes.credentials && html`<div class="muted">Enter the client ID (and secret) to check them too.</div>`}
+      ${testRes.credentials && testRes.credentials.ok && testRes.credentials.suggest !== (a.oidc.token_auth_method || "client_secret_basic") && html`<div class="muted">Client authentication was switched to what works — save to keep it.</div>`}
+    </div>`}
 
     <h4 class="section">SSO button</h4>
     <div class="button-editor">
@@ -347,7 +375,7 @@ export function UsersModal({ me, onClose }) {
     ${!data ? html`<${Spinner} />` : html`<div class="table-wrap"><table class="table">
       <thead><tr><th>User</th><th>Role</th><th>Access</th><th>Last sign-in</th><th>Status</th><th></th></tr></thead>
       <tbody>${data.users.map((u) => html`<tr key=${u.id} class=${u.disabled ? "disabled" : ""}>
-        <td><div class="u-cell"><span class="avatar sm">${(u.display_name || u.username)[0].toUpperCase()}</span>
+        <td><div class="u-cell"><${Avatar} user=${u} size=${32} />${u.avatar_locked ? html`<span class="av-lock" title="Picture locked by an admin"><${Icon} name="lock" size=${10} /></span>` : null}
           <div><b>${u.display_name || u.username}</b>${u.seeded && html` <span class="badge">first admin</span>`}
             <div class="muted small">${u.username}${u.email ? ` · ${u.email}` : ""}${u.sso ? " · SSO" : ""}</div></div></div></td>
         <td><select class="sm" value=${u.role} onChange=${(e) => update(u, { role: e.target.value }, `${u.username} is now ${ROLE_LABEL[e.target.value]}`)}>
@@ -358,6 +386,9 @@ export function UsersModal({ me, onClose }) {
         <td class="muted small">${ago(u.last_login)}${u.sessions ? html`<div>${u.sessions} active session${u.sessions > 1 ? "s" : ""}</div>` : null}</td>
         <td>${u.id !== me.id ? html`<${Toggle} checked=${!u.disabled} onChange=${(on) => update(u, { disabled: !on }, on ? "Enabled" : "Disabled")} label=${u.disabled ? "Disabled" : "Active"} />` : html`<span class="muted small">you</span>`}</td>
         <td class="actions">
+          ${u.role !== "admin" && !u.disabled && !me.impersonator && html`<button class="icon-btn sm" title=${`View as ${u.username}`} onClick=${async () => {
+            try { await api(`/api/users/${u.id}/impersonate`, { method: "POST" }); location.href = "/"; } catch (e) { toast(e.message, "err"); }
+          }}><${Icon} name="eye" size=${15} /></button>`}
           <button class="icon-btn sm" title="Rename / edit" onClick=${() => setView({ kind: "edit", user: u })}><${Icon} name="user" size=${15} /></button>
           <button class="icon-btn sm" title="Set password" onClick=${() => { const pw = prompt(`New password for ${u.username} (8+ characters):`); if (pw) update(u, { password: pw }, "Password set"); }}><${Icon} name="key" size=${15} /></button>
           ${u.sessions > 0 && html`<button class="icon-btn sm" title="Sign out everywhere" onClick=${() => update(u, { sign_out: true }, "Signed out")}><${Icon} name="logout" size=${15} /></button>`}
@@ -372,7 +403,22 @@ export function UsersModal({ me, onClose }) {
 
 function UserEditor({ user, onSave, onCancel }) {
   const [f, setF] = useState({ username: user.username, display_name: user.display_name || "", email: user.email || "" });
+  const [u, setU] = useState(user);
+  async function avatar(method, body, msg) {
+    try { const r = await api(`/api/users/${u.id}/avatar`, { method, body }); setU(r.user); if (msg) toast(msg); } catch (e) { toast(e.message, "err"); }
+  }
   return html`<div class="form">
+    <div class="avatar-edit">
+      <${Avatar} user=${u} size=${72} />
+      <div class="avatar-actions">
+        <div class="row">
+          <button class="btn sm" onClick=${async () => { const img = await pickImage().catch((e) => toast(e.message, "err")); if (img) avatar("PUT", { image: img }, "Picture set"); }}><${Icon} name="user" size=${14} />Choose picture</button>
+          ${u.avatar && html`<button class="btn sm ghost" onClick=${() => avatar("DELETE", {}, "Picture removed")}>Remove</button>`}
+        </div>
+        <${Toggle} checked=${u.avatar_locked} onChange=${(on) => avatar("PUT", { locked: on }, on ? "Picture locked" : "Picture unlocked")}
+          label="Lock picture" hint="They can't change or remove it." />
+      </div>
+    </div>
     <${Field} label="Username" hint=${user.sso ? "SSO users are matched by their provider ID, so renaming is safe." : "Used to sign in with a password."}>
       <input value=${f.username} autocomplete="off" onInput=${(e) => setF({ ...f, username: e.target.value })} /></${Field}>
     <${Field} label="Display name"><input value=${f.display_name} onInput=${(e) => setF({ ...f, display_name: e.target.value })} /></${Field}>
@@ -478,13 +524,20 @@ export function EnvInfoModal({ env, networks, devices, onClose }) {
 export function AccountModal({ me, onClose }) {
   const [pw, setPw] = useState({ current: "", password: "", confirm: "" });
   const [tokens, setTokens] = useState(null);
-  const [tf, setTf] = useState({ name: "", role: me.role, days: 0, value: "" });
-  const [created, setCreated] = useState(null);
+  const [pic, setPic] = useState(me.avatar);
   const loadTokens = () => api("/api/me/tokens").then(setTokens).catch(() => setTokens({ enabled: false, tokens: [] }));
   useEffect(() => { loadTokens(); }, []);
   return html`<${Modal} title="My account" icon="user" onClose=${onClose} wide>
-    <div class="account-head"><span class="avatar lg">${(me.display_name || me.username)[0].toUpperCase()}</span>
-      <div><h3>${me.display_name || me.username}</h3><div class="muted">${me.username}${me.email ? ` · ${me.email}` : ""} · <span class=${"role-badge " + me.role}>${ROLE_LABEL[me.role]}</span></div></div></div>
+    <div class="account-head"><${Avatar} user=${{ ...me, avatar: pic }} size=${64} />
+      <div><h3>${me.display_name || me.username}</h3><div class="muted">${me.username}${me.email ? ` · ${me.email}` : ""} · <span class=${"role-badge " + me.role}>${ROLE_LABEL[me.role]}</span></div>
+        ${me.id ? (me.avatar_locked ? html`<div class="muted small"><${Icon} name="lock" size=${12} /> An admin set your picture.</div>`
+          : html`<div class="row avatar-row">
+              <button class="btn sm" onClick=${async () => {
+                try { const img = await pickImage(); if (!img) return; const r = await api("/api/me/avatar", { method: "PUT", body: { image: img } }); setPic(r.avatar); toast("Picture updated"); } catch (e) { toast(e.message, "err"); }
+              }}><${Icon} name="user" size=${14} />${pic ? "Change picture" : "Add a picture"}</button>
+              ${pic && html`<button class="btn sm ghost" onClick=${async () => { await api("/api/me/avatar", { method: "DELETE" }); setPic(null); toast("Picture removed"); }}>Remove</button>`}
+            </div>`) : null}
+      </div></div>
 
     <${ProfileForm} me=${me} />
     ${me.method !== "token" && html`<h4 class="section">${me.has_password ? "Change password" : "Set a password"}</h4>
@@ -499,29 +552,69 @@ export function AccountModal({ me, onClose }) {
       return null;
     }}>Save password</button></div>`}
 
-    <h4 class="section">API tokens</h4>
-    ${tokens && !tokens.enabled ? html`<p class="muted">API tokens are turned off by an admin.</p>` : html`
-      <p class="muted">Use <span class="mono">Authorization: Bearer &lt;token&gt;</span> in scripts, or open the link once on a kiosk. A token never has more rights than you.</p>
-      ${created && html`<div class="notice good"><${Icon} name="key" /><div><b>Copy it now — it's shown only once.</b>
-        <div class="row mono token"><span>${created.token}</span><${Copy} text=${created.token} /></div>
-        <div class="row small"><span class="muted mono token"><span>${created.link}</span></span><${Copy} text=${created.link} /></div>
-        <div class="muted small">Open the link once on a phone or kiosk: it signs that browser in as you (${ROLE_LABEL[tf.role]} or lower) and stays signed in.</div></div></div>`}
-      <div class="grid3">
-        <${Field} label="Name"><input value=${tf.name} placeholder="backup script" onInput=${(e) => setTf({ ...tf, name: e.target.value })} /></${Field}>
-        <${Field} label="Role"><select value=${tf.role} onChange=${(e) => setTf({ ...tf, role: e.target.value })}>${ROLES.filter((r) => rank(r) <= rank(me.role)).map((r) => html`<option value=${r}>${ROLE_LABEL[r]}</option>`)}</select></${Field}>
-        <${Field} label="Expires after (days, 0 = never)"><input type="number" min="0" value=${tf.days} onInput=${(e) => setTf({ ...tf, days: e.target.value })} /></${Field}>
-      </div>
-      <${Field} label="Token (optional)" hint="Leave blank for a random one. Your own value makes a link you can type: at least 16 characters — letters, digits, . _ ~ -">
-        <input value=${tf.value} autocomplete="off" spellcheck="false" placeholder="random" onInput=${(e) => setTf({ ...tf, value: e.target.value })} /></${Field}>
-      ${tf.value && html`<div class="muted small mono">${location.origin}/?token=${tf.value}</div>`}
-      <div class="form-actions"><button class="btn ghost" onClick=${async () => {
-        try { setCreated(await api("/api/me/tokens", { method: "POST", body: tf })); setTf({ ...tf, name: "", value: "" }); loadTokens(); } catch (e) { toast(e.message, "err"); }
-      }}><${Icon} name="plus" />Create token</button></div>
-      ${tokens && tokens.tokens.length > 0 && html`<table class="table"><thead><tr><th>Name</th><th>Role</th><th>Created</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
-        <tbody>${tokens.tokens.map((t) => html`<tr key=${t.id}><td><b>${t.name}</b></td><td>${ROLE_LABEL[t.role]}</td><td class="small">${ago(t.created_at)}</td>
-          <td class="small">${ago(t.last_used)}</td><td class="small">${t.expires_at ? when(t.expires_at) : "never"}</td>
-          <td class="actions"><button class="icon-btn sm danger" title="Revoke" onClick=${async () => { await api(`/api/me/tokens/${t.id}`, { method: "DELETE" }); toast("Revoked"); loadTokens(); }}><${Icon} name="trash" size=${15} /></button></td></tr>`)}</tbody></table>`}`}
+    <h4 class="section">Sign-in links</h4>
+    ${tokens && !tokens.enabled ? html`<p class="muted">Sign-in links are turned off by an admin.</p>` : html`<${SignInLinks} me=${me} tokens=${tokens} reload=${loadTokens} />`}
   </${Modal}>`;
+}
+
+const TOKEN_RE = /^[A-Za-z0-9._~-]{16,128}$/;
+
+// personal sign-in links (API tokens): open once on a phone or tablet and it stays signed in
+function SignInLinks({ me, tokens, reload }) {
+  const [tf, setTf] = useState({ name: "", role: me.role, days: 0, value: "" });
+  const [created, setCreated] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const code = tf.value.trim();
+  const bad = code && !TOKEN_RE.test(code);
+  const link = `${location.origin}/?token=`;
+  return html`
+    <div class="explain">
+      <p><b>A sign-in link signs a device in as you, without a password.</b> Open it once on your phone or a wall tablet
+        and that device stays signed in. It never has more access than you do.</p>
+      <p class="muted small">Anyone who has the link can get in, so treat it like a password. You can revoke it below at any time.</p>
+    </div>
+
+    ${created && html`<div class="link-created">
+      <div class="lc-title"><${Icon} name="check" /> Your sign-in link is ready</div>
+      <div class="uri-row big"><code>${created.link}</code><${Copy} text=${created.link} /></div>
+      <div class="muted small">Copy it now: the full link is only shown this once. Open it on the device you want signed in.</div>
+    </div>`}
+
+    <div class="link-builder">
+      <div class="grid2">
+        <${Field} label="Name" hint="So you recognise it later, e.g. “My phone” or “Desk 4 tablet”.">
+          <input value=${tf.name} placeholder="My phone" onInput=${(e) => setTf({ ...tf, name: e.target.value })} /></${Field}>
+        <${Field} label="Code (optional)" hint="The secret part of the link. Leave empty for a random one, or type your own: 16+ letters, digits, . _ ~ -">
+          <input value=${tf.value} autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="random"
+            onInput=${(e) => setTf({ ...tf, value: e.target.value })} /></${Field}>
+      </div>
+      <div class="field"><span class="field-label">Your link will be</span>
+        <div class="uri-row big"><code>${link}<b class=${code ? "" : "placeholder"}>${code || "(random code, shown when you create it)"}</b></code></div>
+        ${bad && html`<small class="err-text">${code.length < 16 ? `${16 - code.length} more character${16 - code.length === 1 ? "" : "s"} needed.` : "Only letters, digits and . _ ~ - are allowed."}</small>`}
+      </div>
+      <details class="more"><summary>More options</summary>
+        <div class="grid2">
+          <${Field} label="Access" hint="The link can have less access than you, never more.">
+            <select value=${tf.role} onChange=${(e) => setTf({ ...tf, role: e.target.value })}>${ROLES.filter((r) => rank(r) <= rank(me.role)).map((r) => html`<option value=${r}>${ROLE_LABEL[r]}</option>`)}</select></${Field}>
+          <${Field} label="Stops working after (days)" hint="0 = never."><input type="number" min="0" value=${tf.days} onInput=${(e) => setTf({ ...tf, days: e.target.value })} /></${Field}>
+        </div>
+        <p class="muted small">For scripts: send the code in an <span class="mono">Authorization: Bearer ${"<code>"}</span> header instead of opening the link.</p>
+      </details>
+      <div class="form-actions"><button class="btn primary" disabled=${busy || bad || !tf.name.trim()} onClick=${async () => {
+        setBusy(true);
+        try { setCreated(await api("/api/me/tokens", { method: "POST", body: tf })); setTf({ ...tf, name: "", value: "" }); reload(); } catch (e) { toast(e.message, "err"); }
+        setBusy(false);
+      }}><${Icon} name="link" size=${15} />Create sign-in link</button></div>
+    </div>
+
+    ${tokens && tokens.tokens.length > 0 && html`<h4 class="section">Your links</h4>
+      <table class="table"><thead><tr><th>Name</th><th>Access</th><th>Created</th><th>Last used</th><th>Stops working</th><th></th></tr></thead>
+      <tbody>${tokens.tokens.map((t) => html`<tr key=${t.id}><td><b>${t.name}</b></td><td>${ROLE_LABEL[t.role]}</td><td class="small">${ago(t.created_at)}</td>
+        <td class="small">${ago(t.last_used)}</td><td class="small">${t.expires_at ? when(t.expires_at) : "never"}</td>
+        <td class="actions"><button class="btn sm ghost danger-text" onClick=${async () => {
+          if (!await ask({ title: `Revoke “${t.name}”?`, body: "Devices signed in with this link are signed out.", danger: true, confirm: "Revoke" })) return;
+          await api(`/api/me/tokens/${t.id}`, { method: "DELETE" }); toast("Revoked"); reload();
+        }}>Revoke</button></td></tr>`)}</tbody></table>`}`;
 }
 
 function ProfileForm({ me }) {

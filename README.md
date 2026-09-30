@@ -79,6 +79,7 @@ Everything lives in `./data` (a bind mount) on the host:
 |---|---|
 | `data/vlanmgr.db` | SQLite: users, sessions, API tokens (hashed), settings, environments with their UniFi API keys, who may use which environment, activity log |
 | `data/backups/` | a copy of the DB taken automatically before each version upgrade (newest 10 kept) |
+| `data/avatars/` | profile pictures |
 
 Schema changes are additive only, so a newer image keeps using your existing DB. To roll
 back, stop the container, copy a backup over `data/vlanmgr.db`, and run the older tag.
@@ -102,7 +103,7 @@ in. API keys are never sent to any browser, not even an admin's.
 | Connection | Use it for | You need |
 |---|---|---|
 | **Direct** | a console or UniFi OS instance this server can reach (a UniFi-hosted console works via its own URL) | Its address (e.g. `https://10.1.2.3` or `https://10.1.2.3:11443`) and an API key from **Network → Settings → Control Plane → Integrations** in that console |
-| **UniFi cloud** *(experimental)* | a console this server can't reach directly | An API key from **unifi.ui.com → API**, then **Find consoles** to pick it. Requests go through `api.ui.com/v1/connector`. |
+| **UniFi cloud** *(experimental)* | a console this server can't reach directly | An **account** API key from [unifi.ui.com/api](https://unifi.ui.com/api) (not the console's Network → Integrations key), then **Find my consoles**, or paste the address of any unifi.ui.com page of that console and the ID is worked out for you. Requests go through `api.ui.com/v1/connector`. |
 
 - **Site** is UniFi's internal site name, usually `default`. **Test connection** lists the
   sites to pick from.
@@ -185,6 +186,9 @@ Roles are described under [Who gets what](#who-gets-what).
 - Under **Users**, an admin can:
   - change roles and access
   - rename anyone, including the first `admin`
+  - set anyone's profile picture, and lock it so they can't change it
+  - **View as** a supervisor or viewer to see exactly what they see. A banner shows it, and
+    changes are logged as "you (as them)".
   - disable, delete, reset passwords and sign users out
 
   The last admin can't be demoted or removed. Everyone can change their own display name
@@ -203,10 +207,13 @@ Set up under **Settings → Sign-in**. Any combination works:
   - New SSO users are created as Viewer with no environments on first sign-in. Or turn that
     off and have an admin add them first (matched by username or email).
   - Optional **allowed groups** limits who may sign in at all.
-- **API tokens**: every user, Viewers included, can create their own under **My account**.
-  - Pick a random token or type your own (16+ characters) for a link you can remember.
-  - Use it as `Authorization: Bearer <token>` in scripts, or open
-    `https://<app>/?token=<token>` once on a phone or kiosk to sign that browser in.
+- **Sign-in links** (API tokens): every user, Viewers included, can create their own under
+  **My account → Sign-in links**.
+  - A link looks like `https://<app>/?token=<code>`. Open it once on a phone or wall tablet
+    and that device stays signed in as you.
+  - Leave the code empty for a random one, or type your own (16+ characters). The full link
+    is shown as you type.
+  - For scripts, send the code as `Authorization: Bearer <code>`.
   - A token never has more rights than its owner or its own role. Revoking it also signs out
     the browsers that used its link.
 - **Stay signed in**: 30 days by default (adjustable), counted from the last visit. With SSO
@@ -222,7 +229,9 @@ Set up under **Settings → Sign-in**. Any combination works:
    - Client type **Confidential**.
    - Paste the redirect URI, and optionally the launch URL.
 3. Back in the app: **Issuer URL** `https://auth.example.com/application/o/<slug>/`, plus the
-   client ID and secret. Click **Test provider**, turn on SSO (and auto sign-in if you like), then save.
+   client ID and secret. Click **Test provider**: it finds the provider *and* checks that it
+   accepts the client ID and secret, so you'll see any mismatch now instead of an
+   `invalid_client` error at sign-in. Turn on SSO (and auto sign-in if you like), then save.
 4. Optional: to limit who can sign in, put an Authentik group in **Allowed groups**. Authentik's
    default `profile` scope already sends a `groups` claim. Roles and access are then given
    in **Users**.

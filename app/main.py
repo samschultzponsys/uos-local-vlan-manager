@@ -500,6 +500,15 @@ def _env_fields(data, partial):
     return vals
 
 
+def _resolve_console(vals, env=None):
+    """Turn a pasted unifi.ui.com URL / console UUID into the connector's console ID."""
+    mode = vals.get("mode") or (env["mode"] if env is not None else "local")
+    if mode == "cloud" and vals.get("console_id"):
+        key = vals.get("api_key") or (env["api_key"] if env is not None else "")
+        vals["console_id"] = unifi.UniFi(mode="cloud", api_key=key).resolve_console_id(vals["console_id"])
+    return vals
+
+
 def _safe(vals):
     return {k: ("•••" if k == "api_key" else v) for k, v in vals.items()}
 
@@ -520,6 +529,7 @@ def api_admin_env_create():
     except ValueError as e:
         return _deny(str(e))
     vals.setdefault("mode", "local")
+    _resolve_console(vals)
     vals["created_at"] = db.now()
     d = db.get()
     cur = d.execute(f"INSERT INTO environments ({', '.join(vals)}) VALUES ({', '.join('?' * len(vals))})",
@@ -546,6 +556,7 @@ def api_admin_env(env_id):
         vals = _env_fields(request.get_json(silent=True) or {}, partial=True)
     except ValueError as e:
         return _deny(str(e))
+    _resolve_console(vals, env)
     if vals:
         d.execute(f"UPDATE environments SET {', '.join(k + '=?' for k in vals)} WHERE id=?",
                   list(vals.values()) + [env_id])
@@ -560,6 +571,7 @@ def _candidate_client(data):
     env = envs.get(int(data["env_id"])) if data.get("env_id") else None
     vals = _env_fields({**data, "name": data.get("name") or "x"}, partial=True)
     vals.pop("name", None)
+    _resolve_console(vals, env)
     return envs.client(env, vals)
 
 
@@ -578,7 +590,8 @@ def api_admin_env_test():
         data = unifi.normalize(c.raw_devices(), c.raw_networks(), [], [], True)
     except unifi.UniFiError as e:
         return jsonify({"ok": False, "sites": sites, "error": f"Connected, but site '{c.site}': {e}"})
-    return jsonify({"ok": True, "sites": sites, "devices": len(data["devices"]), "networks": len(data["networks"])})
+    return jsonify({"ok": True, "sites": sites, "devices": len(data["devices"]), "networks": len(data["networks"]),
+                    "console_id": c.console_id if c.mode == "cloud" else None})
 
 
 @app.route("/api/admin/envs/consoles", methods=["POST"])

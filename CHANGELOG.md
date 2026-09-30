@@ -5,6 +5,41 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 1.3 — 2026-09-30
+
+### Added
+- **Profile pictures.** Add or change yours under My account.
+  - Photos are cropped to a square and shrunk on your device before upload.
+  - Admins can set anyone's picture under Users → edit, and **lock** it so that person can't
+    change or remove it.
+- **View as** (admins): from Users, see the app exactly as a supervisor or viewer sees it.
+  - A banner shows who you're viewing as, with a Stop button.
+  - Anything you change meanwhile is logged as "you (as them)".
+  - Their own password, sign-in links, picture and preferences can't be changed while viewing
+    as them, and admins can't view as other admins.
+- **Day / night toggle** (sun / moon) next to the settings gear, for everyone. It's still in
+  the menu too.
+- **SSO: Test provider now checks the client ID and secret** against your provider and tells
+  you whether they're accepted, so an `invalid_client` sign-in failure is explained up front.
+  It also picks how they're sent (HTTP Basic or form POST) when your provider only accepts one,
+  and there's a new **Client authentication** setting.
+
+### Changed
+- **Sign-in links** (My account) are explained in plain language.
+  - As you type your own code, the full link shows in a large box, with a live check of the
+    length and allowed characters.
+  - After creating it, the complete link is shown with a copy button.
+  - Script use (the `Authorization: Bearer` header) moved under *More options*.
+- **Cloud environments are set up in numbered steps**:
+  1. Paste an account API key from unifi.ui.com/api.
+  2. Press **Find my consoles**, or paste the address of any unifi.ui.com page of that
+     console.
+
+  The console ID is filled in and converted for you. Errors explain when the wrong kind of
+  API key is used.
+- Failed SSO sign-ins show what's wrong on the login page (client ID/secret rejected, or
+  redirect URI mismatch) instead of "check the server log".
+
 ## 1.2 — 2026-09-30
 
 ### Added

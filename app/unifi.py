@@ -25,6 +25,7 @@ read, changed for the one port, and written back - then read again to verify.
 """
 
 import copy
+import re
 import threading
 import time
 
@@ -102,9 +103,16 @@ class UniFi:
         except requests.RequestException as e:
             raise UniFiError(f"Can't reach UniFi: {e.__class__.__name__}")
         if r.status_code in (401, 403):
+            if self.mode == "cloud":
+                raise UniFiError("The UniFi cloud rejected the API key (HTTP %d). Cloud mode needs an account key from "
+                                 "unifi.ui.com → API (Site Manager), not the console's Network → Integrations key."
+                                 % r.status_code)
             raise UniFiError("UniFi rejected the API key (HTTP %d) - check the key and that it "
                              "belongs to an admin with Network access" % r.status_code)
         if r.status_code == 404:
+            if self.mode == "cloud":
+                raise UniFiError("The UniFi cloud connector returned 404 - check the console (use Find consoles) "
+                                 "and the site. If the console is reachable from this server, Direct is more reliable.")
             raise UniFiError(f"UniFi returned 404 for {path} - check the host and site")
         if r.status_code >= 400:
             msg = ""
@@ -145,9 +153,31 @@ class UniFi:
         out = []
         for h in r.json().get("data") or []:
             rs = h.get("reportedState") or {}
+            hw = h.get("hardwareId") or rs.get("hardwareId") or ""
             out.append({"id": h.get("id"), "name": rs.get("name") or rs.get("hostname") or h.get("id"),
-                        "ip": h.get("ipAddress") or "", "type": h.get("type") or ""})
+                        "ip": h.get("ipAddress") or "", "type": h.get("type") or "",
+                        "hardware_id": hw, "online": (rs.get("state") or "connected") == "connected"})
         return out
+
+    def resolve_console_id(self, value):
+        """Accept a console ID, or a unifi.ui.com page URL / console UUID copied from the
+        address bar, and return the ID the cloud connector wants (the host id from /v1/hosts)."""
+        value = (value or "").strip()
+        m = re.search(r"/consoles/([^/?#]+)", value)
+        if m:
+            value = m.group(1)
+        if not value or not self.api_key:
+            return value
+        try:
+            hosts = self.cloud_consoles()
+        except UniFiError:
+            return value
+        low = value.lower()
+        for h in hosts:
+            ids = {str(h.get("id") or "").lower(), str(h.get("hardware_id") or "").lower()}
+            if low in ids or any(low and low in i for i in ids if i):
+                return h["id"]
+        return value
 
     def raw_devices(self):
         return self._req("GET", self._site("/stat/device")) or []
