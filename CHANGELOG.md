@@ -5,6 +5,15 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 4.1 — 2026-10-01
+
+### Changed
+- **Port glow, reworked**: lit ports now fade their color most of the way to **see-through** at the
+  low point of each breath and come back to the full color and glow at the peak, which is back
+  to the brightness from before 4.0. The breath is a little **slower** (3.6 s instead of 2.8 s).
+- *Faint*, *Soft* (default) and *Bright* now set how far it fades and how strong the peak is:
+  Faint keeps most of the color, Bright fades nearly all the way. *Solid* still turns it off.
+
 ## 4.0 — 2026-10-01
 
 ### Changed

@@ -901,18 +901,24 @@ select option:checked { background-color: var(--accent); color: #fff; }
 .k-wan { display: inline-grid; place-items: center; width: 18px; height: 14px; border-radius: 3px; border: 1.5px solid #d4a017;
   background: #2a2418; color: #fbbf24; }
 
-/* lit ports breathe in their network's color. Display options -> Port glow: Faint, Soft (default), Bright or Solid (off) */
-.fx-pulse { --pg-blur: 10px; --pg-spread: 0px; --pg-mix: 45%; --pg-sat: 1.08; --pg-bright: 1.03; }      /* Soft */
-.fx-pulse.fx-faint { --pg-blur: 6px; --pg-spread: -1px; --pg-mix: 25%; --pg-sat: 1.02; --pg-bright: 1.01; }
-.fx-pulse.fx-bright { --pg-blur: 18px; --pg-spread: 3px; --pg-mix: 90%; --pg-sat: 1.3; --pg-bright: 1.1; }
+/* lit ports breathe in their network's color: at the peak the full color and a glow, at the low point the color
+   fades most of the way to see-through. Display options -> Ports with link: Faint, Soft (default), Bright, or Solid (off).
+   --pg-low is how much color is left at the low point; the rest set the glow at the peak. */
+.fx-pulse { --pg-low: 30%; --pg-blur: 18px; --pg-spread: 3px; --pg-mix: 90%; --pg-sat: 1.3; --pg-bright: 1.1; }      /* Soft */
+.fx-pulse.fx-faint { --pg-low: 60%; --pg-blur: 10px; --pg-spread: 0px; --pg-mix: 50%; --pg-sat: 1.08; --pg-bright: 1.03; }
+.fx-pulse.fx-bright { --pg-low: 15%; --pg-blur: 24px; --pg-spread: 4px; --pg-mix: 100%; --pg-sat: 1.4; --pg-bright: 1.15; }
+/* a registered property can be animated, so the fill itself fades (browsers without it keep a steady fill) */
+@property --pf { syntax: "<percentage>"; inherits: false; initial-value: 100%; }
 @keyframes portPulse {
-  0%, 100% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 2px 8px -4px var(--c), 0 1px 0 rgba(255, 255, 255, .7); filter: none; }
-  50% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 0 var(--pg-blur) var(--pg-spread) color-mix(in srgb, var(--c) var(--pg-mix), transparent), 0 1px 0 rgba(255, 255, 255, .7);
+  0%, 100% { --pf: var(--pg-low); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 0 0 0 transparent, 0 1px 0 rgba(255, 255, 255, .7); filter: none; }
+  50% { --pf: 100%; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 0 var(--pg-blur) var(--pg-spread) color-mix(in srgb, var(--c) var(--pg-mix), transparent), 0 1px 0 rgba(255, 255, 255, .7);
     filter: saturate(var(--pg-sat)) brightness(var(--pg-bright)); }
 }
 /* on unless the person picks Solid (the OS "reduce motion" setting doesn't turn it off: nothing moves, it only glows) */
-.fx-pulse .port.up:not(.wan):not(.dim) { animation: portPulse 2.8s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -.23s); }
-.fx-pulse .prow.up .prow-num { animation: portPulse 2.8s ease-in-out infinite; }
+.fx-pulse .port.up:not(.wan):not(.dim) {
+  background: linear-gradient(180deg, color-mix(in srgb, color-mix(in srgb, var(--c) 78%, #fff) var(--pf), transparent), color-mix(in srgb, var(--c) var(--pf), transparent));
+  animation: portPulse 3.6s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -.3s); }
+.fx-pulse .prow.up .prow-num { animation: portPulse 3.6s ease-in-out infinite; }
 
 /* the key: its own collapsible section */
 .key-box { margin-top: 20px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
