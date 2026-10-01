@@ -1159,6 +1159,40 @@ def api_audit():
     return jsonify(out)
 
 
+@app.route("/api/admin/storage")
+@auth.require("system.manage")
+def api_storage():
+    """How much the data folder uses and on what, and how full the disk under it is."""
+    import shutil
+    d = db.DATA_DIR
+    parts = []
+    tables = db.table_sizes()
+    db_total = db.db_size()
+    if tables:
+        free_pages = max(0, db_total - sum(tables.values()))
+        labels = {"activity": "Activity log", "feedback": "Feedback and requests",
+                  "people": "People, sign-ins and roles", "other": "Settings and environments"}
+        for k in ("activity", "feedback", "people", "other"):
+            parts.append({"key": f"db.{k}", "label": labels[k], "bytes": tables[k], "group": "Database"})
+        if free_pages > 4096:
+            parts.append({"key": "db.free", "label": "Free space inside the database", "bytes": free_pages, "group": "Database"})
+    else:
+        parts.append({"key": "db", "label": "Database", "bytes": db_total, "group": "Database"})
+    for key, folder, label in (("files.feedback", "feedback", "Feedback screenshots"), ("files.avatars", "avatars", "Profile pictures"),
+                               ("files.brand", "brand", "Logo and tab icon"), ("files.backups", "backups", "Upgrade backups")):
+        n, size = db.folder_size(os.path.join(d, folder))
+        parts.append({"key": key, "label": label, "bytes": size, "files": n, "group": "Files"})
+    backups = sorted((f for f in os.listdir(db.BACKUP_DIR)) if os.path.isdir(db.BACKUP_DIR) else [])
+    try:
+        du = shutil.disk_usage(d)
+        disk = {"total": du.total, "used": du.used, "free": du.free}
+    except OSError:
+        disk = None
+    return jsonify({"parts": parts, "total": sum(p["bytes"] for p in parts), "database": db_total,
+                    "backups_kept": db.BACKUPS_KEPT, "backups": len([b for b in backups if b.endswith(".db")]),
+                    "disk": disk, "data_dir": d})
+
+
 @app.route("/api/audit/retention", methods=["PUT"])
 @auth.require("system.manage")
 def api_audit_retention():

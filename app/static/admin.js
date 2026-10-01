@@ -1170,6 +1170,39 @@ function dayLabel(d) {
 /** "admin (as vera)" -> "admin" for grouping by person */
 const actor = (r) => (r.username || "?").replace(/ \(as .*\)$/, "");
 
+const STORE_COLORS = { "db.activity": "#60a5fa", "db.feedback": "#a78bfa", "db.people": "#34d399", "db.other": "#94a3b8",
+  "db.free": "#475569", db: "#60a5fa", "files.feedback": "#f472b6", "files.avatars": "#fbbf24", "files.brand": "#fb923c",
+  "files.backups": "#2dd4bf" };
+
+/** Super admins: what the app's data folder holds, and how full the disk under it is. Loads when opened. */
+function StoragePanel() {
+  const [open, setOpen] = useState(false);
+  const [s, setS] = useState(null);
+  useEffect(() => { if (open && !s) api("/api/admin/storage").then(setS).catch((e) => toast(e.message, "err")); }, [open]);
+  const pct = (n, of) => (of ? Math.max(n ? 0.6 : 0, (n / of) * 100) : 0);
+  return html`<details class="storage" open=${open} onToggle=${(e) => setOpen(e.currentTarget.open)}>
+    <summary><${Icon} name="layers" size=${15} /><b>Storage</b>${s && html`<span class="muted small"> · the app uses ${bytes(s.total)}${s.disk ? ` · ${bytes(s.disk.free)} free on the disk` : ""}</span>`}</summary>
+    ${open && !s && html`<${Spinner} />`}
+    ${s && html`<div class="storage-body">
+      <div class="store-bar" role="img" aria-label="What the app's data uses">
+        ${s.parts.filter((p) => p.bytes).map((p) => html`<span title=${`${p.label}: ${bytes(p.bytes)}`} style=${`width:${pct(p.bytes, s.total)}%;background:${STORE_COLORS[p.key] || "#64748b"}`}></span>`)}</div>
+      <div class="store-groups">${["Database", "Files"].map((g) => html`<div class="store-group" key=${g}>
+        <div class="field-label">${g}${g === "Database" ? html`<span class="muted"> · ${bytes(s.database)} file</span>` : ""}</div>
+        ${s.parts.filter((p) => p.group === g).map((p) => html`<div class="store-row" key=${p.key}>
+          <span class="store-dot" style=${`background:${STORE_COLORS[p.key] || "#64748b"}`}></span>
+          <span class="store-label">${p.label}${p.files != null && p.files > 0 ? html`<span class="muted small"> · ${p.files} file${p.files === 1 ? "" : "s"}</span>` : ""}</span>
+          <b class="store-size">${bytes(p.bytes)}</b></div>`)}</div>`)}</div>
+      ${s.disk && html`<div class="store-disk">
+        <div class="field-label">Disk${s.data_dir ? html`<span class="muted"> · ${s.data_dir}</span>` : ""}</div>
+        <div class="store-bar disk"><span style=${`width:${pct(s.disk.used - s.total, s.disk.total)}%;background:#64748b`} title="Everything else on the disk"></span>
+          <span style=${`width:${pct(s.total, s.disk.total)}%;background:var(--accent)`} title="This app"></span></div>
+        <div class="muted small">${bytes(s.disk.used)} of ${bytes(s.disk.total)} used (this app ${bytes(s.total)}) · <b>${bytes(s.disk.free)} free</b></div></div>`}
+      <p class="muted small">Upgrade backups: the newest ${s.backups_kept} are kept (${s.backups} now). Activity follows the retention above;
+        deleted feedback takes its screenshot with it.</p>
+    </div>`}
+  </details>`;
+}
+
 export function AuditModal({ onClose, me }) {
   const can = (c) => ((me && me.caps) || []).includes(c);
   const [rows, setRows] = useState(null);
@@ -1319,5 +1352,6 @@ export function AuditModal({ onClose, me }) {
       <select value=${meta.retention_days} onChange=${(e) => setRetention(Number(e.target.value))} aria-label="Keep activity for">
         ${RETENTION.some(([d]) => d === meta.retention_days) ? null : html`<option value=${meta.retention_days}>${meta.retention_days} days</option>`}
         ${RETENTION.map(([d, l]) => html`<option value=${d}>${l}</option>`)}</select></div>`}
+    ${meta && meta.can_retention && html`<${StoragePanel} key=${meta.log_count} />`}
   </${Modal}>`;
 }

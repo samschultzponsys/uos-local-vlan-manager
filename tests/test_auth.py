@@ -493,3 +493,13 @@ def test_only_super_admins_merge(app, admin):
     uid, adm = make_user(admin, app, "ada", "admin")
     vid, _ = make_user(admin, app, "vin")
     assert adm.post(f"/api/users/{uid}/merge", json={"from": vid}).status_code == 403
+
+
+def test_view_as_someone_who_never_signed_in(app, admin):
+    uid = admin.post("/api/users", json={"username": "newbie", "password": "temppass123"}).get_json()["user"]["id"]
+    assert admin.post(f"/api/users/{uid}/impersonate", json={}).status_code == 200
+    me = admin.get("/api/me").get_json()
+    # their temporary password doesn't lock the admin out while viewing as them
+    assert me["username"] == "newbie" and me["impersonator"]["username"] == "admin" and not me.get("must_change_password")
+    assert admin.get("/api/envs").status_code == 200
+    assert admin.post("/api/impersonate/stop", json={}).status_code == 200

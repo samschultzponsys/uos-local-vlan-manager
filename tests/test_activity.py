@@ -82,3 +82,14 @@ def test_retention_shows_the_log_size(app, admin):
     assert meta["log_count"] >= 1 and meta["log_size"] > 0 and meta["db_size"] >= meta["log_size"]
     r = admin.put("/api/audit/retention", json={"days": 365}).get_json()
     assert r["log_count"] >= 1 and r["log_size"] > 0
+
+
+def test_storage_overview(app, admin):
+    from conftest import make_user
+    s = admin.get("/api/admin/storage").get_json()
+    keys = {p["key"] for p in s["parts"]}
+    assert {"files.feedback", "files.avatars", "files.brand", "files.backups"} <= keys
+    assert s["total"] == sum(p["bytes"] for p in s["parts"]) and s["database"] > 0
+    assert s["disk"]["total"] >= s["disk"]["free"] > 0
+    uid, adm = make_user(admin, app, "ada", "admin")
+    assert adm.get("/api/admin/storage").status_code == 403   # super admins only

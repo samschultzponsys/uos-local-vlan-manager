@@ -934,7 +934,8 @@ def init_app(app):
             pw = db.get_setting("initial_admin_password", "")
             out["initial_password"] = bool(row["seeded"] and pw)
             out["pending"] = bool(row["pending"])
-            out["must_change_password"] = bool(row["must_change_pw"]) and u["method"] in ("local", "oidc")
+            out["must_change_password"] = bool(row["must_change_pw"]) and u["method"] in ("local", "oidc") \
+                and not u.get("impersonator")   # an admin viewing as them isn't asked
             out["sso_linked"] = bool(row["oidc_sub"]) or bool(row["sso_allowed"])
         for fn in ME_EXTRAS:   # e.g. feedback news and requests waiting (feedback.py)
             fn(u, out)

@@ -1316,3 +1316,17 @@ button.fb-status.on { box-shadow: 0 0 0 2px color-mix(in srgb, var(--st) 45%, tr
 .role-badge.superadmin { color: #fde68a; background: rgba(251, 191, 36, .16); }
 [data-theme="light"] .role-badge.superadmin { color: #92400e; }
 .audit-size { margin-top: 2px; }
+.storage { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--border); }
+.storage summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; flex-wrap: wrap; }
+.storage summary::-webkit-details-marker { display: none; }
+.storage-body { display: grid; gap: 12px; margin-top: 12px; }
+.store-bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--surface3); gap: 1px; }
+.store-bar span { height: 100%; min-width: 0; }
+.store-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 24px; }
+.store-group { display: grid; gap: 6px; }
+.store-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.store-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.store-label { flex: 1; min-width: 0; }
+.store-size { font-variant-numeric: tabular-nums; }
+.store-disk { display: grid; gap: 6px; }
+.storage p { margin: 0; }

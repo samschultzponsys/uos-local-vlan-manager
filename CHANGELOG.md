@@ -5,6 +5,19 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 4.4 — 2026-10-01
+
+### Added
+- **Storage** (super admins, bottom of Activity): what the app's data folder uses, as a bar and a
+  list: in the database the activity log, feedback and requests, people / sign-ins / roles, and
+  settings / environments; as files the feedback screenshots, profile pictures, logo and tab icon,
+  and the upgrade backups (the newest 10 are kept). Below it, how full the disk is and how much is
+  free. It loads when you open it.
+
+### Fixed
+- Viewing as someone whose password an admin set no longer reports their password as due to the
+  admin doing the viewing (the screen was never shown; now the flag isn't either).
+
 ## 4.3 — 2026-10-01
 
 ### Added

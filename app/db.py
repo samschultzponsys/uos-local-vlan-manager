@@ -331,6 +331,45 @@ def audit_size():
     return n, size
 
 
+# what each part of the app keeps in the database (for Activity -> Storage)
+TABLE_GROUPS = {
+    "activity": ("audit",),
+    "feedback": ("feedback", "feedback_votes", "feedback_comments", "feedback_unseen"),
+    "people": ("users", "sessions", "api_tokens", "user_env", "roles"),
+}
+
+
+def table_sizes():
+    """{group: bytes} inside the database file (activity, feedback, people, everything else), or None
+    when SQLite can't tell (built without the dbstat table)."""
+    conn = get()
+    try:
+        rows = conn.execute("SELECT s.name, SUM(s.pgsize) FROM dbstat s GROUP BY s.name").fetchall()
+        tables = {r[0]: r[1] for r in conn.execute("SELECT name, tbl_name FROM sqlite_master")}
+    except sqlite3.Error:
+        return None
+    out = {k: 0 for k in TABLE_GROUPS}
+    out["other"] = 0
+    for name, size in rows:
+        owner = tables.get(name, name)   # an index counts for its table
+        group = next((g for g, ts in TABLE_GROUPS.items() if owner in ts), "other")
+        out[group] += size or 0
+    return out
+
+
+def folder_size(path):
+    """(files, bytes) under a folder."""
+    n = total = 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+                n += 1
+            except OSError:
+                pass
+    return n, total
+
+
 def db_size():
     """The database file on disk, with its write-ahead log."""
     return sum(os.path.getsize(p) for p in (DB_PATH, DB_PATH + "-wal") if os.path.isfile(p))
