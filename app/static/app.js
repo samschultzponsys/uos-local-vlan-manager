@@ -1,7 +1,7 @@
 import { render, useState, useEffect, useMemo, useCallback, useRef, useErrorBoundary } from "./vendor/preact-htm.module.js";
 import {
   html, api, Icon, Modal, Segmented, Toggle, Toasts, toast, Spinner, useInterval, Logo, setBrand, markdown,
-  vlanColors, colorsFor, colorKey, readable, glyphHalo, speedLabel, linkLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
+  vlanColors, colorsFor, colorKey, readable, glyphHalo, speedLabel, linkLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, askText, AskHost, Avatar,
 } from "./ui.js";
 import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
 import { SetupWizard, wizardNeeded } from "./wizard.js";
@@ -578,6 +578,9 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
   const lock = port.lock;
   const fixedTags = nativeOnly(device);   // e.g. USW Flex Mini: only the native VLAN can be set
   const canEdit = !readonly && !port.wan && can("ports.change") && (!port.protected || mayProtected) && (!lock || isAdmin);
+  // can't change it, but may ask for the change
+  const canRequest = !canEdit && !readonly && !port.wan && can("requests.ports");
+  const formOn = canEdit || canRequest;
   const [lockNote, setLockNote] = useState("");
   const [lockBusy, setLockBusy] = useState(false);
   const portUrl = `/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}`;
@@ -703,10 +706,12 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
       ${canEdit && allowed.length === 0 && html`<div class="notice warn"><${Icon} name="info" /><div>You haven't been given any networks in this environment. Ask an admin.</div></div>`}
 
       ${!readonly && !port.wan && html`<div class="panel">
-        <div class="panel-title">Core settings ${!canEdit && html`<span class="badge">View only</span>`}</div>
+        <div class="panel-title">Core settings ${canRequest ? html`<span class="badge">Request</span>` : !canEdit && html`<span class="badge">View only</span>`}</div>
+        ${canRequest && html`<p class="muted small req-hint"><${Icon} name="send" size=${13} /> You can't change this port yourself${port.protected && can("ports.change") ? " (it's protected)" : lock && can("ports.change") ? " (it's locked)" : ""}.
+          Pick what you need and send a request: someone who can will approve it.</p>`}
         <label class="field"><span class="field-label">Native VLAN / Network</span>
           <div class="select-wrap"><span class="dot" style=${`background:${colors[native]}`}></span>
-            <select value=${native} disabled=${!canEdit} onChange=${(e) => edit(setNative)(e.target.value)}>
+            <select value=${native} disabled=${!formOn} onChange=${(e) => edit(setNative)(e.target.value)}>
               ${networks.filter((n) => n.allowed || n.id === native || n.id === port.native_network_id).map((n) =>
                 html`<option value=${n.id} disabled=${!n.allowed}>${n.name} (${n.vlan})${n.allowed ? "" : " — not yours"}</option>`)}
             </select><${Icon} name="chevron" cls="select-chev" /></div></label>
@@ -716,7 +721,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
             ${can("settings.manage") && html`<div><button class="link-btn small" onClick=${() => setModelCaps(device, true, onApplied)}>
               This model can filter tagged VLANs</button></div>`}</div></div></div>`
         : html`<div class="field"><span class="field-label">Tagged VLAN Management</span>
-          <${Segmented} value=${mode} disabled=${!canEdit} onChange=${edit(setMode)}
+          <${Segmented} value=${mode} disabled=${!formOn} onChange=${edit(setMode)}
             options=${[{ value: "auto", label: "Allow All", disabled: restricted, title: restricted ? "Would tag networks you don't have" : "" },
               { value: "block_all", label: "Block All" }, { value: "custom", label: "Custom" }]} />
           <small class="hint">${mode === "block_all" ? "Access port: only the native VLAN, nothing tagged." : mode === "auto" ? "Trunk: every network is tagged on this port." : "Trunk: only the networks ticked below are tagged."}</small>
@@ -725,7 +730,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
         </div>`}
         ${!fixedTags && mode === "custom" && html`<div class="tag-list">
           ${allowed.filter((n) => n.id !== native).map((n) => html`<label class="tag-row" key=${n.id}>
-            <input type="checkbox" disabled=${!canEdit} checked=${!excluded.includes(n.id)}
+            <input type="checkbox" disabled=${!formOn} checked=${!excluded.includes(n.id)}
               onChange=${(e) => edit(setExcluded)(e.target.checked ? excluded.filter((x) => x !== n.id) : [...excluded, n.id])} />
             <span class="dot" style=${`background:${colors[n.id]}`}></span>${n.name}<span class="chip-vlan">${n.vlan}</span></label>`)}
           ${allowed.filter((n) => n.id !== native).length === 0 && html`<span class="muted small">No other networks to tag.</span>`}
@@ -741,7 +746,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
             onClick=${() => lockAction("PUT", "/lock", { note: lockNote }, `Port ${port.idx} locked`)}><${Icon} name="lock" size=${14} />Lock</button></div>
         ${dirty && html`<small class="hint">Apply or reset your changes first.</small>`}
       </div>`}
-      ${canEdit && dirty && next && html`<div class="diff">
+      ${formOn && dirty && next && html`<div class="diff">
         ${native !== port.native_network_id && html`<div><span class="muted">Native</span> ${cur ? cur.name : "?"} <span class="arrow">→</span> <b>${next.name} (${next.vlan})</b></div>`}
         ${!fixedTags && (mode !== port.tagged_mode || (mode === "custom" && !sameEx)) && html`<div><span class="muted">Tagged</span> ${MODE_LABEL[port.tagged_mode]} <span class="arrow">→</span> <b>${MODE_LABEL[mode]}</b></div>`}
       </div>`}
@@ -750,7 +755,31 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
       <button class="btn ghost" disabled=${busy || !dirty} onClick=${reset}>Reset</button>
       <button class="btn primary" disabled=${busy || !dirty || !(next && next.allowed)} onClick=${() => apply()}>${busy ? html`<${Spinner} /> Applying…` : "Apply changes"}</button>
     </footer>`}
+    ${canRequest && html`<footer class="drawer-foot">
+      <button class="btn ghost" disabled=${busy || !dirty} onClick=${reset}>Reset</button>
+      <button class="btn primary" disabled=${busy || !dirty || !(next && next.allowed)} onClick=${async () => {
+        setBusy(true);
+        const sent = await sendRequest(env, { type: "port", device_id: device.id, port_idx: port.idx,
+          change: { native_network_id: native, tagged_mode: mode, excluded_network_ids: mode === "custom" ? excluded : [] } },
+          { title: `Request a change to port ${port.idx}`, what: html`<b>${device.name} · port ${port.idx}</b>: ${cur ? cur.name : "?"} → <b>${next.name} (${next.vlan})</b>${fixedTags ? "" : `, ${MODE_LABEL[mode]}`}` });
+        setBusy(false);
+        if (sent) reset();
+      }}><${Icon} name="send" size=${15} />Request this change</button>
+    </footer>`}
   </aside>`;
+}
+
+/** Ask for a change you can't make yourself; it goes to the Feedback board for someone who can. */
+async function sendRequest(env, body, { title, what }) {
+  const reason = await askText({ title, icon: "send", confirm: "Send request", placeholder: "Why? (optional) e.g. New printer at the front desk",
+    body: html`<p>${what}</p><p class="muted small">Someone who can make this change approves it, and the change is made as them.
+      You'll see it on the <b>Feedback</b> tab, and get news there when it's approved or declined.</p>` });
+  if (reason === null) return false;
+  try {
+    await api(`/api/envs/${env.id}/requests`, { method: "POST", body: { ...body, reason } });
+    toast("Request sent");
+    return true;
+  } catch (e) { toast(e.message, "err"); return false; }
 }
 
 /** Admins: tell the app whether a switch model can filter tagged VLANs (applies to every switch of that model). */
@@ -835,6 +864,10 @@ function DeviceModal({ env, device, me, readonly, onClose, onChanged }) {
         <button class="btn danger-text" disabled=${!!busy} onClick=${() => act("restart", { title: `Restart ${device.name}?`, danger: true, confirm: "Restart",
           body: html`<p><b>${device.name}</b> restarts. Everything connected through it is offline for a minute or two.</p>` })}>
           <${Icon} name="power" size=${14} />Restart</button></div>`
+      : !readonly && can("requests.restart") ? html`<div class="opt-row"><div><b>Restart</b><div class="muted small">Ask for a restart. Someone who can will approve it.</div></div>
+        <button class="btn" onClick=${() => sendRequest(env, { type: "restart", device_id: device.id },
+          { title: `Request a restart of ${device.name}`, what: html`<b>${device.name}</b> restarts. Everything connected through it is offline for a minute or two.` })}>
+          <${Icon} name="send" size=${14} />Request a restart</button></div>`
       : !readonly && html`<p class="muted small">Only people with the <i>Manage devices</i> ability can rename, restart or update devices.</p>`}
   </${Modal}>`;
 }
@@ -857,11 +890,12 @@ function PortTools({ env, device, port, me, onApplied }) {
   const canName = can("devices.manage");
   const lockedOut = port.lock && !can("ports.lock");
   const canPoe = can("ports.poe") && port.poe_capable && !lockedOut;
+  const reqPoe = !canPoe && can("requests.poe") && port.poe_capable && port.poe_enabled;
   const deflt = `Port ${port.idx}`;
   const [name, setName] = useState(port.name === deflt ? "" : port.name);
   const [busy, setBusy] = useState(false);
   useEffect(() => setName(port.name === deflt ? "" : port.name), [device.id, port.idx, port.name]);
-  if (!canName && !canPoe) return null;
+  if (!canName && !canPoe && !reqPoe) return null;
   async function save(body, msg) {
     setBusy(true);
     try {
@@ -893,6 +927,10 @@ function PortTools({ env, device, port, me, onApplied }) {
           onClick=${() => powerCycle(env, device, port, onApplied)}><${Icon} name="power" size=${14} />Power-cycle</button>`}
       </div></div>`}
     ${port.poe_capable && lockedOut && can("ports.poe") && html`<small class="hint">This port is locked, so PoE can only be changed by someone who can lock ports.</small>`}
+    ${reqPoe && html`<div class="opt-row"><div><b>Power-cycle</b><div class="muted small">Restart what this port powers. Someone who can will approve it.</div></div>
+      <button class="btn" onClick=${() => sendRequest(env, { type: "poe", device_id: device.id, port_idx: port.idx },
+        { title: "Request a power-cycle", what: html`Turn PoE on <b>${device.name} · port ${port.idx}</b> off and on, so what it powers restarts.` })}>
+        <${Icon} name="send" size=${14} />Request</button></div>`}
   </div>`;
 }
 
@@ -1289,6 +1327,8 @@ function App() {
   const poll = ((envList && envList.settings.poll_seconds) || 10) * 1000;
   useInterval(() => { if (!document.hidden && !modal && view !== "all") load(); }, poll);
   useInterval(() => { if (!document.hidden) loadVersion(); }, 30 * 60 * 1000);
+  // news on feedback and requests waiting for this person
+  useInterval(() => { if (!document.hidden && !modal) loadMe().catch(() => {}); }, 60 * 1000);
 
   async function savePrefs(patch) {
     const prefs = { ...(me.prefs || {}), ...patch };
@@ -1481,7 +1521,10 @@ function App() {
         ${pv.overview && html`<button role="tab" aria-selected=${showAll} class=${showAll ? "on" : ""} onClick=${() => setView("all")}><${Icon} name="grid" size=${15} />All devices</button>`}
         <button role="tab" aria-selected=${showEnv} class=${showEnv ? "on" : ""} onClick=${() => setView("env")}><${Icon} name="server" size=${15} />Environment</button>
         ${canFb && html`<button role="tab" aria-selected=${showFb} class=${showFb ? "on" : ""} onClick=${() => setView("feedback")}><${Icon} name="comment" size=${15} />Feedback
-          ${me.feedback_unseen > 0 && html`<span class="count-dot" title="News on feedback you follow">${me.feedback_unseen}</span>`}</button>`}
+          ${(me.feedback_unseen || 0) + (me.requests_waiting || 0) > 0 && html`<span class="count-dot"
+            title=${[me.requests_waiting ? `${me.requests_waiting} request${me.requests_waiting === 1 ? "" : "s"} waiting for you` : "",
+              me.feedback_unseen ? `news on ${me.feedback_unseen} item${me.feedback_unseen === 1 ? "" : "s"} you follow` : ""].filter(Boolean).join(", ")}>
+            ${(me.feedback_unseen || 0) + (me.requests_waiting || 0)}</span>`}</button>`}
       </div>`}
       ${showAll && html`<${Overview} me=${me} pv=${pv} lg=${lg} prefs=${prefs} poll=${poll} onOpen=${openFromOverview} />`}
       ${showFb && html`<${FeedbackPage} me=${me} onSeen=${loadMe}

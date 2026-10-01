@@ -5,6 +5,29 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.2 — 2026-10-01
+
+### Added
+- **Change requests**: people can **ask for a change they can't make themselves**, and someone
+  who can approves it.
+  - **Port VLAN changes**: in the port panel, pick the network and tagging as usual and press
+    **Request this change** (with an optional reason). Also works for protected or locked ports
+    someone can't change.
+  - **PoE power-cycles** (Port tools → *Request*) and **device restarts** (device details →
+    *Request a restart*).
+  - Requests land on the **Feedback** board (filter *Requests*), seen only by the requester and
+    the people who could make that change (the ability, plus access to that environment, device
+    and network).
+  - **Approve and do it** makes the change as the approver, with the usual confirmations for
+    protected, locked and profile ports; the activity log shows who approved it and whose
+    request it was. **Decline** takes an optional note for the requester.
+  - The requester gets news on the Feedback tab when it's approved or declined, and can
+    withdraw it while it waits. One open request per port / device per person.
+  - The Feedback tab's count includes **requests waiting for you**, refreshed every minute.
+- New abilities under **Requests**: *Request port VLAN changes*, *Request a PoE power-cycle*,
+  *Request a device restart*. Off by default; set them per role, per person, or all at once
+  in **Feedback → Who can request** (a grid of the people below you).
+
 ## 3.1 — 2026-10-01
 
 ### Added

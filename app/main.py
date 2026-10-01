@@ -374,7 +374,7 @@ def _readonly(env):
     return env["mode"] == "cloud" and envs.snapshot(env["id"]).readonly
 
 
-def _set_port(env_id, device_id, idx, body, action="port.set"):
+def _set_port(env_id, device_id, idx, body, action="port.set", via=None):
     me = auth.current()
     env, acc, err = _env_or_404(env_id)
     if err:
@@ -457,6 +457,11 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
     }
     if native_only:
         detail["after"].update({"tagged": f"not supported by {ndev['model_name']}", "excluded": []})
+    if via:
+        detail["via"] = via
+    # the exact settings before, so the change can be undone
+    detail["undo"] = {"native_network_id": port["native_network_id"], "tagged_mode": port["tagged_mode"],
+                      "excluded_network_ids": list(port["excluded_network_ids"])}
     learned = None
     try:
         try:
@@ -814,7 +819,10 @@ def api_device_update(env_id, device_id):
 @app.route("/api/envs/<int:env_id>/devices/<device_id>/action", methods=["POST"])
 @auth.require("devices.manage")
 def api_device_action(env_id, device_id):
-    action = (request.get_json(silent=True) or {}).get("action")
+    return _device_action(env_id, device_id, (request.get_json(silent=True) or {}).get("action"))
+
+
+def _device_action(env_id, device_id, action, via=None):
     if action not in DEVICE_ACTIONS:
         return _deny("Unknown action")
     x, err = _device_ctx(env_id, device_id)
@@ -823,7 +831,7 @@ def api_device_action(env_id, device_id):
     if action == "upgrade" and not x.ndev["upgradable"]:
         return _deny("UniFi has no firmware update for this device right now")
     cmd, audit_action, msg = DEVICE_ACTIONS[action]
-    detail = {"env": x.env["name"], "device": x.ndev["name"]}
+    detail = {"env": x.env["name"], "device": x.ndev["name"], **({"via": via} if via else {})}
     if action == "upgrade":
         detail["firmware"] = f"{x.ndev['version']} → {x.ndev['upgrade_to'] or 'latest'}"
     try:
@@ -880,7 +888,10 @@ def api_port_settings(env_id, device_id, idx):
 @app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>/power-cycle", methods=["POST"])
 @auth.require("ports.poe")
 def api_port_power_cycle(env_id, device_id, idx):
-    body = request.get_json(silent=True) or {}
+    return _power_cycle(env_id, device_id, idx, request.get_json(silent=True) or {})
+
+
+def _power_cycle(env_id, device_id, idx, body, via=None):
     x, err = _device_ctx(env_id, device_id, idx)
     if err:
         return err
@@ -889,7 +900,7 @@ def api_port_power_cycle(env_id, device_id, idx):
     guard = _power_guard(x, body)
     if guard:
         return guard
-    detail = {"env": x.env["name"], "device": x.ndev["name"], "port": idx}
+    detail = {"env": x.env["name"], "device": x.ndev["name"], "port": idx, **({"via": via} if via else {})}
     try:
         x.c.devmgr("power-cycle", x.ndev["mac"], port_idx=idx)
     except unifi.UniFiError as e:
@@ -899,6 +910,106 @@ def api_port_power_cycle(env_id, device_id, idx):
     envs.invalidate(env_id)
     return jsonify({"ok": True})
 
+
+
+# ----------------------------------------------------------------------------
+# Change requests: ask for a change you can't make yourself (approved on the Feedback board)
+# ----------------------------------------------------------------------------
+
+@app.route("/api/envs/<int:env_id>/requests", methods=["POST"])
+@auth.require()
+def api_request_create(env_id):
+    me = auth.current()
+    body = request.get_json(silent=True) or {}
+    rtype = body.get("type")
+    if rtype not in feedback.REQUEST_TYPES:
+        return _deny("Unknown request")
+    if not perms.has(me, feedback.REQUEST_TYPES[rtype][0]):
+        return _deny("You can't ask for that", 403)
+    env, acc, err = _env_or_404(env_id)
+    if err:
+        return err
+    if _readonly(env):
+        return _deny(READONLY_MSG, 409)
+    try:
+        data, _ = envs.snapshot(env_id).get(envs.client(env), db.setting_bool("protect_uplinks"), force=True)
+    except unifi.UniFiError as e:
+        return _deny(str(e), 502)
+    devs = unifi.apply_model_caps([d for d in data["devices"] if d["id"] == body.get("device_id")], db.get_json("model_caps", {}))
+    dev = devs[0] if devs else None
+    if dev is None or not _sees(me, acc, dev["mac"]):
+        return _deny("That device is no longer on the controller", 404)
+    reason = str(body.get("reason") or "").strip()[:2000]
+    req = {"type": rtype, "env_id": env_id, "env": env["name"], "device_id": dev["id"], "mac": dev["mac"], "device": dev["name"]}
+    nets = data["networks"]
+    if rtype in ("port", "poe"):
+        idx = body.get("port_idx")
+        port = next((p for p in dev["ports"] if p["idx"] == idx), None)
+        if port is None:
+            return _deny("No such port", 404)
+        if port["wan"]:
+            return _deny("This is a WAN port - set it up in UniFi's Internet settings", 403)
+        req.update({"port": idx, "port_name": port["name"]})
+    if rtype == "port":
+        ch = body.get("change") or {}
+        native = ch.get("native_network_id")
+        mode = ch.get("tagged_mode") or port["tagged_mode"]
+        excluded = ch.get("excluded_network_ids") or []
+        if native not in [n["id"] for n in nets]:
+            return _deny("Pick a network from the list")
+        if not envs.vlan_allowed(acc, native):
+            return _deny("You can't put ports on that network", 403)
+        if mode not in unifi.MODES or not isinstance(excluded, list):
+            return _deny("Pick Allow All, Block All or Custom")
+        native_only = not dev["caps"]["tagged_vlans"]
+        if native_only:
+            mode, excluded = port["tagged_mode"], list(port["excluded_network_ids"])
+        elif not acc["all_vlans"]:
+            if mode == "auto":
+                return _deny("Allow All would tag networks you can't use - pick Block All or Custom", 403)
+            if mode == "custom":
+                excluded = list(set(excluded) | {n["id"] for n in nets if not envs.vlan_allowed(acc, n["id"])})
+        if mode != "custom":
+            excluded = []
+        if native == port["native_network_id"] and (native_only or (mode == port["tagged_mode"] and (
+                mode != "custom" or sorted(excluded) == sorted(port["excluded_network_ids"])))):
+            return _deny("That's how the port is set already")
+        req["change"] = {"native_network_id": native, "tagged_mode": mode, "excluded_network_ids": excluded}
+        frm = f"{_net_label(nets, port['native_network_id'])}" + ("" if native_only else f", {unifi.MODE_LABEL[port['tagged_mode']]}")
+        to = f"{_net_label(nets, native)}" + ("" if native_only else f", {unifi.MODE_LABEL[mode]}")
+        req.update({"from": frm, "to": to, "protected": port["protected"], "locked": (dev["mac"], idx) in envs.locks(env_id)})
+        title = f"Port {idx} on {dev['name']}: {_net_label(nets, port['native_network_id'])} → {_net_label(nets, native)}"
+    elif rtype == "poe":
+        if not port["poe_capable"] or not port["poe_enabled"]:
+            return _deny("PoE is off on this port - nothing to power-cycle")
+        who = ", ".join(c.get("name") or c.get("hostname") or c.get("mac") for c in port["clients"][:2])
+        req["what"] = who
+        title = f"Power-cycle port {idx} on {dev['name']}" + (f" ({who})" if who else "")
+    else:
+        title = f"Restart {dev['name']}"
+    # one open request per thing is enough
+    for r in db.get().execute("SELECT id, request FROM feedback WHERE kind='request' AND status='open' AND user_id=?",
+                              (me.get("id") or -1,)):
+        o = json.loads(r["request"] or "{}")
+        if all(o.get(k) == req.get(k) for k in ("type", "env_id", "device_id", "port")):
+            return _deny(f"You already asked for this - it's request #{r['id']}, waiting for approval", 409)
+    item_id = feedback.create(me, "request", title[:140], reason, request_data=req, env_id=env_id)
+    auth.audit("request.new", f"#{item_id}", {"title": title, "env": env["name"]}, env_id=env_id)
+    feedback._emit("request", item_id, me)
+    return jsonify({"ok": True, "id": item_id})
+
+
+def _exec_port(req, body, via):
+    flags = {k: body[k] for k in ("confirm_locked", "confirm_protected", "detach_profile") if body.get(k)}
+    return _set_port(req["env_id"], req["device_id"], req["port"], {**req["change"], **flags}, via=via)
+
+
+feedback.executors.update({
+    "port": _exec_port,
+    "poe": lambda req, body, via: _power_cycle(req["env_id"], req["device_id"], req["port"],
+                                               {"confirm_protected": bool(body.get("confirm_protected"))}, via=via),
+    "restart": lambda req, body, via: _device_action(req["env_id"], req["device_id"], "restart", via=via),
+})
 
 
 @app.route("/api/admin/model-caps", methods=["PUT"])

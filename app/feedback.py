@@ -1,10 +1,15 @@
 """
-The feedback board: bug reports and ideas from the people who use the app.
+The feedback board: bug reports and ideas from the people who use the app, and change requests.
 
 Everyone with feedback.view sees every item; feedback.submit lets them report, vote and
 comment; feedback.manage sets the status and can edit or delete anything. Whoever reported,
 voted on or commented on an item follows it: a status change or a new comment by someone else
 marks it unseen for them until they open it.
+
+A change request ("request" kind) is something a person may ask for but not do themselves:
+a port VLAN change, a PoE power-cycle or a device restart. Only the requester and the people who
+could make that change (the ability, plus access to that environment, device and network) see
+it. One of them approves it, which makes the change as them, or declines it.
 """
 
 import base64
@@ -16,9 +21,16 @@ from flask import jsonify, request, send_from_directory
 
 import auth
 import db
+import envs
 import perms
 
 KINDS = ("bug", "idea")
+REQUEST = "request"
+# request type -> (ability to ask for it, ability to approve = do it)
+REQUEST_TYPES = {"port": ("requests.ports", "ports.change"), "poe": ("requests.poe", "ports.poe"),
+                 "restart": ("requests.restart", "devices.manage")}
+# request type -> fn(req, body, note) returning a Flask response; main.py fills these in
+executors = {}
 STATUSES = ("open", "planned", "progress", "done", "wontfix")
 STATUS_LABEL = {"open": "Open", "planned": "Planned", "progress": "In progress", "done": "Done", "wontfix": "Won't do"}
 CLOSED = ("done", "wontfix")
@@ -47,7 +59,8 @@ def image_path(item_id):
     return None
 
 
-def _save_image(item_id, data_url):
+def _check_image(data_url):
+    """(raw bytes, extension) of a pasted / picked screenshot. Raises ValueError."""
     m = re.match(r"^data:image/[a-z+.-]+;base64,([A-Za-z0-9+/=\s]+)$", data_url or "")
     if not m:
         raise ValueError("Send the screenshot as a picture")
@@ -59,6 +72,11 @@ def _save_image(item_id, data_url):
         ext = None
     if not ext:
         raise ValueError("Use a PNG, JPEG or WebP picture")
+    return raw, ext
+
+
+def _save_image(item_id, data_url):
+    raw, ext = _check_image(data_url)
     _drop_image(item_id)
     os.makedirs(image_dir(), exist_ok=True)
     with open(os.path.join(image_dir(), f"{int(item_id)}.{ext}"), "wb") as fh:
@@ -91,6 +109,71 @@ def _row(item_id):
     return db.get().execute("SELECT * FROM feedback WHERE id=?", (item_id,)).fetchone()
 
 
+def _req(r):
+    return json.loads(r["request"] or "{}") if r["kind"] == REQUEST else {}
+
+
+def can_approve(u, req):
+    """Could `u` make the requested change themselves?"""
+    t = REQUEST_TYPES.get(req.get("type"))
+    if not t or not perms.has(u, t[1]):
+        return False
+    acc = envs.access(u, req.get("env_id"))
+    if acc is None or not envs.device_allowed(acc, req.get("mac"), "network"):
+        return False
+    if not perms.has(u, perms.app_cap("network")):
+        return False
+    native = (req.get("change") or {}).get("native_network_id")
+    return not native or envs.vlan_allowed(acc, native)
+
+
+def visible(u, r):
+    """Bugs and ideas are for everyone on the board; a request for its requester and its approvers."""
+    if r["kind"] != REQUEST:
+        return True
+    mine = bool(u.get("id")) and r["user_id"] == u["id"]
+    return mine or can_approve(u, _req(r))
+
+
+def waiting_for(u):
+    """Open requests this person could approve (not their own)."""
+    rows = db.get().execute("SELECT * FROM feedback WHERE kind=? AND status='open'", (REQUEST,)).fetchall()
+    return sum(1 for r in rows if r["user_id"] != (u.get("id") or -1) and can_approve(u, _req(r)))
+
+
+def create(u, kind, title, body, context=None, request_data=None, env_id=None):
+    """Store a new item (the reporter backs it) and tell the listeners. Returns its id."""
+    t = db.now()
+    conn = db.get()
+    cur = conn.execute(
+        "INSERT INTO feedback (kind, title, body, status, user_id, author, created_at, updated_at, context, request, env_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (kind, title, body, "open", u.get("id") or None, _who(u), t, t, json.dumps(context or {}),
+         json.dumps(request_data or {}), env_id))
+    item_id = cur.lastrowid
+    if u.get("id") and kind != REQUEST:   # you follow (and back) what you report
+        conn.execute("INSERT OR IGNORE INTO feedback_votes (item_id, user_id) VALUES (?,?)", (item_id, u["id"]))
+    conn.commit()
+    return item_id
+
+
+def _close(item_id, u, status, event, note=""):
+    conn = db.get()
+    conn.execute("UPDATE feedback SET status=?, closed_at=? WHERE id=?", (status, db.now(), item_id))
+    conn.execute("INSERT INTO feedback_comments (item_id, user_id, author, body, event, created_at) VALUES (?,?,?,?,?,?)",
+                 (item_id, u.get("id") or None, _who(u), note, event, db.now()))
+    _touch(item_id, u.get("id"))
+    conn.commit()
+
+
+def _me_extras(u, out):
+    if not u.get("id"):
+        return
+    if perms.has(u, "feedback.view"):
+        out["feedback_unseen"] = unseen_count(u["id"])
+    out["requests_waiting"] = waiting_for(u)
+
+
 def shape(r, u, people, votes, voted, comments, unseen):
     mine = bool(u.get("id")) and r["user_id"] == u["id"]
     return {
@@ -107,7 +190,7 @@ def shape(r, u, people, votes, voted, comments, unseen):
 
 def items_for(u):
     conn = db.get()
-    rows = conn.execute("SELECT * FROM feedback ORDER BY updated_at DESC").fetchall()
+    rows = [r for r in conn.execute("SELECT * FROM feedback ORDER BY updated_at DESC").fetchall() if visible(u, r)]
     votes = {r[0]: r[1] for r in conn.execute("SELECT item_id, COUNT(*) FROM feedback_votes GROUP BY item_id")}
     comments = {r[0]: r[1] for r in conn.execute(
         "SELECT item_id, COUNT(*) FROM feedback_comments WHERE event='' GROUP BY item_id")}
@@ -115,7 +198,11 @@ def items_for(u):
     voted = {r[0] for r in conn.execute("SELECT item_id FROM feedback_votes WHERE user_id=?", (uid,))}
     unseen = {r[0] for r in conn.execute("SELECT item_id FROM feedback_unseen WHERE user_id=?", (uid,))}
     people = _people([r["user_id"] for r in rows])
-    return [shape(r, u, people, votes, voted, comments, unseen) for r in rows]
+    out = [shape(r, u, people, votes, voted, comments, unseen) for r in rows]
+    for o, r in zip(out, rows):
+        if r["kind"] == REQUEST:
+            o["can_approve"] = r["status"] == "open" and not o["mine"] and can_approve(u, _req(r))
+    return out
 
 
 def unseen_count(uid):
@@ -159,6 +246,7 @@ def _can_edit(u, r):
 
 
 def register(app):
+    auth.ME_EXTRAS.append(_me_extras)
 
     @app.route("/api/feedback")
     @auth.require("feedback.view")
@@ -172,7 +260,7 @@ def register(app):
     def api_feedback_item(item_id):
         u = auth.current()
         r = _row(item_id)
-        if not r:
+        if not r or not visible(u, r):
             return _deny("That report is gone", 404)
         conn = db.get()
         if u.get("id"):
@@ -194,8 +282,10 @@ def register(app):
         out["voters"] = [_person(people, v, "")["name"] for v in voters]
         # browser, screen, page: for whoever handles it and the reporter
         out["context"] = json.loads(r["context"] or "{}") if (manage or out["mine"]) else None
-        out["can_edit"] = _can_edit(u, r)
+        out["can_edit"] = _can_edit(u, r) and r["kind"] != REQUEST
         out["can_delete"] = _can_edit(u, r)
+        if r["kind"] == REQUEST:
+            out["can_approve"] = r["status"] == "open" and not out["mine"] and can_approve(u, _req(r))
         return jsonify(out)
 
     @app.route("/api/feedback", methods=["POST"])
@@ -210,23 +300,16 @@ def register(app):
             return _deny("Give it a short title")
         ctx = data.get("context") if isinstance(data.get("context"), dict) else {}
         ctx = {k: str(ctx[k])[:300] for k in CONTEXT_KEYS if ctx.get(k) not in (None, "")}
-        t = db.now()
-        conn = db.get()
-        cur = conn.execute(
-            "INSERT INTO feedback (kind, title, body, status, user_id, author, created_at, updated_at, context) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (kind, title, body, "open", u.get("id") or None, _who(u), t, t, json.dumps(ctx)))
-        item_id = cur.lastrowid
-        if data.get("image"):
+        if data.get("image"):   # check the picture before anything is stored
             try:
-                _save_image(item_id, data["image"])
+                _check_image(data["image"])
             except ValueError as e:
-                conn.rollback()
                 return _deny(str(e))
-            conn.execute("UPDATE feedback SET image=? WHERE id=?", (t, item_id))
-        if u.get("id"):   # you follow (and back) what you report
-            conn.execute("INSERT OR IGNORE INTO feedback_votes (item_id, user_id) VALUES (?,?)", (item_id, u["id"]))
-        conn.commit()
+        item_id = create(u, kind, title, body, ctx)
+        if data.get("image"):
+            _save_image(item_id, data["image"])
+            db.get().execute("UPDATE feedback SET image=? WHERE id=?", (db.now(), item_id))
+            db.get().commit()
         auth.audit("feedback.new", f"#{item_id}", {"kind": kind, "title": title})
         _emit("new", item_id, u)
         return jsonify({"ok": True, "id": item_id})
@@ -243,6 +326,8 @@ def register(app):
         conn = db.get()
         sets, event = {}, None
         if "status" in data:
+            if r["kind"] == REQUEST:
+                return _deny("Approve or decline a request instead")
             if not manage:
                 return _deny("Only someone who manages feedback can change its status", 403)
             if data["status"] not in STATUSES:
@@ -310,8 +395,11 @@ def register(app):
         u = auth.current()
         if not u.get("id"):
             return _deny("Sign in to vote", 403)
-        if not _row(item_id):
+        r = _row(item_id)
+        if not r or not visible(u, r):
             return _deny("That report is gone", 404)
+        if r["kind"] == REQUEST:
+            return _deny("Requests are approved or declined, not voted on")
         conn = db.get()
         on = bool((request.get_json(silent=True) or {}).get("on", True))
         if on:
@@ -326,7 +414,8 @@ def register(app):
     @auth.require("feedback.submit")
     def api_feedback_comment(item_id):
         u = auth.current()
-        if not _row(item_id):
+        r = _row(item_id)
+        if not r or not visible(u, r):
             return _deny("That report is gone", 404)
         body = str((request.get_json(silent=True) or {}).get("body") or "").strip()[:4000]
         if not body:
@@ -355,6 +444,9 @@ def register(app):
     @app.route("/api/feedback/<int:item_id>/image")
     @auth.require("feedback.view")
     def api_feedback_image(item_id):
+        r = _row(item_id)
+        if not r or not visible(auth.current(), r):
+            return _deny("No screenshot", 404)
         p = image_path(item_id)
         if not p:
             return _deny("No screenshot", 404)
@@ -362,3 +454,48 @@ def register(app):
         resp.headers["Cache-Control"] = "private, max-age=86400"
         resp.headers["Content-Security-Policy"] = "default-src 'none'"
         return resp
+
+    @app.route("/api/feedback/<int:item_id>/approve", methods=["POST"])
+    @auth.require()
+    def api_request_approve(item_id):
+        """Make the requested change, as the approver. Confirmations (protected port...) come back as 409s."""
+        u = auth.current()
+        r = _row(item_id)
+        if not r or r["kind"] != REQUEST or not visible(u, r):
+            return _deny("That request is gone", 404)
+        req = _req(r)
+        if r["status"] != "open":
+            return _deny("This request was already handled")
+        if r["user_id"] and r["user_id"] == u.get("id"):
+            return _deny("Someone else needs to approve your own request", 403)
+        if not can_approve(u, req):
+            return _deny("You can't make this change yourself, so you can't approve it", 403)
+        data = request.get_json(silent=True) or {}
+        note = str(data.get("note") or "").strip()[:2000]
+        resp = executors[req["type"]](req, data, f"request #{item_id} from {r['author']}")
+        if isinstance(resp, tuple):   # (response, status) from _deny
+            return resp
+        if resp.status_code != 200:
+            return resp
+        result = resp.get_json() or {}
+        _close(item_id, u, "done", "status:done", note or result.get("warning") or "")
+        auth.audit("request.approved", f"#{item_id}", {"title": r["title"], "by": r["author"]}, env_id=r["env_id"])
+        _emit("status", item_id, u)
+        return jsonify({"ok": True, **result})
+
+    @app.route("/api/feedback/<int:item_id>/decline", methods=["POST"])
+    @auth.require()
+    def api_request_decline(item_id):
+        u = auth.current()
+        r = _row(item_id)
+        if not r or r["kind"] != REQUEST or not visible(u, r):
+            return _deny("That request is gone", 404)
+        if r["status"] != "open":
+            return _deny("This request was already handled")
+        if not (can_approve(u, _req(r)) or perms.has(u, "feedback.manage")):
+            return _deny("Only someone who could make this change can decline it", 403)
+        note = str((request.get_json(silent=True) or {}).get("note") or "").strip()[:2000]
+        _close(item_id, u, "wontfix", "status:wontfix", note)
+        auth.audit("request.declined", f"#{item_id}", {"title": r["title"], "by": r["author"], "note": note}, env_id=r["env_id"])
+        _emit("status", item_id, u)
+        return jsonify({"ok": True})

@@ -83,6 +83,10 @@ manage only their own switches and only the VLANs you allow.
   (Open, Planned, In progress, Done, Won't do). Whoever manages feedback sets the status; people
   following an item see news on the tab. Who sees and posts is an ability, so it can be taken
   away per role or per person.
+- **Change requests**: someone who can't change a port (or power-cycle it, or restart a device)
+  can ask for it from the same panel; a person who could make the change approves it on the
+  Feedback board and it's done as them. Who may ask for what is set per person in
+  *Feedback → Who can request*.
 - **Your name and logo** (Settings → Branding, admins): rename the app, set the sign-in
   tagline, and pick the header logo and the browser tab icon: the stock mark, one of 18 icons
   on a color palette (8 presets or your own colors), or an uploaded picture. The tab icon can
@@ -217,6 +221,7 @@ Everything a person can do is an **ability**. A **role** is a named set of abili
 | See the activity log (their environments) | ✓ | ✓ | |
 | See the feedback board / report bugs and ideas, vote, comment | ✓ | ✓ | ✓ |
 | Manage feedback (status, edit and delete anyone's) | ✓ | | |
+| Request port VLAN changes / PoE power-cycles / device restarts | ✓ | | |
 | See / add / edit / delete people below them | ✓ | | |
 | Give access to people below them (from their own access) | ✓ | | |
 | Change roles and abilities of people below them | ✓ | | |

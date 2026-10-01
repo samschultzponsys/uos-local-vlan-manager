@@ -576,6 +576,10 @@ def current():
     return getattr(g, "user", None)
 
 
+# functions (user, out) that add to /api/me; other modules register here
+ME_EXTRAS = []
+
+
 def require(cap=None):
     """Route decorator: signed in, and (if given) holding ability `cap` (see perms.py)."""
     def deco(fn):
@@ -901,9 +905,8 @@ def init_app(app):
             pw = db.get_setting("initial_admin_password", "")
             out["initial_password"] = bool(row["seeded"] and pw)
             out["pending"] = bool(row["pending"])
-        if u["id"] and perms.has(u, "feedback.view"):
-            out["feedback_unseen"] = db.get().execute(
-                "SELECT COUNT(*) FROM feedback_unseen WHERE user_id=?", (u["id"],)).fetchone()[0]
+        for fn in ME_EXTRAS:   # e.g. feedback news and requests waiting (feedback.py)
+            fn(u, out)
         if perms.has(u, "users.access"):   # people waiting for someone to set them up
             out["waiting"] = db.get().execute("SELECT COUNT(*) FROM users WHERE pending=1 AND disabled=0").fetchone()[0]
         return jsonify(out)

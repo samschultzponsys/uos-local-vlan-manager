@@ -89,6 +89,7 @@ const P = {
   image: "M3 3h18v18H3zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21",
   inbox: "M22 12h-6l-2 3h-4l-2-3H2M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z",
   clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
+  send: "M22 2 11 13M22 2l-7 20-4-9-9-4z",
 };
 
 export function Icon({ name, size = 16, fill = false, cls = "" }) {
@@ -361,15 +362,20 @@ export function SsoButton({ button, href, onClick }) {
 
 let openAsk = () => Promise.resolve(false);
 export const ask = (opts) => openAsk(opts);
+/** like ask, with a text box: resolves to the text ("" when left empty), or null when cancelled */
+export const askText = (opts) => openAsk({ ...opts, input: true });
 export function AskHost() {
   const [q, setQ] = useState(null);
-  openAsk = (opts) => new Promise((resolve) => setQ({ ...opts, resolve }));
+  const [val, setVal] = useState("");
+  openAsk = (opts) => new Promise((resolve) => { setVal(opts.value || ""); setQ({ ...opts, resolve }); });
   if (!q) return null;
-  const done = (v) => { q.resolve(v); setQ(null); };
-  return html`<${Modal} title=${q.title} icon=${q.danger ? "alert" : "info"} wide=${!!q.wide} onClose=${() => done(false)}
+  const done = (v) => { q.resolve(q.input ? (v ? val.trim() : null) : v); setQ(null); };
+  return html`<${Modal} title=${q.title} icon=${q.icon || (q.danger ? "alert" : "info")} wide=${!!q.wide} onClose=${() => done(false)}
     footer=${html`<button class="btn ghost" onClick=${() => done(false)}>${q.cancel || "Cancel"}</button>
       <button class=${"btn " + (q.danger ? "danger" : "primary")} onClick=${() => done(true)}>${q.confirm || "Continue"}</button>`}>
-    <div class="ask-body">${q.body}</div></${Modal}>`;
+    <div class="ask-body">${q.body}
+      ${q.input && html`<textarea class="ask-input" rows="3" autofocus placeholder=${q.placeholder || ""} value=${val}
+        onInput=${(e) => setVal(e.target.value)}></textarea>`}</div></${Modal}>`;
 }
 
 

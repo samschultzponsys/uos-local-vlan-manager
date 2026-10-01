@@ -1,6 +1,6 @@
 // The feedback board: bug reports and ideas, their status, votes and comments.
 import { useState, useEffect, useRef } from "./vendor/preact-htm.module.js";
-import { html, api, Icon, Modal, Segmented, Toggle, Field, toast, Spinner, Avatar, ago, when, ask, pickImage, imageFromFile, useInterval } from "./ui.js";
+import { html, api, Icon, Modal, Segmented, Toggle, Field, toast, Spinner, Avatar, ago, when, ask, askText, pickImage, imageFromFile, useInterval } from "./ui.js";
 
 export const STATUS = {
   open: { label: "Open", icon: "inbox" },
@@ -9,7 +9,11 @@ export const STATUS = {
   done: { label: "Done", icon: "check" },
   wontfix: { label: "Won't do", icon: "x" },
 };
-const KIND = { bug: { label: "Bug", icon: "bug" }, idea: { label: "Idea", icon: "bulb" } };
+const KIND = { bug: { label: "Bug", icon: "bug" }, idea: { label: "Idea", icon: "bulb" }, request: { label: "Request", icon: "send" } };
+// a request's statuses read differently
+const REQ_STATUS = { open: "Waiting for approval", done: "Approved", wontfix: "Declined" };
+const statusLabel = (it, k = it.status) => (it.kind === "request" && REQ_STATUS[k]) || STATUS[k].label;
+const REQUEST_CAPS = [["requests.ports", "Port VLAN changes"], ["requests.poe", "PoE power-cycles"], ["requests.restart", "Device restarts"]];
 const COLUMNS = ["open", "planned", "progress", "done"];
 const SHOT_MAX = 1600;
 
@@ -51,6 +55,7 @@ export function reportContext(info = {}) {
 const CONTEXT_LABEL = { version: "Version", page: "Page", env: "Environment", view: "Port view", browser: "Browser", screen: "Screen", theme: "Theme" };
 
 export function FeedbackPage({ me, info, onSeen }) {
+  const [who, setWho] = useState(false);
   const [data, setData] = useState(null);
   const [kind, setKind] = useState("all");
   const [q, setQ] = useState("");
@@ -78,6 +83,9 @@ export function FeedbackPage({ me, info, onSeen }) {
   const byStatus = Object.fromEntries(cols.map((s) => [s, items.filter((it) => it.status === s).sort(
     s === "done" || s === "wontfix" ? (a, b) => b.closed_at - a.closed_at : order)]));
   const unseen = data.items.filter((it) => it.unseen).length;
+  const waiting = data.items.filter((it) => it.can_approve).length;
+  const hasRequests = data.items.some((it) => it.kind === "request");
+  const canWho = (me.caps || []).includes("users.roles");
   const vote = async (it) => {
     if (!can.submit) return;
     try {
@@ -90,11 +98,14 @@ export function FeedbackPage({ me, info, onSeen }) {
   return html`<section class="fb">
     <div class="fb-head">
       <div class="fb-title"><h2>Feedback</h2>
-        <span class="muted small">${plural(data.items.filter((i) => !["done", "wontfix"].includes(i.status)).length, "open item")}${unseen ? html` · <b class="fb-new-count">${unseen} with news for you</b>` : ""}</span></div>
-      ${can.submit && html`<button class="btn primary" onClick=${() => setNewOpen(true)}><${Icon} name="plus" />Report a bug or idea</button>`}
+        <span class="muted small">${plural(data.items.filter((i) => !["done", "wontfix"].includes(i.status)).length, "open item")}${unseen ? html` · <b class="fb-new-count">${unseen} with news for you</b>` : ""}${waiting ? html` · <b class="fb-new-count">${plural(waiting, "request")} waiting for you</b>` : ""}</span></div>
+      <div class="row">
+        ${canWho && html`<button class="btn ghost" onClick=${() => setWho(true)}><${Icon} name="send" size=${15} />Who can request</button>`}
+        ${can.submit && html`<button class="btn primary" onClick=${() => setNewOpen(true)}><${Icon} name="plus" />Report a bug or idea</button>`}</div>
     </div>
     <div class="fb-tools">
-      <${Segmented} value=${kind} onChange=${setKind} options=${[{ value: "all", label: "All" }, { value: "bug", label: "Bugs" }, { value: "idea", label: "Ideas" }]} />
+      <${Segmented} value=${kind} onChange=${setKind} options=${[{ value: "all", label: "All" }, { value: "bug", label: "Bugs" }, { value: "idea", label: "Ideas" },
+        ...(hasRequests ? [{ value: "request", label: "Requests" }] : [])]} />
       <label class="fb-search"><${Icon} name="search" size=${15} /><input type="search" placeholder="Search" value=${q} onInput=${(e) => setQ(e.target.value)} /></label>
       <label class="fb-sort"><span class="muted small">Sort</span><select value=${sort} onChange=${(e) => setSort(e.target.value)}>
         <option value="top">Most votes</option><option value="new">Newest</option><option value="updated">Recently updated</option></select></label>
@@ -102,11 +113,12 @@ export function FeedbackPage({ me, info, onSeen }) {
     </div>
     ${narrow && html`<div class="fb-colpick"><${Segmented} value=${col} onChange=${setCol}
       options=${cols.map((s) => ({ value: s, label: `${STATUS[s].label} ${byStatus[s].length}` }))} /></div>`}
+    ${who && html`<${WhoCanRequest} me=${me} onClose=${() => setWho(false)} />`}
     <div class=${"fb-board" + (narrow ? " one" : "")} style=${narrow ? "" : `grid-template-columns: repeat(${cols.length}, minmax(0, 1fr))`}>
       ${shownCols.map((s) => html`<div class=${`fb-col st-${s}`} key=${s}>
         ${!narrow && html`<div class="fb-col-head"><${Icon} name=${STATUS[s].icon} size=${15} /><b>${STATUS[s].label}</b><span class="badge">${byStatus[s].length}</span></div>`}
         ${byStatus[s].length === 0 && html`<div class="fb-none muted small">${s === "open" && can.submit && !needle ? "Nothing open. Found a bug or have an idea? Report it." : "Nothing here."}</div>`}
-        ${byStatus[s].map((it) => html`<${Card} key=${it.id} it=${it} canVote=${can.submit} onVote=${() => vote(it)} onOpen=${() => setOpenId(it.id)} />`)}
+        ${byStatus[s].map((it) => html`<${Card} key=${it.id} it=${it} canVote=${can.submit && it.kind !== "request"} onVote=${() => vote(it)} onOpen=${() => setOpenId(it.id)} />`)}
       </div>`)}
     </div>
     ${openId && html`<${ItemModal} id=${openId} can=${can} onClose=${() => { setOpenId(null); load(); onSeen && onSeen(); }} />`}
@@ -122,9 +134,11 @@ function Card({ it, canVote, onVote, onOpen }) {
       <span class=${`fb-kind k-${it.kind}`}><${Icon} name=${KIND[it.kind] ? KIND[it.kind].icon : "info"} size=${13} />${KIND[it.kind] ? KIND[it.kind].label : it.kind}</span>
       <span class="muted small">#${it.id}</span>
       ${it.unseen && html`<span class="fb-news">New activity</span>`}
+      ${it.can_approve && html`<span class="fb-news">Needs you</span>`}
       <span class="grow"></span>
-      <button class=${"fb-vote" + (it.voted ? " on" : "")} disabled=${!canVote} title=${it.voted ? "Take back your vote" : "I want this too"}
-        onClick=${(e) => { e.stopPropagation(); onVote(); }}><${Icon} name="vote" size=${14} /><b>${it.votes}</b></button>
+      ${it.kind === "request" ? html`<span class=${`fb-status sm st-${it.status}`}>${statusLabel(it)}</span>`
+        : html`<button class=${"fb-vote" + (it.voted ? " on" : "")} disabled=${!canVote} title=${it.voted ? "Take back your vote" : "I want this too"}
+        onClick=${(e) => { e.stopPropagation(); onVote(); }}><${Icon} name="vote" size=${14} /><b>${it.votes}</b></button>`}
     </div>
     <div class="fb-card-title">${it.title}</div>
     ${it.body && html`<div class="fb-card-body">${it.body}</div>`}
@@ -230,20 +244,50 @@ function ItemModal({ id, can, onClose }) {
     try { await api(`/api/feedback/${id}`, { method: "DELETE" }); toast("Deleted"); onClose(); } catch (e) { toast(e.message, "err"); }
   };
   const vote = () => run(() => api(`/api/feedback/${id}/vote`, { method: "POST", body: { on: !it.voted } }));
-  const st = STATUS[it.status] || STATUS.open;
+  const isReq = it.kind === "request";
+  const req = it.request || {};
+  const approve = async (extra = {}) => {
+    setBusy(true);
+    try {
+      const r = await api(`/api/feedback/${id}/approve`, { method: "POST", body: { ...extra } });
+      toast("Approved and done");
+      if (r.warning) toast(r.warning, "warn");
+      await load();
+    } catch (e) {
+      const c = e.status === 409 && e.data && e.data.confirm;
+      const again = c === "protected" ? await ask({ title: "Change a protected port?", danger: true, confirm: "Change it anyway",
+          body: html`<p>This port is protected:</p><ul>${e.data.reasons.map((x) => html`<li>${x}</li>`)}</ul><p>Changing it can cut off the switch or what's behind it.</p>` })
+        : c === "profile" ? await ask({ title: "Detach port profile?", confirm: "Detach and apply",
+          body: html`<p>This port uses the port profile <b>${e.data.profile}</b>. Approving detaches the profile from this port.</p>` })
+        : c === "locked" ? await ask({ title: "Change a locked port?", confirm: "Change and keep locked",
+          body: html`<p>This port is locked${e.data.note ? html` (<b>${e.data.note}</b>)` : ""}. It stays locked, to the new settings.</p>` })
+        : (toast(e.message, "err"), false);
+      setBusy(false);
+      if (again) return approve({ ...extra, [{ protected: "confirm_protected", profile: "detach_profile", locked: "confirm_locked" }[c]]: true });
+    }
+    setBusy(false);
+    return null;
+  };
+  const decline = async () => {
+    const note = await askText({ title: "Decline this request?", confirm: "Decline", placeholder: "Why? (optional, the requester sees it)",
+      body: html`<p>${it.title}</p>` });
+    if (note === null) return;
+    run(() => api(`/api/feedback/${id}/decline`, { method: "POST", body: { note } }), "Declined");
+  };
+  const st = { ...(STATUS[it.status] || STATUS.open), label: statusLabel(it) };
   const ctx = it.context && Object.entries(it.context).filter(([k, v]) => v && CONTEXT_LABEL[k]);
 
   return html`<${Modal} title=${html`<span class="fb-modal-title">#${it.id} · ${KIND[it.kind] ? KIND[it.kind].label : it.kind}</span>`} icon=${KIND[it.kind] ? KIND[it.kind].icon : "comment"} onClose=${onClose} wide>
     <div class="fb-item">
       <div class="fb-item-head">
         <span class=${`fb-status st-${it.status}`}><${Icon} name=${st.icon} size=${14} />${st.label}</span>
-        <button class=${"fb-vote big" + (it.voted ? " on" : "")} disabled=${!can.submit || busy} onClick=${vote}
+        ${!isReq && html`<button class=${"fb-vote big" + (it.voted ? " on" : "")} disabled=${!can.submit || busy} onClick=${vote}
           title=${it.voted ? "Take back your vote" : "I want this too"}><${Icon} name="vote" size=${16} /><b>${it.votes}</b>
-          <span>${it.voted ? "You want this" : "Me too"}</span></button>
+          <span>${it.voted ? "You want this" : "Me too"}</span></button>`}
         ${it.github_url && html`<a class="btn sm ghost" href=${it.github_url} target="_blank" rel="noopener"><${Icon} name="external" size=${14} />GitHub</a>`}
         <span class="grow"></span>
         ${it.can_edit && !edit && html`<button class="btn sm ghost" onClick=${() => setEdit({ title: it.title, body: it.body, kind: it.kind })}><${Icon} name="pencil" size=${14} />Edit</button>`}
-        ${it.can_delete && html`<button class="btn sm ghost danger-text" onClick=${del}><${Icon} name="trash" size=${14} />Delete</button>`}
+        ${it.can_delete && html`<button class="btn sm ghost danger-text" onClick=${del}><${Icon} name="trash" size=${14} />${isReq && it.mine ? "Withdraw" : "Delete"}</button>`}
       </div>
       ${edit ? html`<div class="form">
           <${Segmented} value=${edit.kind} onChange=${(v) => setEdit({ ...edit, kind: v })} options=${[{ value: "bug", label: "Bug" }, { value: "idea", label: "Idea" }]} />
@@ -254,13 +298,29 @@ function ItemModal({ id, can, onClose }) {
         : html`<h3 class="fb-item-title">${it.title}</h3>
           <div class="fb-meta muted small"><${Avatar} user=${{ display_name: it.author.name, avatar: it.author.avatar }} size=${22} />
             <span><b>${it.mine ? "You" : it.author.name}</b> · ${when(it.created_at)}</span></div>
-          ${it.body ? html`<div class="fb-body">${it.body}</div>` : html`<p class="muted small">No details.</p>`}`}
+          ${isReq && html`<div class="fb-req">
+            <div class="fb-ctx-grid">
+              <span class="muted">Environment</span><span>${req.env}</span>
+              <span class="muted">Device</span><span>${req.device}</span>
+              ${req.port != null && html`<span class="muted">Port</span><span>${req.port}${req.port_name && req.port_name !== `Port ${req.port}` ? ` · ${req.port_name}` : ""}</span>`}
+              ${req.type === "port" && html`<span class="muted">Change</span><span>${req.from} <span class="arrow">→</span> <b>${req.to}</b></span>`}
+              ${req.type === "poe" && html`<span class="muted">Do</span><span>Power-cycle PoE${req.what ? ` (${req.what})` : ""}</span>`}
+              ${req.type === "restart" && html`<span class="muted">Do</span><span>Restart the device</span>`}
+            </div>
+            ${(req.protected || req.locked) && html`<p class="warn-text small"><${Icon} name="shield" size=${13} /> This port is ${req.protected ? "protected" : "locked"}: approving asks you to confirm.</p>`}
+            ${it.can_approve && html`<div class="fb-req-actions">
+              <button class="btn primary" disabled=${busy} onClick=${() => approve()}><${Icon} name="check" size=${15} />Approve and do it</button>
+              <button class="btn" disabled=${busy} onClick=${decline}><${Icon} name="x" size=${15} />Decline</button>
+              <span class="muted small">Approving makes the change as you, and it's logged that way.</span></div>`}
+            ${it.mine && it.status === "open" && html`<p class="muted small">Waiting for someone who can make this change.</p>`}
+          </div>`}
+          ${it.body ? html`<div class="fb-body">${isReq ? html`<span class="muted">Why: </span>` : ""}${it.body}</div>` : !isReq && html`<p class="muted small">No details.</p>`}`}
       ${it.image && html`<a class="fb-shot-full" href=${it.image} target="_blank" rel="noopener"><img src=${it.image} alt="Screenshot" /></a>`}
       ${ctx && ctx.length > 0 && html`<details class="fb-ctx"><summary>Technical details</summary>
         <div class="fb-ctx-grid">${ctx.map(([k, v]) => html`<span class="muted">${CONTEXT_LABEL[k]}</span><span>${v}</span>`)}</div></details>`}
       ${it.voters.length > 0 && html`<p class="muted small">Wanted by ${it.voters.join(", ")}.</p>`}
 
-      ${can.manage && html`<div class="fb-manage">
+      ${can.manage && !isReq && html`<div class="fb-manage">
         <b>Status</b>
         <div class="fb-status-pick">${Object.entries(STATUS).map(([k, v]) => html`<button class=${`fb-status st-${k}` + (status === k ? " on" : "")}
           onClick=${() => setStatus(k)}><${Icon} name=${v.icon} size=${14} />${v.label}</button>`)}</div>
@@ -274,7 +334,7 @@ function ItemModal({ id, can, onClose }) {
         ${it.comments_list.length === 0 && html`<p class="muted small">No comments yet.</p>`}
         ${it.comments_list.map((c) => c.event ? html`<div class="fb-event" key=${c.id}>
             <${Icon} name=${(STATUS[c.event.split(":")[1]] || {}).icon || "info"} size=${14} />
-            <span><b>${c.author.name}</b> marked this <b>${(STATUS[c.event.split(":")[1]] || {}).label || c.event}</b> · ${ago(c.created_at)}</span>
+            <span><b>${c.author.name}</b> ${isReq ? html`<b>${{ done: "approved", wontfix: "declined" }[c.event.split(":")[1]] || c.event}</b> this` : html`marked this <b>${(STATUS[c.event.split(":")[1]] || {}).label || c.event}</b>`} · ${ago(c.created_at)}</span>
             ${c.body && html`<div class="fb-event-note">${c.body}</div>`}</div>`
           : html`<div class="fb-comment" key=${c.id}><${Avatar} user=${{ display_name: c.author.name, avatar: c.author.avatar }} size=${28} />
             <div class="fb-comment-main"><div class="fb-comment-head"><b>${c.author.name}</b><span class="muted small">${ago(c.created_at)}</span>
@@ -287,4 +347,36 @@ function ItemModal({ id, can, onClose }) {
           onKeyDown=${(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && comment.trim()) post(); }}></textarea>
         <button class="btn primary" disabled=${busy || !comment.trim()} onClick=${post}>Comment</button></div>`}
     </div></${Modal}>`;
+}
+
+/** People below you, and which changes each may ask for (their abilities, without opening each person). */
+function WhoCanRequest({ me, onClose }) {
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const load = () => api("/api/users").then(setD).catch((e) => { toast(e.message, "err"); onClose(); });
+  useEffect(() => { load(); }, []);
+  const people = d ? d.users.filter((u) => u.id !== me.id && u.role !== "admin" && !u.disabled) : [];
+  const roleCaps = (u) => ((d.roles.find((r) => r.key === u.role) || {}).caps || []);
+  const toggle = async (u, cap, on) => {
+    const grant = new Set(u.caps_grant), deny = new Set(u.caps_deny), inRole = roleCaps(u).includes(cap);
+    if (on) { deny.delete(cap); if (!inRole) grant.add(cap); } else { grant.delete(cap); if (inRole) deny.add(cap); }
+    setBusy(`${u.id}${cap}`);
+    try {
+      await api(`/api/users/${u.id}`, { method: "PUT", body: { caps_grant: [...grant], caps_deny: [...deny] } });
+      await load();
+    } catch (e) { toast(e.message, "err"); }
+    setBusy(null);
+  };
+  return html`<${Modal} title="Who can request" icon="send" onClose=${onClose} wide>
+    <p class="muted">Changes people can't make themselves, but may ask for. Someone who can make the change approves it on this board.
+      These are abilities, so you'll also find them under each person's abilities and in roles.</p>
+    ${!d ? html`<${Spinner} />` : people.length === 0 ? html`<p class="muted">Nobody below you yet.</p>` : html`
+      <div class="who-grid" style=${`grid-template-columns: minmax(140px, 1fr) repeat(${REQUEST_CAPS.length}, auto)`}>
+        <span></span>${REQUEST_CAPS.map(([, l]) => html`<b class="who-col small">${l}</b>`)}
+        ${people.map((u) => html`
+          <span class="who-name"><${Avatar} user=${u} size=${24} /><span><b>${u.display_name || u.username}</b><span class="muted small"> · ${u.role_name}</span></span></span>
+          ${REQUEST_CAPS.map(([cap]) => html`<label class="who-cell"><input type="checkbox" checked=${u.caps.includes(cap)} disabled=${busy === `${u.id}${cap}`}
+            onChange=${(e) => toggle(u, cap, e.target.checked)} /></label>`)}`)}
+      </div>`}
+  </${Modal}>`;
 }

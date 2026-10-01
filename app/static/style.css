@@ -1239,3 +1239,15 @@ button.fb-status.on { box-shadow: 0 0 0 2px color-mix(in srgb, var(--st) 45%, tr
 .fb-reply textarea { min-height: 44px; }
 .fb-shot { padding: 4px 0; }
 .fb-shot-prev img { object-fit: contain; background: var(--bg2); }
+.ask-input { width: 100%; margin-top: 10px; min-height: 76px; resize: vertical; }
+.fb-status.sm { height: 22px; padding: 0 8px; font-size: 11px; }
+.fb-req { display: grid; gap: 10px; padding: 12px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--border); }
+.fb-req .fb-ctx-grid { margin-top: 0; }
+.fb-req-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.req-hint { display: flex; gap: 6px; align-items: flex-start; margin: 0 0 6px; }
+.who-grid { display: grid; gap: 8px 18px; align-items: center; }
+.who-col { text-align: center; color: var(--muted); }
+.who-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.who-cell { display: grid; place-items: center; }
+.who-cell input { width: 18px; height: 18px; }
+@media (max-width: 600px) { .who-grid { gap: 8px 10px; } .who-col { font-size: 11px; } }
