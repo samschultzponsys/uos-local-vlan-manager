@@ -627,6 +627,7 @@ export function UsersModal({ me, onClose }) {
   const blank = { username: "", display_name: "", email: "", password: "", role: "", sso: false, with_pw: false, must_change: true };
   const [form, setForm] = useState(blank);
   const [pwFor, setPwFor] = useState(null);
+  const [mergeFrom, setMergeFrom] = useState(null);
   const load = () => api("/api/users").then(setData).catch((e) => toast(e.message, "err"));
   useEffect(() => { load(); }, []);
   const can = (c) => data && data.my_caps.includes(c);
@@ -649,7 +650,7 @@ export function UsersModal({ me, onClose }) {
     footer=${tab === "people" && data && html`<span class="muted grow">New people start with the lowest role and no environments. Add someone here with their email
       and they're ready on their first SSO sign-in; anyone else who signs in with SSO waits until you set them up.</span>
       ${can("users.create") && html`<button class="btn primary" onClick=${() => setAdding(!adding)}><${Icon} name="plus" />Add user</button>`}`}>
-    ${data && data.admin && html`<nav class="tabs"><button class=${tab === "people" ? "on" : ""} onClick=${() => setTab("people")}><${Icon} name="users" size=${15} />People</button>
+    ${data && data.super && html`<nav class="tabs"><button class=${tab === "people" ? "on" : ""} onClick=${() => setTab("people")}><${Icon} name="users" size=${15} />People</button>
       <button class=${tab === "roles" ? "on" : ""} onClick=${() => setTab("roles")}><${Icon} name="shield" size=${15} />Roles & abilities</button></nav>`}
     ${!data ? html`<${Spinner} />` : tab === "roles" ? html`<${RolesEditor} onChanged=${load} />` : html`
     ${adding && html`<div class="panel add-user">
@@ -673,7 +674,7 @@ export function UsersModal({ me, onClose }) {
             const { with_pw, ...body } = form;
             const r = await api("/api/users", { method: "POST", body });
             toast(`Added ${form.display_name || r.user.username}`); setForm(blank); setAdding(false);
-            if (!isFull(r.user.role) && can("users.access")) setView({ kind: "access", user: r.user }); else load();
+            if (r.user.role !== "superadmin" && can("users.access")) setView({ kind: "access", user: r.user }); else load();
           } catch (e) { toast(e.message, "err"); }
         }}>Create</button></div>
       </div></div>`}
@@ -694,7 +695,7 @@ export function UsersModal({ me, onClose }) {
                 ${rolesByLevel.filter((r) => data.assignable_roles.includes(r.key) || r.key === u.role).map((r) => html`<option value=${r.key}>${r.name}</option>`)}</select>`
             : html`<span class=${"role-badge " + u.role}>${u.role_name}</span>`}
           ${extra > 0 && html`<div class="muted small" title="Abilities changed for this person">${u.caps_grant.length ? `+${u.caps_grant.length}` : ""}${u.caps_grant.length && u.caps_deny.length ? " " : ""}${u.caps_deny.length ? `−${u.caps_deny.length}` : ""} abilities</div>`}</td>
-        <td>${isFull(u.role) ? html`<span class="badge good">All environments</span>`
+        <td>${u.role === "superadmin" || u.caps.includes("envs.manage") ? html`<span class="badge good">All environments</span>`
           : can("users.access") && !self ? html`<button class=${"btn sm " + (u.envs ? "ghost" : "primary")} onClick=${() => setView({ kind: "access", user: u })}>
               <${Icon} name="shield" size=${14} />${u.envs ? `${u.envs} environment${u.envs > 1 ? "s" : ""}` : "Give access"}</button>`
           : html`<span class="muted small">${u.envs} environment${u.envs === 1 ? "" : "s"}</span>`}</td>
@@ -706,6 +707,7 @@ export function UsersModal({ me, onClose }) {
           }}><${Icon} name="eye" size=${15} /></button>`}
           ${(data.admin || (!self && (can("users.edit") || can("users.roles")))) && html`<button class="icon-btn sm" title="Edit, abilities" onClick=${() => setView({ kind: "edit", user: u })}><${Icon} name="user" size=${15} /></button>`}
           ${!self && can("users.edit") && html`<button class="icon-btn sm" title="Set password" onClick=${() => setPwFor(u)}><${Icon} name="key" size=${15} /></button>`}
+          ${!self && data.super && html`<button class="icon-btn sm" title="Merge into another account" onClick=${() => setMergeFrom(u)}><${Icon} name="merge" size=${15} /></button>`}
           ${u.sessions > 0 && !self && can("users.edit") && html`<button class="icon-btn sm" title="Sign out everywhere" onClick=${() => update(u, { sign_out: true }, "Signed out")}><${Icon} name="logout" size=${15} /></button>`}
           ${!self && can("users.delete") && html`<button class="icon-btn sm danger" title="Delete" onClick=${async () => {
             if (await ask({ title: `Delete ${u.username}?`, body: "Their sessions, sign-in links and access are removed too.", danger: true, confirm: "Delete" })) {
@@ -714,6 +716,8 @@ export function UsersModal({ me, onClose }) {
           }}><${Icon} name="trash" size=${15} /></button>`}`}
         </td></tr>`;
       })}</tbody></table></div>`}
+    ${mergeFrom && html`<${MergeModal} from=${mergeFrom} users=${data.users} me=${me} onClose=${() => setMergeFrom(null)}
+      onDone=${() => { setMergeFrom(null); load(); }} />`}
     ${pwFor && html`<${SetPasswordModal} user=${pwFor} onClose=${() => setPwFor(null)}
       onSave=${async (body) => { if (await update(pwFor, body, body.must_change ? "Password set - they'll choose their own at next sign-in" : "Password set")) setPwFor(null); }} />`}
   </${Modal}>`;
@@ -746,22 +750,22 @@ function RolesEditor({ onChanged }) {
   }
   return html`<div class="form">
     <p class="muted">A role is a set of abilities. Its <b>level</b> decides who is above whom: abilities to manage people only ever
-      work on people with a lower level. You can also allow or deny single abilities per person (Users → edit).
-      Changing environments, API keys, sign-in settings and roles is always admin-only.</p>
+      work on people with a lower level. Admin, Supervisor and Viewer start with sensible defaults: tune them here, and allow or
+      deny single abilities per person (Users → edit). Super admin always has everything.</p>
     <div class="role-list">
     ${roles.map((r0) => {
       const r = val(r0);
-      const admin = isFull(r.key);
+      const admin = r.key === "superadmin";   // the one fixed role
       const dirty = !!edits[r.key];
       return html`<div class=${"role-card" + (admin ? " admin" : "")} key=${r.key}>
         <div class="role-head">
           ${admin ? html`<b class="role-title">${r.name}</b>` : html`<input class="role-name" value=${r.name} onInput=${(e) => put(r.key, { name: e.target.value })} />`}
-          <label class="role-level" title=${r.builtin ? "Built-in roles keep their level" : "11 – 99"}>Level
-            <input type="number" min="11" max="99" value=${r.level} disabled=${r.builtin} onInput=${(e) => put(r.key, { level: e.target.value })} /></label>
+          ${admin ? html`<span class="role-level">Level <b>${r.level}</b></span>` : html`<label class="role-level" title=${r.builtin ? "Built-in roles keep their level" : "11 – 99"}>Level
+            <input type="number" min="11" max="99" value=${r.level} disabled=${r.builtin} onInput=${(e) => put(r.key, { level: e.target.value })} /></label>`}
           <span class="badge">${r0.users} ${r0.users === 1 ? "person" : "people"}</span>
           <span class="grow"></span>
           ${!r.builtin && html`<button class="btn sm ghost danger-text" onClick=${async () => {
-            const others = roles.filter((x) => x.key !== r.key && !isFull(x.key));
+            const others = roles.filter((x) => x.key !== r.key && x.key !== "superadmin");
             const move = prompt(`Delete ${r.name}? Its people move to another role. Type one of: ${others.map((x) => x.name).join(", ")}`, others[others.length - 1].name);
             if (!move) return;
             const target = others.find((x) => x.name.toLowerCase() === move.trim().toLowerCase());
@@ -769,11 +773,13 @@ function RolesEditor({ onChanged }) {
             try { await api(`/api/roles/${r.key}`, { method: "DELETE", body: { move_to: target.key } }); toast("Role deleted"); load(); onChanged(); } catch (e) { toast(e.message, "err"); }
             return null;
           }}>Delete</button>`}
+          ${r0.default && html`<button class="btn sm ghost" title="Back to the abilities it came with"
+            disabled=${!dirty && [...r0.caps].sort().join() === [...r0.default].sort().join()}
+            onClick=${async () => { try { await api(`/api/roles/${r.key}`, { method: "PUT", body: { reset: true } }); toast(`${r.name}: back to defaults`); load(); onChanged(); } catch (e) { toast(e.message, "err"); } }}>Defaults</button>`}
           ${!admin && html`<button class="btn sm primary" disabled=${!dirty} onClick=${() => save(r0)}>Save</button>`}
         </div>
-        ${admin ? html`<p class="muted small">${r.key === "superadmin"
-            ? "Every ability, always, including any added in future versions. Only super admins can make or change super admins, and they alone manage integrations (GitHub, notifications) and how long activity is kept."
-            : "Every ability except the super admin ones — including environments and API keys, sign-in settings and roles."}</p>`
+        ${admin ? html`<p class="muted small">Everything, always, including anything added in future versions. Only super admins edit roles,
+            manage super admins, merge accounts and set up integrations and how long activity is kept.</p>`
           : html`<div class="cap-grid">${groups.map((g) => html`<div class="cap-group"><div class="field-label">${g.group}</div>
             ${g.caps.map((c) => html`<label class="cap-row" title=${c.hint}><input type="checkbox" checked=${r.caps.includes(c.key)}
               onChange=${(e) => put(r.key, { caps: e.target.checked ? [...r.caps, c.key] : r.caps.filter((x) => x !== c.key) })} />
@@ -785,7 +791,7 @@ function RolesEditor({ onChanged }) {
         <${Field} label="New role name"><input value=${adding.name} placeholder="Lead tech" onInput=${(e) => setAdding({ ...adding, name: e.target.value })} /></${Field}>
         <${Field} label="Level (11 – 99)" hint="Supervisor is 50, Viewer is 10."><input type="number" min="11" max="99" value=${adding.level} onInput=${(e) => setAdding({ ...adding, level: e.target.value })} /></${Field}>
         <${Field} label="Start from"><select value=${adding.from} onChange=${(e) => setAdding({ ...adding, from: e.target.value })}>
-          ${roles.filter((x) => !isFull(x.key)).map((x) => html`<option value=${x.key}>${x.name}</option>`)}</select></${Field}>
+          ${roles.filter((x) => x.key !== "superadmin").map((x) => html`<option value=${x.key}>${x.name}</option>`)}</select></${Field}>
       </div>
       <div class="form-actions"><button class="btn ghost" onClick=${() => setAdding(null)}>Cancel</button><button class="btn primary" onClick=${async () => {
         const from = roles.find((x) => x.key === adding.from);
@@ -793,6 +799,37 @@ function RolesEditor({ onChanged }) {
       }}>Add role</button></div></div>`
       : html`<div class="form-actions"><button class="btn primary" onClick=${() => setAdding({ name: "", level: 30, from: "supervisor" })}><${Icon} name="plus" />Add a role</button></div>`}
   </div>`;
+}
+
+/** Super admins: fold one account into another, e.g. someone's local and SSO accounts. */
+function MergeModal({ from, users, me, onClose, onDone }) {
+  const others = users.filter((u) => u.id !== from.id);
+  const [into, setInto] = useState((others.find((u) => u.id === me.id) || others[0] || {}).id);
+  const [busy, setBusy] = useState(false);
+  const target = others.find((u) => u.id === Number(into));
+  const name = (u) => u.display_name || u.username;
+  const go = async () => {
+    setBusy(true);
+    try {
+      const r = await api(`/api/users/${target.id}/merge`, { method: "POST", body: { from: from.id } });
+      toast(`${name(from)} merged into ${name(r.user)}`); onDone();
+    } catch (e) { toast(e.message, "err"); setBusy(false); }
+  };
+  return html`<${Modal} title=${`Merge ${name(from)}`} icon="merge" onClose=${onClose}
+    footer=${html`<button class="btn ghost" onClick=${onClose}>Cancel</button>
+      <button class="btn danger" disabled=${busy || !target} onClick=${go}>Merge and delete ${from.username}</button>`}>
+    <div class="form">
+      <p>For one person with two accounts, like a local login and an SSO login. Everything moves into the account you keep:</p>
+      <ul class="small">
+        <li>its <b>SSO link</b>${from.sso ? " (this account has one)" : ""} and its <b>password</b> if the kept account has none</li>
+        <li>the <b>higher role</b> of the two, their environments, sign-in links and per-person abilities</li>
+        <li>their feedback, votes and comments; their email and name if the kept account has none</li>
+      </ul>
+      <${Field} label="Keep this account">
+        <select value=${into} onChange=${(e) => setInto(Number(e.target.value))}>
+          ${others.map((u) => html`<option value=${u.id}>${name(u)} (${u.username}${u.sso ? ", SSO" : ""}${u.has_password ? ", password" : ""}) · ${u.role_name}</option>`)}</select></${Field}>
+      <p class="muted small"><b>${from.username}</b> is deleted afterwards. The activity log keeps its entries under the old name.</p>
+    </div></${Modal}>`;
 }
 
 /** An admin sets someone's password: temporary by default (they choose their own at next sign-in). */
@@ -825,7 +862,7 @@ function UserEditor({ user, data, me, onSave, onCancel }) {
   const [grant, setGrant] = useState(user.caps_grant || []);
   const [deny, setDeny] = useState(user.caps_deny || []);
   const mayEdit = data.admin || data.my_caps.includes("users.edit");
-  const mayRoles = (data.admin || data.my_caps.includes("users.roles")) && !isFull(user.role) && user.id !== me.id;
+  const mayRoles = (data.admin || data.my_caps.includes("users.roles")) && user.role !== "superadmin" && user.id !== me.id;
   const roleCaps = ((data.roles.find((r) => r.key === user.role) || {}).caps) || [];
   const stateOf = (k) => (grant.includes(k) ? "allow" : deny.includes(k) ? "deny" : "role");
   const setState = (k, st) => {
@@ -862,7 +899,8 @@ function UserEditor({ user, data, me, onSave, onCancel }) {
           const st = stateOf(c.key);
           const fromRole = roleCaps.includes(c.key);
           const on = st === "allow" || (st === "role" && fromRole);
-          const mine = data.admin || data.my_caps.includes(c.key);
+          // the administration abilities are a super admin's to give; anything else, if you have it
+          const mine = data.admin_caps.includes(c.key) ? data.super : data.admin || data.my_caps.includes(c.key);
           return html`<div class=${"cap-line" + (on ? " on" : "")} title=${c.hint}>
             <span class="cap-label"><span class=${"cap-dot" + (on ? " on" : "")}></span>${c.label}</span>
             <${Segmented} value=${st} onChange=${(v) => setState(c.key, v)} options=${[
@@ -906,7 +944,7 @@ function AccessEditor({ user, roles, onDone }) {
   const toggleIn = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   if (!envList) return html`<${Spinner} />`;
   return html`<div class="form">
-    ${isFull(user.role) && html`<div class="notice"><${Icon} name="info" /><div>${user.role === "superadmin" ? "Super admins" : "Admins"} always have every environment. This only matters if you change their role.</div></div>`}
+    ${(user.role === "superadmin" || (user.caps || []).includes("envs.manage")) && html`<div class="notice"><${Icon} name="info" /><div>${user.role === "superadmin" ? "Super admins" : "People who manage environments"} always have every environment. This only matters if you change their role.</div></div>`}
     <p class="muted">${user.display_name || user.username} (${roleName(roles, user.role)}) sees the devices you pick${(user.caps || []).includes("ports.change") ? ", and changes ports using the networks you pick" : ""}.
       ${" "}Networks and devices come live from each console.</p>
     ${envList.length === 0 && html`<div class="empty-sm">Add an environment under Settings → Environments first.</div>`}
@@ -1102,7 +1140,8 @@ const ACTION_LABEL = {
   "port.set": "Port changed", "login.failed": "Failed sign-in", "login.sso_denied": "SSO sign-in refused",
   "user.created": "User added", "user.updated": "User changed", "user.deleted": "User deleted",
   "user.password_changed": "Password changed", "token.created": "Token created", "token.revoked": "Token revoked",
-  "settings.app": "Settings changed", "settings.auth": "Sign-in settings changed",
+  "settings.app": "Settings changed", "settings.auth": "Sign-in settings changed", "user.merged": "Accounts merged",
+  "user.password_removed": "Password removed",
   "user.access": "Access changed", "env.created": "Environment added", "env.updated": "Environment changed",
   "env.deleted": "Environment deleted", "port.locked": "Port locked", "port.unlocked": "Port unlocked",
   "port.lock_reapplied": "Locked settings re-applied", "role.created": "Role added", "role.updated": "Role changed",

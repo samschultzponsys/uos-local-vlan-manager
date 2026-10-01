@@ -358,7 +358,7 @@ function WhoCanRequest({ me, onClose }) {
   const [busy, setBusy] = useState(null);
   const load = () => api("/api/users").then(setD).catch((e) => { toast(e.message, "err"); onClose(); });
   useEffect(() => { load(); }, []);
-  const people = d ? d.users.filter((u) => u.id !== me.id && u.role !== "admin" && u.role !== "superadmin" && !u.disabled) : [];
+  const people = d ? d.users.filter((u) => u.id !== me.id && u.role !== "superadmin" && !u.disabled) : [];
   const roleCaps = (u) => ((d.roles.find((r) => r.key === u.role) || {}).caps || []);
   const toggle = async (u, cap, on) => {
     const grant = new Set(u.caps_grant), deny = new Set(u.caps_deny), inRole = roleCaps(u).includes(cap);

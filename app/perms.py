@@ -2,22 +2,23 @@
 Roles and abilities.
 
 Every person has one role. A role is a named set of abilities with a level;
-the level decides who is "above" whom. Per person, an admin can also allow or
-deny single abilities on top of their role.
+the level decides who is "above" whom. Per person, abilities can also be
+allowed or denied on top of their role.
 
-    Super admin (1000)  every ability, always, including any added later - not editable. Only super
-                        admins can make or change super admins, and the last one can't be removed.
-    Admin (level 100)   every ability except the owner-level ones (system.manage) - not editable
+    Super admin (1000)  everything, always, including anything added later. Built in, not
+                        editable. Only super admins edit roles, manage super admins, and own the
+                        integrations and activity retention. The last one can't be removed.
+    Admin (100)         default: every ability a role can have (environments, settings, people...)
     Supervisor (50)     default: change ports, see environment settings, see activity
-                        (PoE control and device management start admin-only)
-    Viewer (10)         default: nothing beyond seeing their devices
+    Viewer (10)         default: see their devices, feedback
     custom roles        any level from 11 to 99, any abilities
 
-Abilities that let someone hand themselves more power (environments and API
-keys, sign-in settings, editing roles) are admin-only and can't be granted.
+Admin, Supervisor and Viewer are starting points: super admins tune them (and can put them
+back to the defaults), and tweak single abilities per person.
 
-People-management abilities only ever apply to people whose role is *below*
-your own, and you can only pass on access and abilities you have yourself.
+The administration abilities (environments and API keys, app settings) can only be given or
+taken away by a super admin. People-management abilities only ever apply to people whose role
+is *below* your own, and you can only pass on access and abilities you have yourself.
 """
 
 import json
@@ -31,7 +32,7 @@ ADMIN = "admin"
 ADMIN_LEVEL = 100
 SUPER = "superadmin"
 SUPER_LEVEL = 1000
-FULL = (SUPER, ADMIN)   # built-in roles whose abilities are fixed, not stored
+FULL = (SUPER, ADMIN)   # the top roles: never "viewed as", see every environment by default
 
 # (key, group, label, hint)
 CAPS = [
@@ -58,6 +59,10 @@ CAPS = [
      "For ports they can't change themselves. Someone who can change it approves it on the Feedback board."),
     ("requests.poe", "Requests", "Request a PoE power-cycle", "To restart a camera, phone or access point."),
     ("requests.restart", "Requests", "Request a device restart", "Gateways, switches and access points."),
+    ("envs.manage", "Administration", "Manage environments and API keys",
+     "Add, change and remove UniFi connections. Sees every environment, network and device."),
+    ("settings.manage", "Administration", "Change app settings",
+     "Sign-in and SSO, branding, port behaviour, updates. Sees all activity and manages everyone but super admins."),
     ("users.view", "People", "See the people below them", "Opens the Users page, showing only lower roles."),
     ("users.create", "People", "Add people", "New people get the lowest role."),
     ("users.edit", "People", "Edit people below them",
@@ -69,23 +74,21 @@ CAPS = [
     ("users.delete", "People", "Delete people below them", ""),
     ("users.view_as", "People", "View as people below them", "See the app exactly as that person does."),
 ]
-CAP_KEYS = [c[0] for c in CAPS]
-# never grantable: whoever has these could give themselves everything else
-ADMIN_CAPS = ["envs.manage", "settings.manage", "roles.manage"]
-# owner-level, super admins only: integration tokens (GitHub, notifications) and how long activity is kept
-SUPER_CAPS = ["system.manage"]
-ALL_CAPS = CAP_KEYS + ADMIN_CAPS + SUPER_CAPS
+CAP_KEYS = [c[0] for c in CAPS]   # what roles and per-person overrides can hold
+# only a super admin may give or take these (whoever has them could hand themselves more)
+ADMIN_CAPS = ["envs.manage", "settings.manage"]
+# super admins only, never on a role: editing roles, integration tokens, activity retention
+SUPER_CAPS = ["roles.manage", "system.manage"]
+ALL_CAPS = CAP_KEYS + SUPER_CAPS
 
 
-def full_caps(role_key):
-    """Abilities of the fixed roles: a super admin has every ability that exists, now or later."""
-    if role_key == SUPER:
-        return set(ALL_CAPS)
-    return set(ALL_CAPS) - set(SUPER_CAPS)
+def full_caps(role_key=SUPER):
+    """A super admin has every ability that exists, now or later."""
+    return set(ALL_CAPS)
 
 DEFAULT_ROLES = [
     (SUPER, "Super admin", SUPER_LEVEL, ALL_CAPS),
-    (ADMIN, "Admin", ADMIN_LEVEL, ALL_CAPS),
+    (ADMIN, "Admin", ADMIN_LEVEL, CAP_KEYS),
     ("supervisor", "Supervisor", 50, ["ports.change", "env.info", "activity.view", "apps.network",
                                       "feedback.view", "feedback.submit"]),
     ("viewer", "Viewer", 10, ["apps.network", "feedback.view", "feedback.submit"]),
@@ -120,6 +123,11 @@ MIGRATIONS = [
 ]
 
 
+def default_caps(role_key):
+    """A built-in role's starting abilities (for "back to defaults")."""
+    return next((list(c) for k, _, _, c in DEFAULT_ROLES if k == role_key), None)
+
+
 def migrate(conn):
     for flag, add in MIGRATIONS:
         if conn.execute("SELECT 1 FROM settings WHERE key=?", (flag,)).fetchone():
@@ -130,6 +138,10 @@ def migrate(conn):
             if more:
                 conn.execute("UPDATE roles SET caps=? WHERE key=?", (json.dumps(caps + more), r["key"]))
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '1')", (flag,))
+    # 3.8: Admin became an editable role, starting with every ability a role can have
+    if not conn.execute("SELECT 1 FROM settings WHERE key='migrated_admin_role'").fetchone():
+        conn.execute("UPDATE roles SET caps=? WHERE key=?", (json.dumps(CAP_KEYS), ADMIN))
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('migrated_admin_role', '1')")
     # 3.7: someone has to be super admin - the first admin (or the longest-standing one)
     if not conn.execute("SELECT 1 FROM users WHERE role=?", (SUPER,)).fetchone():
         r = conn.execute("SELECT id FROM users WHERE role=? AND disabled=0 ORDER BY seeded DESC, id LIMIT 1", (ADMIN,)).fetchone()
@@ -144,7 +156,7 @@ def roles():
         return cached
     out = {}
     for r in db.get().execute("SELECT * FROM roles ORDER BY level DESC, name"):
-        caps = sorted(full_caps(r["key"])) if r["key"] in FULL else [c for c in _loads(r["caps"]) if c in CAP_KEYS]
+        caps = sorted(full_caps()) if r["key"] == SUPER else [c for c in _loads(r["caps"]) if c in CAP_KEYS]
         out[r["key"]] = {"key": r["key"], "name": r["name"], "level": r["level"], "caps": caps,
                          "builtin": bool(r["builtin"])}
     if _in_request():
@@ -191,8 +203,8 @@ def role_caps(role_key):
 
 def user_caps(role_key, grant=None, deny=None):
     """Abilities of someone with this role and these per-person overrides."""
-    if role_key in FULL:
-        return full_caps(role_key)
+    if role_key == SUPER:
+        return full_caps()
     caps = role_caps(role_key) | {c for c in (grant or []) if c in CAP_KEYS}
     return caps - set(deny or [])
 
@@ -205,7 +217,7 @@ def caps_for(user):
     if cached is not None:
         return cached
     if user.get("method") == "none":
-        caps = full_caps(user["role"]) if user["role"] in FULL else role_caps(user["role"])
+        caps = full_caps() if user["role"] == SUPER else role_caps(user["role"])
     else:
         row = db.get().execute("SELECT role, caps_grant, caps_deny FROM users WHERE id=?", (user["id"],)).fetchone()
         if row is None:

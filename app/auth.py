@@ -1179,7 +1179,8 @@ def init_app(app):
                         "roles": [rs[k] for k in rs],
                         "assignable_roles": perms.assignable_roles(me),
                         "caps": perms.public_caps(),
-                        "my_caps": sorted(perms.caps_for(me)),
+                        "my_caps": sorted(perms.caps_for(me)), "super": perms.is_super(me),
+                        "admin_caps": perms.ADMIN_CAPS,
                         "admin": is_admin(me)})
 
     @app.route("/api/users", methods=["POST"])
@@ -1211,6 +1212,74 @@ def init_app(app):
                                                 "password": bool(row["password_hash"]),
                                                 "must_change_password": bool(row["must_change_pw"])})
         return jsonify({"ok": True, "user": public_user(row)})
+
+    @app.route("/api/users/<int:uid>/merge", methods=["POST"])
+    @require("system.manage")
+    def api_user_merge(uid):
+        """Fold another account into this one (super admins): e.g. someone's local and SSO accounts.
+        The kept account gains the other's SSO link, password (if it had none), access, tokens and
+        feedback, and the higher of the two roles; the other account is deleted."""
+        me = current()
+        try:
+            other_id = int((request.get_json(silent=True) or {}).get("from"))
+        except (TypeError, ValueError):
+            return _deny("Pick the account to merge in", 400)
+        keep, gone = get_user(uid), get_user(other_id)
+        if keep is None or gone is None or keep["id"] == gone["id"]:
+            return _deny("Pick two different accounts", 400)
+        if gone["id"] == me["id"]:
+            return _deny("You can't merge yourself away - merge the other account into yours", 400)
+        if keep["oidc_sub"] and gone["oidc_sub"] and keep["oidc_sub"] != gone["oidc_sub"]:
+            return _deny("Both accounts are linked to a different SSO identity, so one of them would stop working", 400)
+        d = db.get()
+        sets = {}
+        if gone["oidc_sub"] and not keep["oidc_sub"]:
+            d.execute("UPDATE users SET oidc_sub=NULL WHERE id=?", (gone["id"],))   # it's unique: free it first
+            sets["oidc_sub"] = gone["oidc_sub"]
+        if gone["password_hash"] and not keep["password_hash"]:
+            sets.update(password_hash=gone["password_hash"], must_change_pw=gone["must_change_pw"])
+        for k in ("email", "display_name"):
+            if gone[k] and not keep[k]:
+                sets[k] = gone[k]
+        if perms.level(gone["role"]) > perms.level(keep["role"]):
+            sets["role"] = gone["role"]
+        grant = sorted(set(_loads(keep["caps_grant"])) | set(_loads(gone["caps_grant"])))
+        deny = sorted(set(_loads(keep["caps_deny"])) & set(_loads(gone["caps_deny"])))
+        sets.update(caps_grant=json.dumps(grant), caps_deny=json.dumps(deny),
+                    sso_allowed=1 if (keep["sso_allowed"] or gone["sso_allowed"]) else 0,
+                    pending=1 if (keep["pending"] and gone["pending"]) else 0,
+                    seeded=1 if (keep["seeded"] or gone["seeded"]) else 0,
+                    last_login=max(keep["last_login"], gone["last_login"]))
+        if (keep["prefs"] or "{}") == "{}" and (gone["prefs"] or "{}") != "{}":
+            sets["prefs"] = gone["prefs"]
+        d.execute(f"UPDATE users SET {', '.join(k + '=?' for k in sets)} WHERE id=?", (*sets.values(), keep["id"]))
+        # what belonged to the other account
+        d.execute("INSERT OR IGNORE INTO user_env (user_id, env_id, all_vlans, vlans, all_devices, devices) "
+                  "SELECT ?, env_id, all_vlans, vlans, all_devices, devices FROM user_env WHERE user_id=?", (keep["id"], gone["id"]))
+        d.execute("UPDATE api_tokens SET user_id=? WHERE user_id=?", (keep["id"], gone["id"]))
+        d.execute("UPDATE feedback SET user_id=? WHERE user_id=?", (keep["id"], gone["id"]))
+        d.execute("UPDATE feedback_comments SET user_id=? WHERE user_id=?", (keep["id"], gone["id"]))
+        for t in ("feedback_votes", "feedback_unseen"):
+            d.execute(f"INSERT OR IGNORE INTO {t} (item_id, user_id) SELECT item_id, ? FROM {t} WHERE user_id=?"
+                      if t == "feedback_votes" else
+                      f"INSERT OR IGNORE INTO {t} (user_id, item_id) SELECT ?, item_id FROM {t} WHERE user_id=?",
+                      (keep["id"], gone["id"]))
+        d.execute("DELETE FROM sessions WHERE user_id=?", (gone["id"],))
+        d.execute("DELETE FROM users WHERE id=?", (gone["id"],))
+        d.commit()
+        if not keep["avatar_version"] and gone["avatar_version"]:
+            for src in _avatar_files(gone["id"]):
+                if os.path.isfile(src):
+                    os.replace(src, src.replace(f"{os.sep}{gone['id']}.", f"{os.sep}{keep['id']}."))
+                    d.execute("UPDATE users SET avatar_version=? WHERE id=?", (gone["avatar_version"], keep["id"]))
+                    d.commit()
+        else:
+            remove_avatar(gone["id"])
+        perms.forget()
+        audit("user.merged", keep["username"], {"merged": gone["username"], "role": perms.name(sets.get("role", keep["role"])),
+                                                "sso": bool(keep["oidc_sub"] or gone["oidc_sub"]),
+                                                "password": bool(keep["password_hash"] or gone["password_hash"])})
+        return jsonify({"ok": True, "user": public_user(get_user(keep["id"]))})
 
     @app.route("/api/users/<int:uid>", methods=["PUT", "DELETE"])
     @require()
@@ -1253,6 +1322,9 @@ def init_app(app):
                 mine = perms.caps_for(me)
                 if not is_admin(me) and any(c not in mine for c in vals):
                     return _deny("You can only hand out abilities you have yourself", 403)
+                touched = set(vals) ^ set(_loads(row[k]))
+                if touched & set(perms.ADMIN_CAPS) and not perms.is_super(me):
+                    return _deny("Only a super admin can give or take away the administration abilities", 403)
                 changes[k] = json.dumps(vals)
         if "sso_allowed" in data and bool(data["sso_allowed"]) != bool(row["sso_allowed"]):
             changes["sso_allowed"] = 1 if data["sso_allowed"] else 0
@@ -1326,8 +1398,8 @@ def init_app(app):
     def api_roles():
         counts = {r["role"]: r["n"] for r in db.get().execute("SELECT role, COUNT(*) AS n FROM users GROUP BY role")}
         rs = perms.roles()
-        return jsonify({"roles": [{**rs[k], "users": counts.get(k, 0)} for k in rs], "caps": perms.public_caps(),
-                        "admin_caps": perms.ADMIN_CAPS})
+        return jsonify({"roles": [{**rs[k], "users": counts.get(k, 0), "default": perms.default_caps(k) if k != perms.SUPER else None}
+                                  for k in rs], "caps": perms.public_caps(), "admin_caps": perms.ADMIN_CAPS})
 
     @app.route("/api/roles", methods=["POST"])
     @require("roles.manage")
@@ -1357,8 +1429,8 @@ def init_app(app):
         role = perms.roles().get(key)
         if role is None:
             return _deny("No such role", 404)
-        if key in perms.FULL:
-            return _deny("Super admin and Admin are built in: their abilities are fixed", 400)
+        if key == perms.SUPER:
+            return _deny("Super admin always has everything and can't be changed", 400)
         d = db.get()
         if request.method == "DELETE":
             if role["builtin"]:
@@ -1373,8 +1445,13 @@ def init_app(app):
             perms.forget()
             audit("role.deleted", role["name"], {"people_moved_to": perms.name(move_to)})
             return jsonify({"ok": True})
+        body = request.get_json(silent=True) or {}
+        if body.get("reset"):
+            if perms.default_caps(key) is None:
+                return _deny("Only the built-in roles have defaults", 400)
+            body = {"caps": perms.default_caps(key)}
         try:
-            vals = _role_body(request.get_json(silent=True) or {}, builtin=role["builtin"])
+            vals = _role_body(body, builtin=role["builtin"])
         except ValueError as e:
             return _deny(str(e), 400)
         if vals:

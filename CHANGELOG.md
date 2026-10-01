@@ -5,6 +5,25 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.8 — 2026-10-01
+
+### Changed
+- **Roles, simplified.** **Super admin** has everything, always, and is the only fixed role.
+  **Admin**, **Supervisor** and **Viewer** are now ordinary roles with defaults (Admin: every
+  ability a role can have) that super admins tune under **Users → Roles & abilities**, with a
+  **Defaults** button to put a built-in role back. Per-person **allow / deny** overrides now work
+  for admins too.
+- The administration abilities (*Manage environments and API keys*, *Change app settings*)
+  appear in the role and person editors; only a super admin can give or take them away.
+- Editing roles is for super admins only (admins keep managing people).
+
+### Added
+- **Merge accounts** (super admins, Users → the merge button on a person): for someone with
+  two accounts, like a local login and an SSO login. The kept account gets the other's SSO
+  link and password (if it had none), the higher of the two roles, their environments,
+  sign-in links, per-person abilities, feedback, votes and comments; the other account is
+  deleted. Afterwards one account signs in both ways.
+
 ## 3.7 — 2026-10-01
 
 ### Added

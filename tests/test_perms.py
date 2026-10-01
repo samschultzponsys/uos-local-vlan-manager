@@ -21,8 +21,10 @@ def test_grant_and_deny_single_abilities(app, fake, admin):
     admin.put(f"/api/users/{sid}", json={"caps_deny": ["ports.change", "activity.view"]})
     assert _set(sup, eid, "dev-sw8", 4, **body).status_code == 403
     assert sup.get("/api/audit").status_code == 403
-    # admin-only abilities can't be handed out
-    admin.put(f"/api/users/{vid}", json={"caps_grant": ["envs.manage", "settings.manage"]})
+    # the administration abilities: only a super admin hands them out (the signed-in admin is one)
+    assert admin.put(f"/api/users/{vid}", json={"caps_grant": ["envs.manage"]}).status_code == 200
+    assert viewer.get("/api/admin/envs").status_code == 200
+    admin.put(f"/api/users/{vid}", json={"caps_grant": []})
     assert viewer.get("/api/admin/envs").status_code == 403
 
 
@@ -35,7 +37,11 @@ def test_editing_a_role_changes_everyone_in_it(app, fake, admin):
     assert r.status_code == 200 and r.get_json()["role"]["name"] == "Technician"
     assert sup.get("/api/audit").status_code == 403
     assert sup.get("/api/me").get_json()["role_name"] == "Technician"
-    assert admin.put("/api/roles/admin", json={"caps": []}).status_code == 400
+    assert admin.put("/api/roles/superadmin", json={"caps": []}).status_code == 400   # always everything
+    assert admin.put("/api/roles/admin", json={"caps": ["ports.change", "users.view"]}).status_code == 200
+    assert admin.put("/api/roles/admin", json={"reset": True}).status_code == 200      # back to the defaults
+    import perms
+    assert set(admin.get("/api/roles").get_json()["roles"][1]["caps"]) == set(perms.CAP_KEYS)
     assert sup.put("/api/roles/supervisor", json={"caps": ["users.view"]}).status_code == 403
 
 
@@ -84,3 +90,22 @@ def test_deleting_a_custom_role_moves_its_people(app, admin):
     assert admin.delete("/api/roles/supervisor", json={}).status_code == 400
     assert admin.delete(f"/api/roles/{key}", json={"move_to": "viewer"}).status_code == 200
     assert c.get("/api/me").get_json()["role"] == "viewer"
+
+
+def test_admins_are_an_editable_role_below_super_admins(app, admin):
+    import perms
+    uid, adm = make_user(admin, app, "ada", "admin")
+    caps = set(adm.get("/api/me").get_json()["caps"])
+    assert caps == set(perms.CAP_KEYS) and not caps & set(perms.SUPER_CAPS)
+    # admins don't edit roles, and can't hand out the administration abilities
+    assert adm.put("/api/roles/viewer", json={"caps": []}).status_code == 403
+    vid, _ = make_user(admin, app, "vin")
+    assert adm.put(f"/api/users/{vid}", json={"caps_grant": ["settings.manage"]}).status_code == 403
+    assert adm.put(f"/api/users/{vid}", json={"caps_grant": ["ports.change"]}).status_code == 200
+    # a super admin can tweak one admin: less for this one
+    admin.put(f"/api/users/{uid}", json={"caps_deny": ["envs.manage"]})
+    assert adm.get("/api/admin/envs").status_code == 403
+    # or the whole Admin role
+    admin.put(f"/api/users/{uid}", json={"caps_deny": []})
+    admin.put("/api/roles/admin", json={"caps": [c for c in perms.CAP_KEYS if c != "users.delete"]})
+    assert "users.delete" not in adm.get("/api/me").get_json()["caps"]

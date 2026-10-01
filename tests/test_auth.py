@@ -456,3 +456,40 @@ def test_super_admin_is_above_admins(app, admin):
 def test_super_admin_role_is_fixed(admin):
     assert admin.put("/api/roles/superadmin", json={"name": "Boss"}).status_code == 400
     assert admin.delete("/api/roles/superadmin", json={}).status_code == 400
+
+
+def test_merge_a_local_and_an_sso_account(app, admin):
+    import auth
+    me = admin.get("/api/me").get_json()
+    with app.test_request_context():
+        cfg = auth.stored_config()
+        cfg["oidc"].update(issuer="https://idp", client_id="x")
+        db.set_json("auth", cfg)
+        sso, _ = auth._oidc_user({"sub": "sam-sso", "preferred_username": "sam.s", "email": "sam@corp.test"})
+    fid = None
+    with app.test_request_context():
+        db.get().execute("INSERT INTO feedback (kind, title, user_id, author, created_at, updated_at) VALUES ('idea','x',?,?,1,1)",
+                         (sso["id"], "sam.s"))
+        db.get().commit()
+    # only super admins merge, and never themselves away
+    assert admin.post(f"/api/users/{sso['id']}/merge", json={"from": me["id"]}).status_code == 400
+    r = admin.post(f"/api/users/{me['id']}/merge", json={"from": sso["id"]})
+    assert r.status_code == 200, r.get_json()
+    kept = r.get_json()["user"]
+    assert kept["role"] == "superadmin" and kept["sso"] and kept["has_password"] and kept["email"] == "sam@corp.test"
+    users = admin.get("/api/users").get_json()["users"]
+    assert not any(u["id"] == sso["id"] for u in users)
+    with app.test_request_context():
+        # the SSO identity now signs into the kept account
+        u, err = auth._oidc_user({"sub": "sam-sso", "email": "sam@corp.test"})
+        assert u["id"] == me["id"]
+        assert db.get().execute("SELECT user_id FROM feedback WHERE title='x'").fetchone()[0] == me["id"]
+    # and the password still works
+    assert login(app.test_client(), "admin", app.config["ADMIN_PASSWORD"]).status_code == 200
+
+
+def test_only_super_admins_merge(app, admin):
+    from conftest import make_user
+    uid, adm = make_user(admin, app, "ada", "admin")
+    vid, _ = make_user(admin, app, "vin")
+    assert adm.post(f"/api/users/{uid}/merge", json={"from": vid}).status_code == 403

@@ -220,7 +220,7 @@ Everything a person can do is an **ability**. A **role** is a named set of abili
 **level**, and the level decides who is above whom. Admins edit roles under
 **Users → Roles & abilities**.
 
-| Ability | Super admin / Admin | Supervisor* | Viewer* |
+| Ability | Admin* | Supervisor* | Viewer* |
 |---|:-:|:-:|:-:|
 | Change port VLANs (their devices, their networks) | ✓ | ✓ | |
 | Change protected ports | ✓ | | |
@@ -234,14 +234,19 @@ Everything a person can do is an **ability**. A **role** is a named set of abili
 | Give access to people below them (from their own access) | ✓ | | |
 | Change roles and abilities of people below them | ✓ | | |
 | View as people below them | ✓ | | |
-| Environments & API keys, sign-in settings, roles | ✓ (admin-only) | | |
+| Environments & API keys, app settings (only a super admin gives these) | ✓ | | |
+| Edit roles, integrations, activity retention, merge accounts | super admin only | | |
 
 \* defaults, which can be changed.
 
-- **Super admin** (level 1000, built in) has every ability there is, including any a later
-  version adds. Only super admins manage super admins (the last one can't be removed), and
-  only they set up **Integrations** and **how long activity is kept**. **Admin** (100) has
-  everything else. The first account is a super admin.
+- **Super admin** (level 1000, built in, not editable) has everything, including anything a
+  later version adds. Only super admins edit roles, manage super admins (the last one can't be
+  removed), merge accounts, and set up **Integrations** and **how long activity is kept**. The
+  first account is a super admin.
+- **Admin** (100), **Supervisor** and **Viewer** are starting points a super admin can tune
+  (and reset with *Defaults*); Admin starts with every ability a role can have.
+- **Merge accounts**: one person with a local and an SSO account? Users → merge button on the
+  one to remove → pick the account to keep. It then signs in both ways.
 
 - **Supervisor** (level 50) and **Viewer** (level 10) can be renamed and given any
   abilities.
