@@ -297,3 +297,34 @@ def test_cloud_console_id_from_pasted_url(monkeypatch):
     url = "https://unifi.ui.com/consoles/3be578f1-fc61-4478-926e-441311aaaf64/network/default/integrations"
     assert c.resolve_console_id(url) == "70A741:111"
     assert c.resolve_console_id("70A741:111") == "70A741:111"
+
+
+def test_new_sso_user_waits_until_an_admin_sets_them_up(app, admin):
+    with app.test_request_context("/"):
+        cfg = auth.stored_config()
+        cfg["oidc"].update(issuer="https://idp", client_id="x")
+        db.set_json("auth", cfg)
+        row, err = auth._oidc_user({"sub": "new1", "preferred_username": "newbie", "email": "n@x.io"})
+        assert err is None and row["pending"] == 1
+        db.close()
+    users = admin.get("/api/users").get_json()["users"]
+    u = next(x for x in users if x["username"] == "newbie")
+    assert u["pending"] and admin.get("/api/me").get_json()["waiting"] == 1
+    # giving access ends the wait
+    admin.put(f"/api/users/{u['id']}/access", json={"envs": []})
+    u = next(x for x in admin.get("/api/users").get_json()["users"] if x["username"] == "newbie")
+    assert not u["pending"] and admin.get("/api/me").get_json()["waiting"] == 0
+
+
+def test_precreated_user_is_matched_by_verified_email_only(app, admin):
+    admin.post("/api/users", json={"username": "jane", "email": "jane@corp.io", "role": "supervisor"})
+    with app.test_request_context("/"):
+        cfg = auth.stored_config()
+        cfg["oidc"].update(issuer="https://idp", client_id="x")
+        db.set_json("auth", cfg)
+        # an unverified email can't claim the account an admin made
+        row, _ = auth._oidc_user({"sub": "s-unv", "preferred_username": "jd", "email": "jane@corp.io", "email_verified": False})
+        assert row["username"] != "jane" and row["pending"] == 1
+        row, _ = auth._oidc_user({"sub": "s-ok", "preferred_username": "jd2", "email": "Jane@Corp.io", "email_verified": True})
+        assert row["username"] == "jane" and row["role"] == "supervisor" and not row["pending"]
+        db.close()

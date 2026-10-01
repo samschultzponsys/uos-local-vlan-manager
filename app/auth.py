@@ -298,8 +298,15 @@ def public_user(row):
         "email": row["email"], "role": row["role"], "disabled": bool(row["disabled"]),
         "seeded": bool(row["seeded"]), "sso": bool(row["oidc_sub"]),
         "has_password": bool(row["password_hash"]), "created_at": row["created_at"],
-        "last_login": row["last_login"],
+        "last_login": row["last_login"], "pending": bool(row["pending"]),
     }
+
+
+def clear_pending(user_id):
+    """An admin has set this person up (access, role or abilities): they're no longer waiting."""
+    d = db.get()
+    d.execute("UPDATE users SET pending=0 WHERE id=? AND pending=1", (user_id,))
+    d.commit()
 
 
 def get_user(user_id):
@@ -317,7 +324,7 @@ def admin_count(exclude_id=None):
 
 
 def create_user(username, password="", role="viewer", display_name="", email="",
-                oidc_sub=None, seeded=False):
+                oidc_sub=None, seeded=False, pending=False):
     if not USERNAME_RE.match(username or ""):
         raise ValueError("Username: 1-64 letters, digits, . _ @ -")
     if find_user(username):
@@ -328,10 +335,10 @@ def create_user(username, password="", role="viewer", display_name="", email="",
         raise ValueError(f"Password must be at least {MIN_PASSWORD} characters")
     d = db.get()
     cur = d.execute(
-        "INSERT INTO users (username, display_name, email, role, password_hash, oidc_sub, seeded, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO users (username, display_name, email, role, password_hash, oidc_sub, seeded, pending, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
         (username, display_name or "", email or "", role,
-         generate_password_hash(password) if password else "", oidc_sub, 1 if seeded else 0, db.now()))
+         generate_password_hash(password) if password else "", oidc_sub, 1 if seeded else 0, 1 if pending else 0, db.now()))
     d.commit()
     return get_user(cur.lastrowid)
 
@@ -654,9 +661,11 @@ def _oidc_user(claims):
     name = str(claims.get("name") or claims.get("preferred_username") or "")
     d = db.get()
     row = d.execute("SELECT * FROM users WHERE oidc_sub=?", (sub,)).fetchone()
+    # an email the provider says isn't verified can't be used to claim an account an admin added
+    email_ok = bool(email) and claims.get("email_verified") is not False
     if row is None:
         # an admin can pre-create an SSO user (no password) with the same username or email
-        for key in [claims.get("preferred_username"), email]:
+        for key in [claims.get("preferred_username"), email if email_ok else None]:
             if not key:
                 continue
             cand = d.execute("SELECT * FROM users WHERE (username=? COLLATE NOCASE OR (email!='' AND email=? COLLATE NOCASE)) "
@@ -674,9 +683,11 @@ def _oidc_user(claims):
         while find_user(username):
             n += 1
             username = f"{base}{n}"
-        # SSO only proves who someone is: role and environments come from an admin here
-        row = create_user(username, "", perms.lowest_role(), name, email, oidc_sub=sub)
-        _log(f"SSO user '{username}' created as viewer")
+        # SSO only proves who someone is: role and environments come from an admin here, so new
+        # people wait (see a "your admin hasn't set you up yet" page) until an admin gives them access
+        row = create_user(username, "", perms.lowest_role(), name, email, oidc_sub=sub, pending=True)
+        _log(f"SSO user '{username}' created, waiting for an admin to set them up")
+        db.audit(username, row["role"], "user.sso_waiting", username, {"email": email}, ip=client_ip())
     elif email and email != row["email"]:
         d.execute("UPDATE users SET email=? WHERE id=?", (email, row["id"]))
         d.commit()
@@ -881,6 +892,9 @@ def init_app(app):
             out["avatar_locked"] = bool(row["avatar_locked"])
             pw = db.get_setting("initial_admin_password", "")
             out["initial_password"] = bool(row["seeded"] and pw)
+            out["pending"] = bool(row["pending"])
+        if perms.has(u, "users.access"):   # people waiting for someone to set them up
+            out["waiting"] = db.get().execute("SELECT COUNT(*) FROM users WHERE pending=1 AND disabled=0").fetchone()[0]
         return jsonify(out)
 
     @app.route("/api/me/prefs", methods=["PUT"])
@@ -1184,6 +1198,9 @@ def init_app(app):
         for k in ("display_name", "email"):
             if k in data:
                 changes[k] = str(data[k] or "").strip()[:128]
+        # giving someone a role or abilities, or approving them outright, ends their wait
+        if row["pending"] and ({"role", "caps_grant", "caps_deny"} & set(changes) or data.get("approve")):
+            changes["pending"] = 0
         for k, v in changes.items():
             d.execute(f"UPDATE users SET {k}=? WHERE id=?", (v, uid))
         if changes.get("disabled"):

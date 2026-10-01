@@ -1209,6 +1209,7 @@ function App() {
   }
 
   if (bootErr) return html`<${BootError} error=${bootErr} />`;
+  if (me && me.pending) return html`<${Waiting} me=${me} />`;
   if (!me || !envList) {
     return html`<div class="boot"><${Logo} size=${48} /><${Spinner} /></div>`;
   }
@@ -1332,6 +1333,9 @@ function App() {
     ${me.impersonator && html`<div class="imp-banner"><${Icon} name="eye" />
       <span>You're viewing as <b>${me.display_name || me.username}</b> (${me.role_name}). Anything you change is logged as ${me.impersonator.username} (as ${me.username}).</span>
       <button class="btn sm" onClick=${async () => { await api("/api/impersonate/stop", { method: "POST" }); location.reload(); }}>Stop viewing as</button></div>`}
+    ${me.waiting > 0 && can("users.access") && html`<div class="info-banner"><${Icon} name="users" />
+      <span><b>${plural(me.waiting, "person is", "people are")}</b> waiting for you to set them up (signed in with SSO).</span>
+      <button class="link-btn" onClick=${() => setModal("users")}>Open Users</button></div>`}
     ${me.initial_password && html`<div class="warn-banner"><${Icon} name="key" /><span>You're using the generated admin password.</span>
       <button class="link-btn" onClick=${() => setModal("account")}>Change it now</button></div>`}
     <header class="topbar">
@@ -1342,7 +1346,8 @@ function App() {
           <${Icon} name="refresh" cls=${loading ? "spin" : ""} /><span class="hide-sm">Refresh</span></button>
         <button class="btn ghost" onClick=${() => setModal("picker")} disabled=${!devices.length}><${Icon} name="grid" /><span class="hide-sm">Devices</span></button>
         ${can("activity.view") && html`<button class="btn ghost hide-sm" onClick=${() => setModal("audit")}><${Icon} name="list" /><span class="hide-sm">Activity</span></button>`}
-        ${can("users.view") && html`<button class="btn ghost hide-sm" onClick=${() => setModal("users")}><${Icon} name="users" /><span class="hide-sm">Users</span></button>`}
+        ${can("users.view") && html`<button class="btn ghost hide-sm" onClick=${() => setModal("users")}><${Icon} name="users" /><span class="hide-sm">Users</span>
+          ${me.waiting > 0 && html`<span class="count-dot">${me.waiting}</span>`}</button>`}
         ${(isAdmin || canEnvs) && html`<button class="icon-btn hide-sm" onClick=${() => setModal("settings")} title="Settings"><${Icon} name="settings" /></button>`}
         <button class="icon-btn theme-btn" onClick=${() => setTheme(theme === "dark" ? "light" : "dark")}
           title=${theme === "dark" ? "Switch to light" : "Switch to dark"} aria-label="Toggle day / night">
@@ -1419,6 +1424,26 @@ function App() {
 }
 
 const BUILD = (document.querySelector('meta[name="vlanmgr-build"]') || {}).content || "";
+
+/** Someone who signed in with SSO but hasn't been set up by an admin yet. Continues on its own once they are. */
+function Waiting({ me }) {
+  useInterval(async () => {
+    try { const m = await api("/api/me"); if (!m.pending) location.reload(); } catch (e) { /* signed out */ }
+  }, 15000);
+  window.__vlanmgrStarted = true;
+  return html`<div class="boot waiting">
+    ${me.impersonator && html`<div class="imp-banner"><${Icon} name="eye" /><span>You're viewing as <b>${me.display_name || me.username}</b>.</span>
+      <button class="btn sm" onClick=${async () => { await api("/api/impersonate/stop", { method: "POST" }); location.reload(); }}>Stop viewing as</button></div>`}
+    <${Logo} size=${52} />
+    <div class="boot-error">
+      <h2>Hi${me.display_name ? ` ${me.display_name.split(" ")[0]}` : ""}, you're signed in</h2>
+      <p class="muted">Your admin hasn't set you up yet. Please contact them to get access. This page carries on by itself
+        as soon as they have.</p>
+      <p class="muted small">Signed in as <b>${me.username}</b>${me.email ? ` (${me.email})` : ""} through single sign-on.</p>
+      <button class="btn ghost" onClick=${async () => { const r = await api("/api/auth/logout", { method: "POST" }); location.href = r.redirect; }}>
+        <${Icon} name="logout" />Sign out</button>
+    </div></div>`;
+}
 
 function BootError({ error }) {
   window.__vlanmgrStarted = true;

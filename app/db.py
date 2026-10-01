@@ -220,6 +220,7 @@ COLUMNS = [
     ("sessions", "acting_as", "INTEGER"),                          # admin "view as" another user
     ("users", "caps_grant", "TEXT NOT NULL DEFAULT '[]'"),         # abilities on top of their role
     ("users", "caps_deny", "TEXT NOT NULL DEFAULT '[]'"),          # abilities taken away from their role
+    ("users", "pending", "INTEGER NOT NULL DEFAULT 0"),            # signed in with SSO, waiting for an admin to set them up
 ]
 
 

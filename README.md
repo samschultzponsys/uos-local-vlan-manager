@@ -288,8 +288,13 @@ Set up under **Settings → Sign-in**. Any combination works:
     key, shield, lock, sign-in, none, or your own image URL), with a live preview.
   - **SSO only signs people in.** Roles and environments always come from an admin in this
     app, never from the provider.
-  - New SSO users are created as Viewer with no environments on first sign-in. Or turn that
-    off and have an admin add them first (matched by username or email).
+  - **Add people first** (Users → Add user, with their email and no password) and they're
+    ready on their first SSO sign-in: matched by username, or by email when the provider
+    doesn't mark it unverified.
+  - Anyone else who signs in with SSO gets an account **waiting for setup**: they see "your
+    admin hasn't set you up yet" until someone gives them access, a role or abilities, and
+    admins see who's waiting. Or turn *Let new people sign in with SSO* off so only people
+    you added can sign in.
   - Optional **allowed groups** limits who may sign in at all.
 - **Sign-in links** (API tokens): every user, Viewers included, can create their own under
   **My account → Sign-in links**.

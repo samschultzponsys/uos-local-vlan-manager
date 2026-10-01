@@ -5,6 +5,29 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.6 — 2026-10-01
+
+### Added
+- **People who sign in with SSO wait until you set them up.** Someone you haven't added gets
+  an account marked **waiting for setup**. Instead of an empty app they see *"Your admin
+  hasn't set you up yet. Please contact them"* with a Sign out button, and the page carries on
+  by itself as soon as you've set them up.
+  - Giving them access to an environment, a role or abilities ends the wait.
+  - Users shows a **waiting for setup** badge next to them. Admins and anyone who can give
+    access get a banner (*"1 person is waiting for you to set them up"*) and a count on the
+    Users button.
+- **Add people before they sign in**: under Users → Add user, enter their email (and role,
+  then access) without a password. On their first SSO sign-in they're matched to that account
+  and are ready to go: no waiting.
+
+### Changed
+- An email is only used to match a pre-added person when the identity provider doesn't say
+  it's **unverified** (`email_verified: false`), so nobody can claim an account by setting
+  someone else's address at the provider.
+- Settings → Sign-in: *Let new people sign in with SSO*. On: newcomers get a waiting account.
+  Off: only people added under Users can sign in.
+- The setup wizard (next release) never starts for someone who's still waiting.
+
 ## 2.5 — 2026-10-01
 
 ### Added

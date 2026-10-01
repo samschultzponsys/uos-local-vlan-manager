@@ -1026,3 +1026,12 @@ select option:checked { background-color: var(--accent); color: #fff; }
 .ov-kind { display: flex; align-items: center; gap: 7px; margin: 2px 2px 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
 .fwd-chev { transform: rotate(-90deg); margin-left: 2px; }
 @media (max-width: 760px) { .view-tabs { display: flex; } .view-tabs button { flex: 1; justify-content: center; } }
+
+/* ---------- 2.6: SSO onboarding ---------- */
+.info-banner { display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 9px 16px; font-size: 13px;
+  background: rgba(79, 140, 255, .1); color: #93c5fd; border-bottom: 1px solid rgba(79, 140, 255, .25); }
+.count-dot { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 2px; border-radius: 9px;
+  background: var(--warn); color: #1a1405; font-size: 11px; font-weight: 750; }
+.boot.waiting .boot-error { max-width: 460px; }
+.boot.waiting .imp-banner { position: fixed; top: 0; left: 0; right: 0; }
+.boot.waiting { padding: 24px; text-align: center; }

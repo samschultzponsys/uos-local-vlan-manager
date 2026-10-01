@@ -254,7 +254,7 @@ function AuthTab() {
       <${Field} label="Groups claim"><input value=${a.oidc.groups_claim} onInput=${(e) => setO("groups_claim", e.target.value)} /></${Field}>
       <${Field} label="Allowed groups" hint="Comma-separated. Empty = anyone your provider lets through."><input value=${a.oidc.allowed_groups} onInput=${(e) => setO("allowed_groups", e.target.value)} /></${Field}>
     </div>
-    <${Toggle} checked=${a.oidc.auto_create} onChange=${(v) => setO("auto_create", v)} label="Create users on first SSO sign-in" hint="SSO only signs people in. New users start as Viewer with no environments until an admin gives them access. Off: an admin adds them first (username or email must match)." />
+    <${Toggle} checked=${a.oidc.auto_create} onChange=${(v) => setO("auto_create", v)} label="Let new people sign in with SSO" hint="On: someone you haven't added gets an account that waits for you (they see “your admin hasn't set you up yet”) until you give them access, a role or abilities. Off: only people added under Users can sign in. Either way, people you added are matched by username or by email (when your provider says the email is verified)." />
     <${Toggle} checked=${a.oidc_auto_login} onChange=${(v) => set("oidc_auto_login", v)} label="Sign in automatically with SSO"
       hint="Visiting the app goes straight to your provider. /login always shows the login page as a fallback." />
     <div class="row">
@@ -396,7 +396,8 @@ export function UsersModal({ me, onClose }) {
   }
   const rolesByLevel = data ? data.roles.slice().sort((x, y) => y.level - x.level) : [];
   return html`<${Modal} title="Users" icon="users" onClose=${onClose} wide
-    footer=${tab === "people" && data && html`<span class="muted grow">New people start with the lowest role and no environments. SSO users appear here after their first sign-in.</span>
+    footer=${tab === "people" && data && html`<span class="muted grow">New people start with the lowest role and no environments. Add someone here with their email
+      and they're ready on their first SSO sign-in; anyone else who signs in with SSO waits until you set them up.</span>
       ${can("users.create") && html`<button class="btn primary" onClick=${() => setAdding(!adding)}><${Icon} name="plus" />Add user</button>`}`}>
     ${data && data.admin && html`<nav class="tabs"><button class=${tab === "people" ? "on" : ""} onClick=${() => setTab("people")}><${Icon} name="users" size=${15} />People</button>
       <button class=${tab === "roles" ? "on" : ""} onClick=${() => setTab("roles")}><${Icon} name="shield" size=${15} />Roles & abilities</button></nav>`}
@@ -425,6 +426,7 @@ export function UsersModal({ me, onClose }) {
         return html`<tr key=${u.id} class=${u.disabled ? "disabled" : ""}>
         <td><div class="u-cell"><${Avatar} user=${u} size=${32} />${u.avatar_locked ? html`<span class="av-lock" title="Picture locked"><${Icon} name="lock" size=${10} /></span>` : null}
           <div><b>${u.display_name || u.username}</b>${u.seeded && html` <span class="badge">first admin</span>`}
+            ${u.pending && html` <span class="badge warn" title="Signed in with SSO; sees a 'your admin hasn't set you up yet' page until you give them access, a role or abilities">waiting for setup</span>`}
             <div class="muted small">${u.username}${u.email ? ` · ${u.email}` : ""}${u.sso ? " · SSO" : ""}</div></div></div></td>
         <td>${!self && (data.admin || can("users.roles")) && (data.admin || data.assignable_roles.includes(u.role))
             ? html`<select class="sm" value=${u.role} onChange=${(e) => update(u, { role: e.target.value }, `${u.username} is now ${roleName(data.roles, e.target.value)}`)}>

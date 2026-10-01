@@ -1152,6 +1152,7 @@ def api_user_access(uid):
             except ValueError as e:
                 return _deny(str(e), 403)
         envs.set_user_access(uid, entries)
+        auth.clear_pending(uid)
         names = {e["id"]: e["name"] for e in envs.all_envs()}
         auth.audit("user.access", user["username"], {"envs": [
             {"env": names.get(int(e.get("env_id") or 0), "?"),
