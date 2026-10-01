@@ -5,6 +5,42 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 1.9 — 2026-10-01
+
+### Added
+- **Every UniFi network device**, grouped under **Gateways**, **Switches** and **Access
+  points** (collapsible; turn grouping off in Display options). Devices without wired ports,
+  like a meshed access point, are listed too. Until you choose devices, all of them show.
+- **Device details** (the sliders button on each device): model and model code, IP, MAC,
+  serial, firmware (and the update UniFi offers), uptime, clients, CPU / memory, what it's
+  uplinked to, and whether it can filter tagged VLANs.
+- **Managing devices**, for people with the new **Manage devices** ability (admins by
+  default):
+  - **rename** the device
+  - **blink the locate light**, and stop it
+  - status light **default / on / off**
+  - **restart**, and **update firmware** when UniFi has an update; both ask first
+- **Port tools** in the port panel:
+  - **port name** (Manage devices), saved to UniFi; a port without settings yet keeps its VLANs
+  - **PoE on / off** and **power-cycle** (restarts a camera, phone or access point), for
+    people with the new **Power-cycle PoE and turn PoE on / off** ability (admins by default)
+
+  Locked ports need the lock ability, and protected ports need the protected-ports ability and
+  a confirmation, just like VLAN changes.
+- **The app learns which switches can't do tagged VLANs.** When UniFi refuses a port change
+  with *VlanManagementOptionsUnsupportedByDevice*, the app sets just the native VLAN instead,
+  says so, and remembers that model as native-only from then on (an admin can undo it in the
+  device details).
+- **Diagnostics download** (Settings → Environments → an environment): what UniFi reports for
+  its devices, with passwords and keys removed. Handy when a model shows up wrong.
+- Everything above is in the activity log.
+- Devices show **update** and **locating** badges.
+
+### Changed
+- The device picker is grouped by type, with **All**, **Switches** and **None** shortcuts.
+- Gateways have a darker front and access points a rounder one. On phones a device's stats
+  sit on their own row, so long names fit.
+
 ## 1.8 — 2026-10-01
 
 ### Added

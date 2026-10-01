@@ -83,6 +83,8 @@ MODEL_NAMES = {
 # Switches that can't filter tagged VLANs per port: only the native VLAN can be set.
 # Admins can add or remove models in the app (Settings -> General -> Switch models).
 NATIVE_ONLY_MODELS = {"USMINI"}
+# what UniFi answers when a port write asks a switch for tagging it can't do
+UNSUPPORTED_TAGGING = "VlanManagementOptionsUnsupportedByDevice"
 
 # what the port type looks like on the box, from UniFi's `media` code
 MEDIA_LABEL = {"FE": "RJ45 · 100 Mb", "GE": "RJ45 · 1 GbE", "2P5GE": "RJ45 · 2.5 GbE", "5GE": "RJ45 · 5 GbE",
@@ -314,10 +316,26 @@ class UniFi:
         except UniFiError:
             return []
 
+    def raw_app_devices(self):
+        """UniFi devices that belong to other apps (Protect, Access, Talk, ...), from the Network
+        app's v2 device list. Best effort: {} when the console doesn't offer it."""
+        try:
+            data = self._req("GET", f"/v2/api/site/{self.site}/device")
+        except UniFiError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
     # --- write --------------------------------------------------------------
 
     def put_port_overrides(self, device_id, overrides):
         return self._req("PUT", self._site(f"/rest/device/{device_id}"), {"port_overrides": overrides})
+
+    def put_device(self, device_id, fields):
+        return self._req("PUT", self._site(f"/rest/device/{device_id}"), fields)
+
+    def devmgr(self, cmd, mac, **extra):
+        """Device commands: restart, set-locate, unset-locate, upgrade, power-cycle (a PoE port)."""
+        return self._req("POST", self._site("/cmd/devmgr"), {"cmd": cmd, "mac": mac, **extra})
 
 
 # ----------------------------------------------------------------------------
@@ -585,8 +603,6 @@ def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_upl
     devices = []
     for d in raw_devices:
         table = d.get("port_table") or []
-        if not table:
-            continue
         dtype = d.get("type") or ""
         mac = (d.get("mac") or "").lower()
         overrides = {_int(o.get("port_idx")): o for o in d.get("port_overrides") or []}
@@ -751,6 +767,46 @@ def verify_override(dev, port_idx, native_id, mode, native_only=False):
         return entry.get("native_networkconf_id") == native_id and not entry.get("portconf_id")
     got_mode = entry.get("tagged_vlan_mgmt") or FORWARD_MODE.get(entry.get("forward"))
     return entry.get("native_networkconf_id") == native_id and got_mode == mode and not entry.get("portconf_id")
+
+
+POE_MODES = ("auto", "off")
+
+
+def build_port_patch(dev, port, fields):
+    """port_overrides with `fields` (name, poe_mode) set on one port. A port without an override
+    yet gets one that keeps what it has now, so naming a port never changes its VLANs."""
+    overrides = copy.deepcopy(dev.get("port_overrides") or [])
+    entry = next((o for o in overrides if _int(o.get("port_idx")) == port["idx"]), None)
+    if entry is None:
+        entry = {"port_idx": port["idx"]}
+        if port.get("profile_id"):
+            entry["portconf_id"] = port["profile_id"]
+        elif port.get("native_network_id"):
+            entry["native_networkconf_id"] = port["native_network_id"]
+            if port.get("tagged_mode") in MODES and not uses_legacy_forward(dev):
+                entry["tagged_vlan_mgmt"] = port["tagged_mode"]
+                entry["excluded_networkconf_ids"] = list(port.get("excluded_network_ids") or [])
+        overrides.append(entry)
+    before = copy.deepcopy(entry)
+    for k, v in fields.items():
+        if v is None:
+            entry.pop(k, None)
+        else:
+            entry[k] = v
+    overrides.sort(key=lambda o: _int(o.get("port_idx")))
+    return overrides, before, copy.deepcopy(entry)
+
+
+SECRET_HINTS = ("pass", "secret", "token", "authkey", "ssh", "x_")
+
+
+def redact(v):
+    """Raw UniFi data with anything secret-looking removed (for the diagnostics download)."""
+    if isinstance(v, dict):
+        return {k: ("•••" if any(h in str(k).lower() for h in SECRET_HINTS) else redact(x)) for k, x in v.items()}
+    if isinstance(v, list):
+        return [redact(x) for x in v]
+    return v
 
 
 # ----------------------------------------------------------------------------

@@ -26,7 +26,7 @@ const hideTip = () => setTipGlobal(null);
 // each part of a network bubble: "always" | "hover" | "off"
 export const LEGEND_DEFAULTS = { vlan: "always", ports: "always", clients: "hover", ip: "hover", ip_format: "subnet",
   layout: "wrap", sort: "vlan", hide_unused: false, open: true };
-export const PORTS_DEFAULTS = { phone: "tiles", desktop: "faceplate", hide_down: false, tag_marks: true };
+export const PORTS_DEFAULTS = { phone: "tiles", desktop: "faceplate", hide_down: false, tag_marks: true, group: true };
 
 const TAG_TEXT = { auto: "All VLANs tagged", block_all: "Untagged only", custom: "Some VLANs tagged" };
 const ROLE = {
@@ -63,6 +63,12 @@ function carries(port, netId) {
   if (port.tagged_mode === "custom") return !port.excluded_network_ids.includes(netId);
   return false;
 }
+
+const KIND = {
+  gateway: { icon: "router", label: "Gateways" }, switch: { icon: "server", label: "Switches" },
+  ap: { icon: "wifi", label: "Access points" }, other: { icon: "grid", label: "Other devices" },
+};
+const KIND_ORDER = ["gateway", "switch", "ap", "other"];
 
 const nativeOnly = (device) => !!(device && device.caps && device.caps.tagged_vlans === false);
 
@@ -202,23 +208,27 @@ function Faceplate({ device, pv, ...rest }) {
   </div>`;
 }
 
-function DeviceCard({ device, collapsed, onCollapse, pv, ...rest }) {
+function DeviceCard({ device, collapsed, onCollapse, onManage, pv, ...rest }) {
   const up = device.ports.filter((p) => p.up).length;
   const poe = device.ports.reduce((a, p) => a + (p.poe_power || 0), 0);
-  return html`<section class=${"device" + (device.online ? "" : " offline")}>
+  const k = KIND[device.kind] || KIND.other;
+  return html`<section class=${"device " + (device.kind || "") + (device.online ? "" : " offline")}>
     <header class="device-head" onClick=${onCollapse}>
-      <span class=${"status-dot " + (device.online ? "on" : "")} title=${device.online ? "Online" : "Offline"}></span>
+      <span class="kind-icon" title=${device.type_label}><${Icon} name=${k.icon} size=${16} /><span class=${"status-dot " + (device.online ? "on" : "")} title=${device.online ? "Online" : "Offline"}></span></span>
       <div class="device-title">
-        <h3>${device.name}</h3>
+        <h3>${device.name}${device.upgradable && html`<span class="badge good" title=${`Firmware ${device.upgrade_to} is available`}>update</span>`}
+          ${device.locating && html`<span class="badge warn">locating</span>`}</h3>
         <div class="device-sub">${device.model_name}${device.ip && html` · ${device.ip}`}${device.version && html` · v${device.version}`}</div>
       </div>
       <div class="device-stats">
-        <span class="stat"><${Icon} name="link" size=${13} />${up}/${device.ports.length}</span>
+        ${device.ports.length > 0 && html`<span class="stat" title="Ports with link"><${Icon} name="link" size=${13} />${up}/${device.ports.length}</span>`}
         ${poe > 0 && html`<span class="stat poe"><${Icon} name="bolt" size=${13} fill />${poe.toFixed(1)} W</span>`}
+        <button class="icon-btn sm" title="Device details" onClick=${(e) => { e.stopPropagation(); onManage(device); }}><${Icon} name="sliders" size=${15} /></button>
         <span class="chev" style=${collapsed ? "transform:rotate(-90deg)" : ""}><${Icon} name="chevron" /></span>
       </div>
     </header>
-    ${!collapsed && html`<div class="device-body"><${Faceplate} device=${device} pv=${pv} ...${rest} /></div>`}
+    ${!collapsed && device.ports.length > 0 && html`<div class="device-body"><${Faceplate} device=${device} pv=${pv} ...${rest} /></div>`}
+    ${!collapsed && device.ports.length === 0 && html`<div class="device-body muted small">No wired ports reported${device.clients ? ` · ${plural(device.clients, "client")}` : ""}.</div>`}
   </section>`;
 }
 
@@ -332,6 +342,9 @@ function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, 
     <${Toggle} checked=${pv.tag_marks} onChange=${(v) => setPv({ tag_marks: v })} label="Mark ports that carry tagged VLANs"
       hint="Ordinary ports set to Allow All or Custom. Uplinks and links to UniFi devices always show their own mark." />
 
+    <h4 class="section">Devices</h4>
+    <${Toggle} checked=${pv.group} onChange=${(v) => setPv({ group: v })} label="Group by type" hint="Gateways, switches, access points." />
+
   </${Modal}>`;
 }
 
@@ -393,7 +406,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
       const r = await api(`/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}`, { method: "PUT",
         body: { native_network_id: native, tagged_mode: mode, excluded_network_ids: mode === "custom" ? excluded : [],
           expected: base, ...extra } });
-      toast(`Port ${port.idx} → ${next.name} (${next.vlan})${fixedTags ? "" : `, ${MODE_LABEL[mode]}`}`);
+      toast(`Port ${port.idx} → ${next.name} (${next.vlan})${fixedTags || r.native_only ? "" : `, ${MODE_LABEL[mode]}`}`);
       if (r.warning) toast(r.warning, "warn");
       setTouched(false);
       onApplied();
@@ -501,6 +514,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
         </div>`}
       </div>`}
 
+      ${!readonly && !port.wan && html`<${PortTools} env=${env} device=${device} port=${port} me=${me} onApplied=${onApplied} />`}
       ${isAdmin && !lock && !readonly && !port.wan && html`<div class="panel lock-panel">
         <div class="panel-title"><span><${Icon} name="lock" size=${15} /> Lock this port</span></div>
         <p class="muted small">Only admins can change a locked port. Good for upstream trunks and dedicated ports. It's locked to the settings UniFi has right now.</p>
@@ -537,6 +551,132 @@ async function setModelCaps(device, tagged, onDone) {
   } catch (e) { toast(e.message, "err"); }
 }
 
+// --- device details and management -----------------------------------------------
+
+function uptimeText(sec) {
+  if (!sec) return "—";
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function DeviceModal({ env, device, me, readonly, onClose, onChanged }) {
+  const can = (c) => (me.caps || []).includes(c);
+  const manage = can("devices.manage") && !readonly;
+  const [name, setName] = useState(device.name);
+  const [busy, setBusy] = useState(null);
+  const base = `/api/envs/${env.id}/devices/${device.id}`;
+  async function run(key, fn) {
+    setBusy(key);
+    try { await fn(); onChanged(); } catch (e) { toast(e.message, "err"); }
+    setBusy(null);
+  }
+  const put = (key, body, msg) => run(key, async () => { await api(base, { method: "PUT", body }); toast(msg); });
+  const act = async (action, confirm) => {
+    if (confirm && !await ask(confirm)) return;
+    run(action, async () => { const r = await api(base + "/action", { method: "POST", body: { action } }); toast(r.message); });
+  };
+  const k = KIND[device.kind] || KIND.other;
+  const kv = (label, value) => value !== null && value !== undefined && value !== "" && html`<div class="kv"><span>${label}</span><b>${value}</b></div>`;
+  return html`<${Modal} title=${device.name} icon=${k.icon} onClose=${onClose} wide>
+    <div class="dev-info">
+      ${kv("Model", html`${device.model_name}${device.model && device.model !== device.model_name ? html` <span class="muted mono small">${device.model}</span>` : ""}`)}
+      ${kv("Type", device.type_label)}
+      ${kv("Status", device.online ? html`<span class="good-text">Online</span>` : html`<span class="err-text">Offline</span>`)}
+      ${kv("IP address", device.ip)}
+      ${kv("MAC", html`<span class="mono">${device.mac}</span>`)}
+      ${kv("Serial", device.serial && html`<span class="mono">${device.serial}</span>`)}
+      ${kv("Firmware", html`${device.version || "—"}${device.upgradable ? html` <span class="badge good">${device.upgrade_to || "update"} available</span>` : ""}`)}
+      ${kv("Uptime", uptimeText(device.uptime))}
+      ${kv("Clients", device.clients ? String(device.clients) : null)}
+      ${kv("CPU / memory", device.cpu != null ? `${Math.round(device.cpu)}% / ${Math.round(device.mem || 0)}%` : null)}
+      ${kv("Uplink", device.uplink_to && `${device.uplink_to.name}${device.uplink_to.port ? ` · port ${device.uplink_to.port}` : ""}`)}
+      ${device.kind === "switch" && kv("Tagged VLANs", device.caps.tagged_vlans ? "Filtered per port" : "Not filtered per port (native VLAN only)")}
+    </div>
+    ${device.kind === "switch" && can("settings.manage") && !readonly && html`<p class="muted small">
+      ${device.caps.tagged_vlans ? "If this model ignores tagged VLAN settings, " : "If this model can filter tagged VLANs, "}
+      <button class="link-btn small" onClick=${() => setModelCaps(device, !device.caps.tagged_vlans, onChanged)}>change it for every ${device.model_name}</button>.</p>`}
+
+    ${manage ? html`<h4 class="section">Manage</h4>
+      <div class="field"><span class="field-label">Name</span>
+        <div class="row"><input value=${name} maxlength="64" onInput=${(e) => setName(e.target.value)} />
+          <button class="btn" disabled=${busy || !name.trim() || name.trim() === device.name}
+            onClick=${() => put("name", { name: name.trim() }, "Renamed")}><${Icon} name="pencil" size=${14} />Rename</button></div></div>
+      <div class="opt-row"><div><b>Locate</b><div class="muted small">Blinks the device's light so you can find it in the rack.</div></div>
+        <button class=${"btn" + (device.locating ? " primary" : "")} disabled=${!!busy} onClick=${() => act(device.locating ? "unlocate" : "locate")}>
+          <${Icon} name="target" size=${14} />${device.locating ? "Stop blinking" : "Blink"}</button></div>
+      <div class="opt-row"><div><b>Status light</b><div class="muted small">Default follows the site's LED setting.</div></div>
+        <${Segmented} value=${device.led_override || "default"} disabled=${!!busy}
+          onChange=${(v) => put("led", { led_override: v }, `LED ${v === "default" ? "follows the site" : v}`)}
+          options=${[{ value: "default", label: "Default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} /></div>
+      ${device.upgradable && html`<div class="opt-row"><div><b>Firmware ${device.upgrade_to}</b><div class="muted small">Installed: ${device.version}. The device restarts when it's done.</div></div>
+        <button class="btn" disabled=${!!busy} onClick=${() => act("upgrade", { title: `Update ${device.name}?`, confirm: "Update firmware",
+          body: html`<p>${device.name} downloads firmware <b>${device.upgrade_to}</b> and restarts. Everything connected through it drops for a few minutes.</p>` })}>
+          <${Icon} name="upgrade" size=${14} />Update</button></div>`}
+      <div class="opt-row"><div><b>Restart</b><div class="muted small">Everything connected through it drops until it's back.</div></div>
+        <button class="btn danger-text" disabled=${!!busy} onClick=${() => act("restart", { title: `Restart ${device.name}?`, danger: true, confirm: "Restart",
+          body: html`<p><b>${device.name}</b> restarts. Everything connected through it is offline for a minute or two.</p>` })}>
+          <${Icon} name="power" size=${14} />Restart</button></div>`
+      : !readonly && html`<p class="muted small">Only people with the <i>Manage devices</i> ability can rename, restart or update devices.</p>`}
+  </${Modal}>`;
+}
+
+async function powerCycle(env, device, port, onDone) {
+  const ok = await ask({ title: `Power-cycle port ${port.idx}?`, confirm: "Power-cycle", danger: !!port.protected,
+    body: html`<p>PoE on <b>${device.name} port ${port.idx}</b> is turned off for a few seconds and back on, so whatever it powers restarts.</p>
+      ${port.protected && html`<p class="warn-text">This port is protected (${port.protect_reasons.join(" · ")}) — this can cut off what's behind it.</p>`}` });
+  if (!ok) return;
+  try {
+    await api(`/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}/power-cycle`, { method: "POST", body: { confirm_protected: true } });
+    toast(`Power-cycling ${device.name} port ${port.idx}`);
+    if (onDone) onDone();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/** Port name (devices.manage) and PoE on / off / power-cycle (ports.poe), in the port panel. */
+function PortTools({ env, device, port, me, onApplied }) {
+  const can = (c) => (me.caps || []).includes(c);
+  const canName = can("devices.manage");
+  const lockedOut = port.lock && !can("ports.lock");
+  const canPoe = can("ports.poe") && port.poe_capable && !lockedOut;
+  const deflt = `Port ${port.idx}`;
+  const [name, setName] = useState(port.name === deflt ? "" : port.name);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setName(port.name === deflt ? "" : port.name), [device.id, port.idx, port.name]);
+  if (!canName && !canPoe) return null;
+  async function save(body, msg) {
+    setBusy(true);
+    try {
+      await api(`/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}/settings`, { method: "PUT", body });
+      toast(msg); onApplied();
+    } catch (e) {
+      if (e.status === 409 && e.data.confirm === "protected") {
+        const ok = await ask({ title: "Change PoE on a protected port?", danger: true, confirm: "Change it anyway",
+          body: html`<p>This port is protected:</p><ul>${e.data.reasons.map((r) => html`<li>${r}</li>`)}</ul><p>Turning PoE off can cut off what's behind it.</p>` });
+        if (ok) { setBusy(false); return save({ ...body, confirm_protected: true }, msg); }
+      } else toast(e.message, "err");
+    }
+    setBusy(false);
+    return null;
+  }
+  return html`<div class="panel">
+    <div class="panel-title">Port tools</div>
+    ${canName && html`<div class="field"><span class="field-label">Port name</span>
+      <div class="row"><input value=${name} maxlength="40" placeholder=${deflt} onInput=${(e) => setName(e.target.value)} />
+        <button class="btn" disabled=${busy || name.trim() === (port.name === deflt ? "" : port.name)}
+          onClick=${() => save({ name: name.trim() }, name.trim() ? `Port ${port.idx} is now “${name.trim()}”` : `Port ${port.idx} name cleared`)}>Save</button></div>
+      <small class="hint">Shown here and in UniFi. Leave empty for “${deflt}”.</small></div>`}
+    ${canPoe && html`<div class="opt-row"><div><b>PoE</b><div class="muted small">${port.poe_active ? `Delivering${port.poe_power ? ` ${port.poe_power} W` : ""}` : port.poe_enabled ? "On, nothing drawing power" : "Off"}</div></div>
+      <div class="row">
+        <${Segmented} value=${port.poe_enabled ? "auto" : "off"} disabled=${busy}
+          onChange=${(v) => save({ poe_mode: v }, `PoE ${v === "off" ? "off" : "on"} on port ${port.idx}`)}
+          options=${[{ value: "auto", label: "On" }, { value: "off", label: "Off" }]} />
+        ${port.poe_enabled && html`<button class="btn" disabled=${busy} title="Turn PoE off and on to restart what it powers"
+          onClick=${() => powerCycle(env, device, port, onApplied)}><${Icon} name="power" size=${14} />Power-cycle</button>`}
+      </div></div>`}
+    ${port.poe_capable && lockedOut && can("ports.poe") && html`<small class="hint">This port is locked, so PoE can only be changed by someone who can lock ports.</small>`}
+  </div>`;
+}
+
 // --- device picker ---------------------------------------------------------------
 
 function PickerModal({ devices, selected, onSave, onClose }) {
@@ -551,18 +691,20 @@ function PickerModal({ devices, selected, onSave, onClose }) {
   };
   return html`<${Modal} title="Choose devices to show" icon="grid" onClose=${onClose} wide
     footer=${html`<span class="muted grow">${sel.length} selected</span>
-      <button class="btn ghost" onClick=${() => setSel(devices.filter((d) => d.type === "usw").map((d) => d.mac))}>All switches</button>
+      <button class="btn ghost" onClick=${() => setSel(devices.map((d) => d.mac))}>All</button>
+      <button class="btn ghost" onClick=${() => setSel(devices.filter((d) => d.kind === "switch").map((d) => d.mac))}>Switches</button>
       <button class="btn ghost" onClick=${() => setSel([])}>None</button>
       <button class="btn primary" onClick=${() => onSave(sel)}>Show selected</button>`}>
     <div class="search"><${Icon} name="search" /><input placeholder="Search name, model, IP or MAC" value=${q} onInput=${(e) => setQ(e.target.value)} /></div>
     <div class="pick-list">
-      ${list.map((d) => {
+      ${list.map((d, i) => {
         const on = sel.includes(d.mac);
-        return html`<div class=${"pick" + (on ? " on" : "")} key=${d.mac} onClick=${() => toggle(d.mac)}>
+        const head = (i === 0 || list[i - 1].kind !== d.kind) && html`<div class="pick-kind"><${Icon} name=${(KIND[d.kind] || KIND.other).icon} size=${14} />${(KIND[d.kind] || KIND.other).label}</div>`;
+        return html`${head}<div class=${"pick" + (on ? " on" : "")} key=${d.mac} onClick=${() => toggle(d.mac)}>
           <span class=${"check" + (on ? " on" : "")}>${on && html`<${Icon} name="check" size=${14} />`}</span>
           <span class=${"status-dot " + (d.online ? "on" : "")}></span>
           <div class="pick-main"><b>${d.name}</b><span class="muted">${d.model_name} · ${d.type_label} · ${d.ip || d.mac}</span></div>
-          <span class="badge">${d.port_count} ports</span>
+          <span class="badge">${d.port_count ? `${d.port_count} ports` : "no ports"}</span>
           ${on && html`<span class="order" onClick=${(e) => e.stopPropagation()}>
             <button class="icon-btn sm" title="Move up" onClick=${() => move(d.mac, -1)}><${Icon} name="chevron" size=${14} cls="up" /></button>
             <button class="icon-btn sm" title="Move down" onClick=${() => move(d.mac, 1)}><${Icon} name="chevron" size=${14} /></button></span>`}
@@ -606,6 +748,8 @@ function App() {
   const [sel, setSel] = useState(null);
   const [highlight, setHighlight] = useState(null);
   const [collapsed, setCollapsed] = useState(lsGet("vlanmgr.collapsed", {}));
+  const [closedGroups, setClosedGroups] = useState(lsGet("vlanmgr.groups", {}));
+  const [devModal, setDevModal] = useState(null);   // id of the device whose details are open
   const [menu, setMenu] = useState(false);
   const [theme, setTheme] = useState(lsGet("vlanmgr.theme", "dark"));
   const [bootErr, setBootErr] = useState(null);
@@ -709,9 +853,13 @@ function App() {
   const colors = vlanColors(networks, env ? env.vlan_colors : {}, prefs.vlan_colors || {});
   const picks = prefs.devices && !Array.isArray(prefs.devices) ? prefs.devices : {};
   const chosen = env && Array.isArray(picks[env.id]) ? picks[env.id] : null;
-  const shown = chosen
-    ? chosen.map((mac) => devices.find((d) => d.mac === mac)).filter(Boolean)
-    : devices.filter((d) => d.type === "usw" || (env && !env.access.all_devices));
+  const shown = chosen ? chosen.map((mac) => devices.find((d) => d.mac === mac)).filter(Boolean) : devices;
+  // by type (gateways, switches, access points, other), keeping the person's own order inside each
+  const groups = pv.group
+    ? KIND_ORDER.map((k) => ({ kind: k, list: shown.filter((d) => (d.kind || "other") === k) })).filter((g) => g.list.length)
+    : [{ kind: null, list: shown }];
+  const toggleGroup = (k) => { const g = { ...closedGroups, [k]: !closedGroups[k] }; setClosedGroups(g); lsSet("vlanmgr.groups", g); };
+  const devOpen = devModal && devices.find((d) => d.id === devModal);
   const selDev = sel && devices.find((d) => d.id === sel.d);
   // the example network bubble in the key and in Display options
   const sample = networks.find((n) => n.subnet && !n.is_default) || networks[0];
@@ -743,14 +891,19 @@ function App() {
       ${st.readonly && html`<div class="notice warn"><${Icon} name="eye" /><div><b>View only (UniFi cloud).</b> ${st.readonly_reason}</div></div>`}
       ${!st.readonly && html`<${Legend} networks=${networks} colors=${colors} devices=${shown} highlight=${highlight} setHighlight=${setHighlight}
         lg=${lg} setLg=${setLg} onColors=${() => setModal("colors")} onDisplay=${() => setModal("display")} />`}
-      ${!chosen && devices.length > 1 && html`<div class="notice"><${Icon} name="info" /><div>Showing ${env.access.all_devices ? "all switches" : "your devices"}. <button class="link-btn" onClick=${() => setModal("picker")}>Choose which to show</button></div></div>`}
+      ${!chosen && devices.length > 1 && html`<div class="notice slim"><${Icon} name="info" /><div>Showing ${env.access.all_devices ? "all devices" : "your devices"}. <button class="link-btn" onClick=${() => setModal("picker")}>Choose which to show</button></div></div>`}
       ${shown.length === 0 ? html`<div class="empty"><div class="empty-icon"><${Icon} name="grid" size=${40} /></div>
           <h2>${devices.length ? "No devices selected" : "No devices"}</h2>
-          <p class="muted">${devices.length ? "Pick the switches you want to see." : env.access.all_devices ? "This environment has no devices with ports yet." : "None of your devices are on the controller right now."}</p>
+          <p class="muted">${devices.length ? "Pick the devices you want to see." : env.access.all_devices ? "This environment has no devices yet." : "None of your devices are on the controller right now."}</p>
           ${devices.length > 0 && html`<button class="btn primary" onClick=${() => setModal("picker")}>Choose devices</button>`}</div>`
-        : html`<div class="devices">${shown.map((d) => html`<${DeviceCard} key=${d.id} device=${d} networks=${networks} colors=${colors} pv=${pv}
-            highlight=${highlight} sel=${sel} onPick=${pick} collapsed=${!!collapsed[d.mac]}
-            onCollapse=${() => { const c = { ...collapsed, [d.mac]: !collapsed[d.mac] }; setCollapsed(c); lsSet("vlanmgr.collapsed", c); }} />`)}</div>`}
+        : groups.map((g) => html`<section class="group" key=${g.kind || "all"}>
+            ${g.kind && html`<button class="group-head" onClick=${() => toggleGroup(g.kind)} aria-expanded=${!closedGroups[g.kind]}>
+              <${Icon} name=${KIND[g.kind].icon} size=${16} /><b>${KIND[g.kind].label}</b><span class="badge">${g.list.length}</span>
+              <span class="grow"></span><span class="chev" style=${closedGroups[g.kind] ? "transform:rotate(-90deg)" : ""}><${Icon} name="chevron" /></span></button>`}
+            ${!(g.kind && closedGroups[g.kind]) && html`<div class="devices">${g.list.map((d) => html`<${DeviceCard} key=${d.id} device=${d} networks=${networks} colors=${colors} pv=${pv}
+              highlight=${highlight} sel=${sel} onPick=${pick} collapsed=${!!collapsed[d.mac]} onManage=${(x) => setDevModal(x.id)}
+              onCollapse=${() => { const c = { ...collapsed, [d.mac]: !collapsed[d.mac] }; setCollapsed(c); lsSet("vlanmgr.collapsed", c); }} />`)}</div>`}
+          </section>`)}
       <div class="key">
         <span><span class="k-tile up"></span>Link up</span><span><span class="k-tile"></span>No link</span><span><span class="k-off"></span>Disabled</span>
         <span><span class="k-poe active"><${Icon} name="bolt" size=${11} fill /></span>PoE delivering</span>
@@ -835,6 +988,8 @@ function App() {
       onCheck=${async () => { const r = await api("/api/version/check", { method: "POST" }); setVersion({ ...version, update: r.update }); toast(r.update.update_available ? `Version ${r.update.latest} is available` : "You're up to date"); }} />`}
     ${modal === "picker" && env && html`<${PickerModal} devices=${devices} selected=${chosen || shown.map((d) => d.mac)} onClose=${() => setModal(null)}
       onSave=${(macs) => { savePrefs({ devices: { ...picks, [env.id]: macs } }); setModal(null); }} />`}
+    ${devOpen && html`<${DeviceModal} env=${env} device=${devOpen} me=${me} readonly=${!!st.readonly} onClose=${() => setDevModal(null)}
+      onChanged=${() => load(true)} />`}
     ${modal === "display" && html`<${DisplayModal} lg=${lg} setLg=${setLg} pv=${pv} setPv=${setPv} sample=${sample}
       sampleColor=${sample ? colors[sample.id] : ""} sampleCount=${sampleCount} onClose=${() => setModal(null)} />`}
     ${modal === "colors" && html`<${ColorsModal} networks=${networks} colors=${vlanColors(networks, env ? env.vlan_colors : {}, {})} mine=${prefs.vlan_colors || {}}

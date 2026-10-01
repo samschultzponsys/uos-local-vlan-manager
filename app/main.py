@@ -339,8 +339,26 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
     }
     if native_only:
         detail["after"].update({"tagged": f"not supported by {ndev['model_name']}", "excluded": []})
+    learned = None
     try:
-        c.put_port_overrides(device_id, overrides)
+        try:
+            c.put_port_overrides(device_id, overrides)
+        except unifi.UniFiError as e:
+            if native_only or unifi.UNSUPPORTED_TAGGING not in str(e):
+                raise
+            # UniFi says this switch can't do tagged VLAN management: remember that for the model
+            # and set just the native VLAN, which is all the switch can do anyway
+            caps = db.get_json("model_caps", {})
+            caps[ndev["model"]] = {"tagged_vlans": False, "learned": True}
+            db.set_json("model_caps", caps)
+            auth.audit("settings.model_caps", ndev["model"], {"tagged_vlans": False, "why": str(e)}, env_id=env_id)
+            native_only = True
+            mode, excluded = port["tagged_mode"], list(port["excluded_network_ids"])
+            overrides, before, after = unifi.build_override(dev, idx, native, mode, excluded, net_ids, True, True)
+            detail["after"].update({"tagged": f"not supported by {ndev['model_name']}", "excluded": []})
+            learned = (f"{ndev['model_name']} doesn't support tagged VLAN management, so only the native VLAN was set. "
+                       f"The app remembers this for every {ndev['model_name']}.")
+            c.put_port_overrides(device_id, overrides)
     except unifi.UniFiError as e:
         auth.audit(action, target, {**detail, "error": str(e)}, ok=False, env_id=env_id)
         return _deny(str(e), 502)
@@ -360,9 +378,9 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
     envs.invalidate(env_id)
     detail["verified"] = verified
     auth.audit(action, target, detail, ok=True, env_id=env_id)
-    return jsonify({"ok": True, "verified": verified,
-                    "warning": None if verified else
-                    "UniFi accepted the change but didn't report it back yet. Refresh in a moment to check."})
+    return jsonify({"ok": True, "verified": verified, "native_only": native_only,
+                    "warning": learned or (None if verified else
+                                           "UniFi accepted the change but didn't report it back yet. Refresh in a moment to check.")})
 
 
 # ----------------------------------------------------------------------------
@@ -430,8 +448,189 @@ def api_port_lock_reapply(env_id, device_id, idx):
 
 
 # ----------------------------------------------------------------------------
-# Switch models that can't filter tagged VLANs (admin)
+# Managing devices: rename, locate, LED, restart, firmware, PoE, port names
 # ----------------------------------------------------------------------------
+
+READONLY_DEV_MSG = "This environment is view only: UniFi's cloud doesn't allow changes."
+DEVICE_ACTIONS = {
+    "locate": ("set-locate", "device.locate", "Locate light on"),
+    "unlocate": ("unset-locate", "device.locate_off", "Locate light off"),
+    "restart": ("restart", "device.restart", "Restarting"),
+    "upgrade": ("upgrade", "device.upgrade", "Firmware update started"),
+}
+
+
+class _Ctx:
+    pass
+
+
+def _device_ctx(env_id, device_id, idx=None):
+    """Everything a device / port action needs, fresh from UniFi: (ctx, None) or (None, error response)."""
+    env, acc, err = _env_or_404(env_id)
+    if err:
+        return None, err
+    if _readonly(env):
+        return None, _deny(READONLY_DEV_MSG, 409)
+    c = envs.client(env)
+    try:
+        raw_devs = c.raw_devices()
+        dev = next((d for d in raw_devs if d.get("_id") == device_id), None)
+        if dev is None or not envs.device_allowed(acc, dev.get("mac")):
+            return None, _deny("That device is no longer on the controller", 404)
+        norm = unifi.normalize(raw_devs, c.raw_networks(), c.raw_portconfs(), [], db.setting_bool("protect_uplinks"))
+    except unifi.UniFiError as e:
+        return None, _deny(str(e), 502)
+    x = _Ctx()
+    x.env, x.acc, x.c, x.dev = env, acc, c, dev
+    x.ndev = next(d for d in norm["devices"] if d["id"] == device_id)
+    x.port = None
+    x.target = f"{env['name']} / {x.ndev['name']}"
+    if idx is not None:
+        x.port = next((p for p in x.ndev["ports"] if p["idx"] == idx), None)
+        if x.port is None:
+            return None, _deny("No such port", 404)
+        x.target += f" / port {idx}"
+    return x, None
+
+
+def _power_guard(x, body):
+    """PoE changes on a locked or protected port need the matching ability (and a confirmation)."""
+    me = auth.current()
+    lock = envs.locks(x.env["id"]).get((x.ndev["mac"], x.port["idx"]))
+    if lock and not perms.has(me, "ports.lock"):
+        return _deny("An admin locked this port" + (f": {lock['note']}" if lock["note"] else ""), 403)
+    if x.port["protected"]:
+        if not (perms.has(me, "ports.protected") or bool(x.env["supervisors_protected"])):
+            return _deny("This port is protected (" + "; ".join(x.port["protect_reasons"]) +
+                         "). You don't have permission to change protected ports.", 403)
+        if not body.get("confirm_protected"):
+            return _deny("Protected port", 409, confirm="protected", reasons=x.port["protect_reasons"])
+    return None
+
+
+@app.route("/api/envs/<int:env_id>/devices/<device_id>", methods=["PUT"])
+@auth.require("devices.manage")
+def api_device_update(env_id, device_id):
+    x, err = _device_ctx(env_id, device_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    fields = {}
+    if "name" in body:
+        name = str(body["name"] or "").strip()[:64]
+        if not name:
+            return _deny("Give the device a name")
+        fields["name"] = name
+    if "led_override" in body:
+        if body["led_override"] not in ("default", "on", "off"):
+            return _deny("LED must be default, on or off")
+        fields["led_override"] = body["led_override"]
+    if not fields:
+        return _deny("Nothing to change")
+    try:
+        x.c.put_device(device_id, fields)
+    except unifi.UniFiError as e:
+        auth.audit("device.updated", x.target, {**fields, "error": str(e)}, ok=False, env_id=env_id)
+        return _deny(str(e), 502)
+    detail = {"env": x.env["name"], "device": x.ndev["name"]}
+    if "name" in fields:
+        detail["before"], detail["after"] = {"name": x.ndev["name"]}, {"name": fields["name"]}
+    if "led_override" in fields:
+        detail["led"] = fields["led_override"]
+    auth.audit("device.updated", x.target, detail, env_id=env_id)
+    envs.invalidate(env_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/envs/<int:env_id>/devices/<device_id>/action", methods=["POST"])
+@auth.require("devices.manage")
+def api_device_action(env_id, device_id):
+    action = (request.get_json(silent=True) or {}).get("action")
+    if action not in DEVICE_ACTIONS:
+        return _deny("Unknown action")
+    x, err = _device_ctx(env_id, device_id)
+    if err:
+        return err
+    if action == "upgrade" and not x.ndev["upgradable"]:
+        return _deny("UniFi has no firmware update for this device right now")
+    cmd, audit_action, msg = DEVICE_ACTIONS[action]
+    detail = {"env": x.env["name"], "device": x.ndev["name"]}
+    if action == "upgrade":
+        detail["firmware"] = f"{x.ndev['version']} → {x.ndev['upgrade_to'] or 'latest'}"
+    try:
+        x.c.devmgr(cmd, x.ndev["mac"])
+    except unifi.UniFiError as e:
+        auth.audit(audit_action, x.target, {**detail, "error": str(e)}, ok=False, env_id=env_id)
+        return _deny(str(e), 502)
+    auth.audit(audit_action, x.target, detail, env_id=env_id)
+    envs.invalidate(env_id)
+    return jsonify({"ok": True, "message": msg})
+
+
+@app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>/settings", methods=["PUT"])
+@auth.require()
+def api_port_settings(env_id, device_id, idx):
+    """A port's name (devices.manage) and PoE on / off (ports.poe)."""
+    me = auth.current()
+    body = request.get_json(silent=True) or {}
+    if "name" in body and not perms.has(me, "devices.manage"):
+        return _deny("You can't rename ports", 403)
+    if "poe_mode" in body and not perms.has(me, "ports.poe"):
+        return _deny("You can't change PoE", 403)
+    x, err = _device_ctx(env_id, device_id, idx)
+    if err:
+        return err
+    fields, detail = {}, {"env": x.env["name"], "device": x.ndev["name"], "port": idx}
+    if "name" in body:
+        name = str(body["name"] or "").strip()[:40]
+        fields["name"] = name or None
+        detail["before"], detail["after"] = {"name": x.port["name"]}, {"name": name or f"Port {idx}"}
+    if "poe_mode" in body:
+        if body["poe_mode"] not in unifi.POE_MODES:
+            return _deny("PoE must be on (auto) or off")
+        if not x.port["poe_capable"]:
+            return _deny("This port has no PoE")
+        guard = _power_guard(x, body)
+        if guard:
+            return guard
+        fields["poe_mode"] = body["poe_mode"]
+        detail["poe"] = f"{x.port['poe_mode']} → {body['poe_mode']}"
+    if not fields:
+        return _deny("Nothing to change")
+    overrides, _, _ = unifi.build_port_patch(x.dev, x.port, fields)
+    try:
+        x.c.put_port_overrides(device_id, overrides)
+    except unifi.UniFiError as e:
+        auth.audit("port.settings", x.target, {**detail, "error": str(e)}, ok=False, env_id=env_id)
+        return _deny(str(e), 502)
+    auth.audit("port.settings", x.target, detail, env_id=env_id)
+    envs.invalidate(env_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/envs/<int:env_id>/devices/<device_id>/ports/<int:idx>/power-cycle", methods=["POST"])
+@auth.require("ports.poe")
+def api_port_power_cycle(env_id, device_id, idx):
+    body = request.get_json(silent=True) or {}
+    x, err = _device_ctx(env_id, device_id, idx)
+    if err:
+        return err
+    if not x.port["poe_capable"] or not x.port["poe_enabled"]:
+        return _deny("PoE is off on this port - nothing to power-cycle")
+    guard = _power_guard(x, body)
+    if guard:
+        return guard
+    detail = {"env": x.env["name"], "device": x.ndev["name"], "port": idx}
+    try:
+        x.c.devmgr("power-cycle", x.ndev["mac"], port_idx=idx)
+    except unifi.UniFiError as e:
+        auth.audit("port.power_cycle", x.target, {**detail, "error": str(e)}, ok=False, env_id=env_id)
+        return _deny(str(e), 502)
+    auth.audit("port.power_cycle", x.target, detail, env_id=env_id)
+    envs.invalidate(env_id)
+    return jsonify({"ok": True})
+
+
 
 @app.route("/api/admin/model-caps", methods=["PUT"])
 @auth.require("settings.manage")
@@ -459,6 +658,28 @@ def api_model_caps():
 def api_model_caps_get():
     return jsonify({"model_caps": db.get_json("model_caps", {}), "builtin_native_only": sorted(unifi.NATIVE_ONLY_MODELS),
                     "model_names": unifi.MODEL_NAMES})
+
+
+@app.route("/api/admin/envs/<int:env_id>/diagnostics")
+@auth.require("envs.manage")
+def api_env_diagnostics(env_id):
+    """What UniFi reports for this environment's devices, secrets removed - for troubleshooting a model."""
+    env = envs.get(env_id)
+    if env is None:
+        return _deny("No such environment", 404)
+    c = envs.client(env)
+    out = {"app_version": versioning.VERSION, "env": {"name": env["name"], "mode": env["mode"],
+                                                                "site": env["site"]}}
+    for key, fn in (("devices", c.raw_devices), ("app_devices", c.raw_app_devices), ("networks", c.raw_networks),
+                    ("port_profiles", c.raw_portconfs)):
+        try:
+            out[key] = unifi.redact(fn())
+        except unifi.UniFiError as e:
+            out[key] = {"error": str(e)}
+    resp = jsonify(out)
+    name = "".join(ch if ch.isalnum() else "-" for ch in env["name"]).strip("-") or "environment"
+    resp.headers["Content-Disposition"] = f'attachment; filename="vlanmgr-{name}-diagnostics.json"'
+    return resp
 
 
 # ----------------------------------------------------------------------------

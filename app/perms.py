@@ -7,6 +7,7 @@ deny single abilities on top of their role.
 
     Admin (level 100)   every ability, always - not editable
     Supervisor (50)     default: change ports, see environment settings, see activity
+                        (PoE control and device management start admin-only)
     Viewer (10)         default: nothing beyond seeing their devices
     custom roles        any level from 11 to 99, any abilities
 
@@ -34,6 +35,10 @@ CAPS = [
      "Uplinks, links to other UniFi devices, LAG and mirror ports (after a warning)."),
     ("ports.lock", "Ports", "Lock and unlock ports",
      "Also change locked ports and re-apply locked settings."),
+    ("ports.poe", "Ports", "Power-cycle PoE and turn PoE on / off",
+     "Restart a camera, phone or access point by cycling its port's power."),
+    ("devices.manage", "Devices", "Manage devices",
+     "Rename devices and ports, blink the locate light, turn the LED on / off, restart and update firmware."),
     ("env.info", "Environments", "See environment settings", "Connection, site and notes. Never the API key."),
     ("activity.view", "Environments", "See the activity log", "Changes made in their environments."),
     ("users.view", "People", "See the people below them", "Opens the Users page, showing only lower roles."),

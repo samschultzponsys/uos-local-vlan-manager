@@ -101,7 +101,9 @@ def make_devices():
             "port_table": [_port(1, True, 1000, name="Port 1", uplink=True), _port(2, True, 1000), _port(3),
                            _port(4, True, 100), _port(5)],
             "port_overrides": [{"port_idx": 2, "native_networkconf_id": "net-iot", "tagged_vlan_mgmt": "auto"}]}
-    return [gw, sw8, sw24, mini, ap]
+    mesh = {"_id": "dev-mesh", "mac": "aa:00:00:00:00:a2", "name": "Garage AP", "model": "UAL6", "type": "uap",
+            "ip": "192.168.1.31", "state": 1, "version": "6.6.77", "num_sta": 4}   # meshed: no wired port table
+    return [gw, sw8, sw24, mini, ap, mesh]
 
 
 CLIENTS = [
@@ -172,6 +174,10 @@ def create_app():
         if dev is None:
             return jsonify({"meta": {"rc": "error", "msg": "api.err.IdInvalid"}}), 400
         body = request.get_json()
+        if dev["model"] == "USMINI" and any(o.get("tagged_vlan_mgmt") in ("block_all", "custom")
+                                             for o in body.get("port_overrides") or []):
+            # like the real controller: the Flex Mini can't filter tagged VLANs
+            return jsonify({"meta": {"rc": "error", "msg": "api.err.VlanManagementOptionsUnsupportedByDevice"}}), 400
         if "port_overrides" in body:
             dev["port_overrides"] = copy.deepcopy(body["port_overrides"])
         for k in ("name", "led_override"):

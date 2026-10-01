@@ -52,7 +52,11 @@ manage only their own switches and only the VLANs you allow.
 - **Switches that can't filter tagged VLANs** (like the **USW Flex Mini**) only offer the
   native VLAN; the tagging setting, which the switch would ignore, is hidden. Admins can mark
   other models the same way, or undo it, from any port panel.
-- **Activity log**: who changed which port, from what to what, and whether UniFi confirmed it.
+- **All your UniFi network devices**, grouped into gateways, switches and access points, each
+  with a details panel (model, firmware, uptime, uplink, clients...). With the right abilities:
+  rename, blink the locate light, set the status LED, restart, update firmware, name ports,
+  turn PoE on / off and power-cycle a port to restart what it powers.
+- **Activity log**: who changed which port or device, from what to what, and whether UniFi confirmed it.
 - **Many environments, scoped per user**: see [Environments & access](#environments--access).
 - **Always current**: nothing about your switches is stored here. Every view is read live
   from UniFi, so changes made in the UniFi console or cloud UI show up within seconds (see

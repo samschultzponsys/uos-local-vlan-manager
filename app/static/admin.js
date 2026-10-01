@@ -161,7 +161,7 @@ function EnvEditor({ env, onDone }) {
       hint="Uplinks, links to other UniFi devices, LAG and mirror ports. Off: only admins, after a warning." />
     <${Field} label="Notes (visible to this environment's supervisors)"><input value=${s.notes} onInput=${(e) => set("notes", e.target.value)} /></${Field}>
     ${test && html`<div class=${"notice " + (test.ok ? (test.readonly ? "warn" : "good") : "err")}><${Icon} name=${test.ok ? "check" : "alert"} /><div>
-      ${test.ok && test.readonly ? html`Connected, <b>view only</b> — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks.` : test.ok ? html`Connected — <b>${test.devices}</b> devices with ports and <b>${test.networks}</b> networks on site <b>${s.site}</b>.` : test.steps ? "A check above failed — its note says what to do." : test.error}</div></div>`}
+      ${test.ok && test.readonly ? html`Connected, <b>view only</b> — <b>${test.devices}</b> devices and <b>${test.networks}</b> networks.` : test.ok ? html`Connected — <b>${test.devices}</b> devices and <b>${test.networks}</b> networks on site <b>${s.site}</b>.` : test.steps ? "A check above failed — its note says what to do." : test.error}</div></div>`}
     ${test && test.steps && html`<div class="steps-check">${test.steps.map((st) => html`<div class=${"check-row " + (st.ok ? "ok" : st.warn ? "warn" : "bad")}>
       <${Icon} name=${st.ok ? "check" : st.warn ? "alert" : "x"} size=${15} /><div><b>${st.name}</b><div class="muted small">${st.detail}</div></div></div>`)}</div>`}
     ${test && test.ok && test.console_id && test.console_id !== s.console_id && html`<div class="muted small">Console ID resolved to <span class="mono">${test.console_id}</span> — it's saved that way.</div>`}
@@ -179,6 +179,8 @@ function EnvEditor({ env, onDone }) {
         if (!await ask({ title: `Delete ${s.name}?`, body: "Everyone loses access to it. The UniFi console itself isn't touched.", danger: true, confirm: "Delete" })) return;
         await api(`/api/admin/envs/${s.id}`, { method: "DELETE" }); toast("Deleted"); onDone(true);
       }}><${Icon} name="trash" />Delete</button>`}
+      ${s.id && html`<a class="btn ghost" href=${`/api/admin/envs/${s.id}/diagnostics`} download
+        title="What UniFi reports for this environment's devices, with passwords and keys removed - handy when a model shows up wrong"><${Icon} name="download" />Diagnostics</a>`}
       <span class="grow"></span>
       <button class="btn ghost" disabled=${busy} onClick=${async () => { setBusy(true); try { setTest(await api("/api/admin/envs/test", { method: "POST", body: body() })); } catch (e) { toast(e.message, "err"); } setBusy(false); }}>
         ${busy ? html`<${Spinner} />` : html`<${Icon} name="refresh" />`}Test connection</button>

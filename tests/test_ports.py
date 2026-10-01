@@ -115,7 +115,7 @@ def test_bad_api_key_reports_error(fake, admin):
 
 def test_env_test_endpoint_lists_sites_and_uses_saved_key(fake, admin):
     body = admin.post("/api/admin/envs/test", json={"host": "http://fake", "api_key": "test-key"}).get_json()
-    assert body["ok"] and body["devices"] == 5 and {"name": "default", "desc": "Default"} in body["sites"]
+    assert body["ok"] and body["devices"] == 6 and {"name": "default", "desc": "Default"} in body["sites"]
     eid = configure_unifi(admin)
     # testing a saved environment without retyping its key
     assert admin.post("/api/admin/envs/test", json={"env_id": eid, "host": "http://fake"}).get_json()["ok"]
@@ -327,7 +327,7 @@ def test_cloud_environment_falls_back_to_view_only(app, fake, admin):
     env = r.get_json()["env"]
     assert env["console_id"] == "HOST:1"        # resolved from the pasted address
     test = admin.post("/api/admin/envs/test", json={"env_id": env["id"], "mode": "cloud", "console_id": "HOST:1"}).get_json()
-    assert test["ok"] and test["readonly"] and test["devices"] == 5
+    assert test["ok"] and test["readonly"] and test["devices"] == 6
     assert [s["ok"] for s in test["steps"]] == [True, True, True, False] and test["steps"][-1]["warn"]
     s = admin.get(f"/api/envs/{env['id']}/state").get_json()
     assert s["error"] is None and s["readonly"] and "VLANs" in s["readonly_reason"]
