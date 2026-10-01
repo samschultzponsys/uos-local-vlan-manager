@@ -54,7 +54,7 @@ export function reportContext(info = {}) {
 }
 const CONTEXT_LABEL = { version: "Version", page: "Page", env: "Environment", view: "Port view", browser: "Browser", screen: "Screen", theme: "Theme" };
 
-export function FeedbackPage({ me, info, onSeen }) {
+export function FeedbackPage({ me, info, onSeen, openFirst, onOpened }) {
   const [who, setWho] = useState(false);
   const [data, setData] = useState(null);
   const [kind, setKind] = useState("all");
@@ -62,7 +62,8 @@ export function FeedbackPage({ me, info, onSeen }) {
   const [sort, setSort] = useState("top");
   const [wontfix, setWontfix] = useState(false);
   const [col, setCol] = useState("open");
-  const [openId, setOpenId] = useState(null);
+  const [openId, setOpenId] = useState(openFirst || null);
+  useEffect(() => { if (openFirst && onOpened) onOpened(); }, []);
   const [newOpen, setNewOpen] = useState(false);
   const narrow = useNarrow();
   const load = () => api("/api/feedback").then(setData).catch((e) => toast(e.message, "err"));
@@ -285,6 +286,8 @@ function ItemModal({ id, can, onClose }) {
           title=${it.voted ? "Take back your vote" : "I want this too"}><${Icon} name="vote" size=${16} /><b>${it.votes}</b>
           <span>${it.voted ? "You want this" : "Me too"}</span></button>`}
         ${it.github_url && html`<a class="btn sm ghost" href=${it.github_url} target="_blank" rel="noopener"><${Icon} name="external" size=${14} />GitHub</a>`}
+        ${!it.github_url && can.github && can.manage && !isReq && html`<button class="btn sm ghost" disabled=${busy}
+          onClick=${() => run(() => api(`/api/feedback/${id}/github`, { method: "POST" }), "Sent to GitHub")}><${Icon} name="upload" size=${14} />Send to GitHub</button>`}
         <span class="grow"></span>
         ${it.can_edit && !edit && html`<button class="btn sm ghost" onClick=${() => setEdit({ title: it.title, body: it.body, kind: it.kind })}><${Icon} name="pencil" size=${14} />Edit</button>`}
         ${it.can_delete && html`<button class="btn sm ghost danger-text" onClick=${del}><${Icon} name="trash" size=${14} />${isReq && it.mine ? "Withdraw" : "Delete"}</button>`}

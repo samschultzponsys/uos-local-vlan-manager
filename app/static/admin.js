@@ -24,7 +24,7 @@ const roleName = (roles, key) => ((roles || []).find((r) => r.key === key) || { 
 export function SettingsModal({ onClose, onSaved, addEnv }) {
   const [tab, setTab] = useState("envs");
   const tabs = [["envs", "Environments", "server"], ["auth", "Sign-in", "shield"], ["behavior", "Ports", "grid"],
-    ["brand", "Branding", "palette"], ["updates", "Updates", "sparkle"]];
+    ["brand", "Branding", "palette"], ["integrations", "Integrations", "link"], ["updates", "Updates", "sparkle"]];
   return html`<${Modal} title="Settings" icon="settings" onClose=${onClose} wide>
     <nav class="tabs">${tabs.map(([k, l, i]) => html`<button class=${tab === k ? "on" : ""} onClick=${() => setTab(k)}><${Icon} name=${i} size=${15} />${l}</button>`)}</nav>
     <div class="tab-body">
@@ -32,6 +32,7 @@ export function SettingsModal({ onClose, onSaved, addEnv }) {
       ${tab === "auth" && html`<${AuthTab} />`}
       ${tab === "behavior" && html`<${BehaviorTab} onSaved=${onSaved} />`}
       ${tab === "brand" && html`<${BrandingTab} onSaved=${onSaved} />`}
+      ${tab === "integrations" && html`<${IntegrationsTab} />`}
       ${tab === "updates" && html`<${UpdatesTab} />`}
     </div></${Modal}>`;
 }
@@ -442,6 +443,151 @@ function MarkEditor({ title, hint, which, b, mark, onChange, onUpload }) {
       <small class="hint">PNG, JPEG or WebP. It's made square (see-through parts stay see-through)${which === "favicon" ? "; small, bold pictures read best in a tab" : ""}.</small>
     </div>`}
   </fieldset>`;
+}
+
+// --- integrations: GitHub and notifications ----------------------------------------------------
+
+const CHANNEL_INFO = {
+  email: { label: "Email (SMTP)", icon: "comment", hint: "Any SMTP server: Microsoft 365, Gmail (app password), your own relay." },
+  teams: { label: "Microsoft Teams", icon: "users", hint: "In Teams: channel → ⋯ → Workflows → \"Post to a channel when a webhook request is received\", then paste its URL." },
+  slack: { label: "Slack", icon: "comment", hint: "A Slack app with Incoming Webhooks turned on; paste the webhook URL for the channel." },
+  discord: { label: "Discord", icon: "comment", hint: "Channel settings → Integrations → Webhooks → New webhook → Copy webhook URL." },
+  telegram: { label: "Telegram", icon: "send", hint: "Make a bot with @BotFather for its token. The chat ID is the group or user it posts to (a group's starts with -)." },
+  webhook: { label: "Webhook (JSON)", icon: "link", hint: "Posts {event, title, text, url, item} as JSON, for anything else (n8n, Home Assistant, Power Automate…)." },
+};
+
+/** a secret field: shows that one is saved without showing it; typing replaces it */
+function Secret({ label, has, value, onChange, onClear, placeholder, hint }) {
+  return html`<${Field} label=${label} hint=${hint}>
+    <div class="row"><input type="password" autocomplete="off" value=${value} placeholder=${has ? "✓ saved — type to replace" : placeholder || ""}
+      onInput=${(e) => onChange(e.target.value)} />
+      ${has && html`<button class="btn sm ghost" onClick=${onClear}>Clear</button>`}</div></${Field}>`;
+}
+
+function IntegrationsTab() {
+  const [c, setC] = useState(null);
+  const [open, setOpen] = useState({});
+  const [busy, setBusy] = useState(null);
+  const [ghInfo, setGhInfo] = useState(null);
+  const load = () => api("/api/settings/integrations").then((x) => { setC(x); setGhInfo(null); }).catch((e) => toast(e.message, "err"));
+  useEffect(() => { load(); }, []);
+  if (!c) return html`<${Spinner} />`;
+  const set = (sec, patch) => setC({ ...c, [sec]: { ...c[sec], ...patch } });
+  const gh = c.github;
+  const payload = () => {
+    const out = {};
+    for (const sec of ["github", ...Object.keys(CHANNEL_INFO)]) {
+      const v = { ...c[sec] };
+      for (const k of Object.keys(v)) if (k.startsWith("has_") || k === "last_sync") delete v[k];
+      out[sec] = v;
+    }
+    return out;
+  };
+  const save = async () => {
+    setBusy("save");
+    try { const r = await api("/api/settings/integrations", { method: "PUT", body: payload() }); setC({ ...c, ...r }); toast("Saved"); }
+    catch (e) { toast(e.message, "err"); }
+    setBusy(null);
+  };
+  const clear = async (sec, key) => {
+    try { const r = await api("/api/settings/integrations", { method: "PUT", body: { [sec]: { [`clear_${key}`]: true } } }); setC({ ...c, ...r }); toast("Removed"); }
+    catch (e) { toast(e.message, "err"); }
+  };
+  const test = async (ch) => {
+    setBusy(`test-${ch}`);
+    try {
+      const r = await api("/api/settings/integrations/test", { method: "POST", body: { channel: ch, settings: c[ch] } });
+      if (ch === "github") { setGhInfo(r); toast(`Connected to ${r.repo}`); } else toast("Test sent - check that it arrived");
+    } catch (e) { toast(e.message, "err"); if (ch === "github") setGhInfo({ error: e.message }); }
+    setBusy(null);
+  };
+  const sync = async (push) => {
+    setBusy(push ? "push" : "sync");
+    try {
+      const r = await api("/api/settings/integrations/github/sync", { method: "POST", body: { push } });
+      toast(`${push ? `Sent ${r.sent} · ` : ""}${r.status} status change${r.status === 1 ? "" : "s"}, ${r.comments} comment${r.comments === 1 ? "" : "s"} from GitHub`);
+    } catch (e) { toast(e.message, "err"); }
+    setBusy(null);
+  };
+  const events = (sec) => html`<div class="int-events"><span class="field-label">Send</span>
+    ${Object.entries(c.events).map(([k, l]) => html`<label class="tag-row" key=${k}><input type="checkbox" checked=${c[sec].events.includes(k)}
+      onChange=${(e) => set(sec, { events: e.target.checked ? [...c[sec].events, k] : c[sec].events.filter((x) => x !== k) })} />${l}</label>`)}</div>`;
+
+  return html`<div class="form int-form">
+    <section class="int-card">
+      <div class="int-head"><${Icon} name="link" size=${18} /><b>GitHub</b>
+        ${gh.has_token ? html`<span class="badge good-badge">Token saved</span>` : html`<span class="badge">No token</span>`}</div>
+      <p class="muted small">One token for the update check (needed once the repository is private) and for syncing feedback to issues.
+        Use a <b>fine-grained personal access token</b> limited to the repositories you need, with <i>Contents: read</i> (releases) and${" "}
+        <i>Issues: read and write</i>.</p>
+      <${Secret} label="Token" has=${gh.has_token} value=${gh.token} placeholder="github_pat_…" onChange=${(v) => set("github", { token: v })}
+        onClear=${() => clear("github", "token")} />
+      <${Field} label="Check for updates from" hint=${`Leave empty for ${c.default_update_repo}.`}>
+        <input value=${gh.update_repo} placeholder=${c.default_update_repo} onInput=${(e) => set("github", { update_repo: e.target.value })} /></${Field}>
+      <${Toggle} checked=${gh.sync} onChange=${(v) => set("github", { sync: v })} label="Sync feedback with GitHub issues"
+        hint="New bugs and ideas become issues; comments and status go both ways. Closing an issue marks it done here. Change requests are never sent." />
+      ${gh.sync && html`<div class="int-sub">
+        <${Field} label="Issues repository" hint="owner/name"><input value=${gh.repo} placeholder="you/your-repo" onInput=${(e) => set("github", { repo: e.target.value })} /></${Field}>
+        <div class="int-events"><span class="field-label">Send</span>
+          ${[["bug", "Bugs (label: bug)"], ["idea", "Ideas (label: enhancement)"]].map(([k, l]) => html`<label class="tag-row" key=${k}><input type="checkbox" checked=${gh.kinds.includes(k)}
+            onChange=${(e) => set("github", { kinds: e.target.checked ? [...gh.kinds, k] : gh.kinds.filter((x) => x !== k) })} />${l}</label>`)}</div>
+        <${Field} label="Extra label" hint="Added to every synced issue, to find them on GitHub. Leave empty for none.">
+          <input value=${gh.label} onInput=${(e) => set("github", { label: e.target.value })} /></${Field}>
+        <${Toggle} checked=${gh.show_author} onChange=${(v) => set("github", { show_author: v })} label="Include who reported it" hint="Their display name, in the issue and on synced comments." />
+        <${Toggle} checked=${gh.show_context} onChange=${(v) => set("github", { show_context: v })} label="Include technical details"
+          hint="Version, page, environment name, browser and screen." />
+        ${ghInfo && !ghInfo.error && !ghInfo.private && html`<div class="notice warn"><${Icon} name="eye" /><div><b>${ghInfo.repo} is public.</b>
+          Anyone can read the issues, including environment and device names in reports.</div></div>`}
+        <div class="row">
+          <button class="btn" disabled=${!!busy} onClick=${() => sync(false)}><${Icon} name="refresh" size=${14} />Sync now</button>
+          <button class="btn" disabled=${!!busy} onClick=${() => sync(true)} title="Bugs and ideas posted before sync was on"><${Icon} name="upload" size=${14} />Send existing items</button>
+          <span class="muted small">Every 10 minutes by itself${gh.last_sync ? ` · last ${ago(gh.last_sync)}` : ""}. Save first.</span></div>
+      </div>`}
+      <div class="row"><button class="btn" disabled=${!!busy} onClick=${() => test("github")}>${busy === "test-github" ? html`<${Spinner} />` : html`<${Icon} name="check" size=${14} />`}Test token</button>
+        ${ghInfo && (ghInfo.error ? html`<span class="err-text small">${ghInfo.error}</span>`
+          : html`<span class="muted small"><b>${ghInfo.repo}</b> · ${ghInfo.private ? "private" : "public"} · issues ${ghInfo.issues ? "on" : "off"}${ghInfo.triage ? "" : " · token can't write"}</span>`)}</div>
+    </section>
+
+    <h4 class="section">Notifications</h4>
+    <p class="muted small">Turn on any mix. Each one picks its own events. Messages link to the item.</p>
+    ${Object.entries(CHANNEL_INFO).map(([k, info]) => {
+      const ch = c[k];
+      const shown = open[k] ?? ch.enabled;
+      return html`<section class=${"int-card" + (ch.enabled ? " on" : "")} key=${k}>
+        <div class="int-head"><${Icon} name=${info.icon} size=${18} /><b>${info.label}</b>
+          <span class="grow"></span>
+          <${Toggle} checked=${ch.enabled} onChange=${(v) => { set(k, { enabled: v }); setOpen({ ...open, [k]: v || open[k] }); }} label="" />
+          <button class="icon-btn sm" onClick=${() => setOpen({ ...open, [k]: !shown })} aria-label="Settings"><span class="chev" style=${shown ? "" : "transform:rotate(-90deg)"}><${Icon} name="chevron" /></span></button></div>
+        ${shown && html`<div class="int-sub">
+          <p class="muted small">${info.hint}</p>
+          ${k === "email" && html`
+            <div class="int-grid">
+              <${Field} label="SMTP server"><input value=${ch.host} placeholder="smtp.office365.com" onInput=${(e) => set(k, { host: e.target.value })} /></${Field}>
+              <${Field} label="Port"><input type="number" value=${ch.port} onInput=${(e) => set(k, { port: e.target.value })} /></${Field}>
+            </div>
+            <${Field} label="Security"><${Segmented} value=${ch.security} onChange=${(v) => set(k, { security: v, port: v === "ssl" ? 465 : v === "starttls" ? 587 : 25 })}
+              options=${[{ value: "starttls", label: "STARTTLS" }, { value: "ssl", label: "SSL / TLS" }, { value: "none", label: "None" }]} /></${Field}>
+            <div class="int-grid">
+              <${Field} label="Username"><input value=${ch.username} autocomplete="off" onInput=${(e) => set(k, { username: e.target.value })} /></${Field}>
+              <${Secret} label="Password" has=${ch.has_password} value=${ch.password} onChange=${(v) => set(k, { password: v })} onClear=${() => clear(k, "password")} />
+            </div>
+            <${Field} label="From" hint="Leave empty to use the username."><input value=${ch.sender} placeholder="VLAN Manager <it@example.com>" onInput=${(e) => set(k, { sender: e.target.value })} /></${Field}>
+            <${Field} label="Send to" hint="Comma separated, e.g. the IT team."><input value=${ch.to} placeholder="it@example.com" onInput=${(e) => set(k, { to: e.target.value })} /></${Field}>
+            <${Toggle} checked=${ch.people} onChange=${(v) => set(k, { people: v })} label="Also email the people involved"
+              hint="Whoever reported, voted on or commented on an item hears about its status changes and comments (if they have an email)." />`}
+          ${["teams", "slack", "discord", "webhook"].includes(k) && html`<${Secret} label="Webhook URL" has=${ch.has_url} value=${ch.url} placeholder="https://…"
+            onChange=${(v) => set(k, { url: v })} onClear=${() => clear(k, "url")} />`}
+          ${k === "telegram" && html`<div class="int-grid">
+            <${Secret} label="Bot token" has=${ch.has_bot_token} value=${ch.bot_token} placeholder="123456:ABC…" onChange=${(v) => set(k, { bot_token: v })} onClear=${() => clear(k, "bot_token")} />
+            <${Field} label="Chat ID"><input value=${ch.chat_id} placeholder="-1001234567890" onInput=${(e) => set(k, { chat_id: e.target.value })} /></${Field}></div>`}
+          ${events(k)}
+          <div class="row"><button class="btn sm" disabled=${!!busy} onClick=${() => test(k)}>${busy === `test-${k}` ? html`<${Spinner} />` : html`<${Icon} name="send" size=${14} />`}Send a test</button>
+            <span class="muted small">Uses what's on screen; saved secrets fill in the rest.</span></div>
+        </div>`}
+      </section>`;
+    })}
+    <div class="form-actions"><button class="btn primary" disabled=${!!busy} onClick=${save}>Save</button></div>
+  </div>`;
 }
 
 function UpdatesTab() {

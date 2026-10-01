@@ -1226,6 +1226,8 @@ function App() {
   const [devModal, setDevModal] = useState(null);   // id of the device whose details are open
   const [view, setView] = useState(null);           // "env", "all" (the All devices page) or "feedback"
   const lastPage = useRef("env");
+  // a link from a notification: /?fb=12 opens that feedback item
+  const deepFb = useRef(Number(new URLSearchParams(location.search).get("fb")) || null);
   const [pending, setPending] = useState(null);     // a port to open once its environment has loaded
   const [wizardLater, setWizardLater] = useState(false);   // closed the setup wizard: ask again next visit
   const tipsPaused = useRef(false);                         // no tips over dialogs and port panels
@@ -1301,7 +1303,8 @@ function App() {
   useEffect(() => {
     if (!me || view) return;
     const p = { ...PORTS_DEFAULTS, ...((me.prefs || {}).ports_view || {}) };
-    setView(startValue(p, (m => (m.caps || []).includes("feedback.view"))(me)));
+    const fb = (me.caps || []).includes("feedback.view");
+    setView(deepFb.current && fb ? "feedback" : startValue(p, fb));
   }, [me]);
   useEffect(() => {
     if (!me || !envList || modal || wizardLater || me.pending || me.impersonator) return;
@@ -1527,7 +1530,8 @@ function App() {
             ${(me.feedback_unseen || 0) + (me.requests_waiting || 0)}</span>`}</button>`}
       </div>`}
       ${showAll && html`<${Overview} me=${me} pv=${pv} lg=${lg} prefs=${prefs} poll=${poll} onOpen=${openFromOverview} />`}
-      ${showFb && html`<${FeedbackPage} me=${me} onSeen=${loadMe}
+      ${showFb && html`<${FeedbackPage} me=${me} onSeen=${loadMe} openFirst=${deepFb.current}
+        onOpened=${() => { if (deepFb.current) { deepFb.current = null; history.replaceState(null, "", location.pathname); } }}
         info=${{ version: version ? version.version : "", page: lastPage.current === "all" ? "All devices" : "Environment",
           env: env ? env.name : "", view: viewFor(pv, screenOf(innerWidth)) }} />`}
       ${showEnv && env && html`<div class="env-bar">

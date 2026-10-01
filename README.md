@@ -87,6 +87,9 @@ manage only their own switches and only the VLANs you allow.
   can ask for it from the same panel; a person who could make the change approves it on the
   Feedback board and it's done as them. Who may ask for what is set per person in
   *Feedback → Who can request*.
+- **Integrations** (Settings → Integrations): a GitHub token for the update check (private
+  repositories too) and **two-way issue sync** of feedback; **notifications** by email (SMTP),
+  Microsoft Teams, Slack, Discord, Telegram or a JSON webhook, each with its own events.
 - **Your name and logo** (Settings → Branding, admins): rename the app, set the sign-in
   tagline, and pick the header logo and the browser tab icon: the stock mark, one of 18 icons
   on a color palette (8 presets or your own colors), or an uploaded picture. The tab icon can
@@ -137,6 +140,7 @@ Secrets (the UniFi API keys, the OIDC client secret) are stored in the DB and pr
 permissions, so keep `./data` off shared or synced storage.
 
 The app only contacts your UniFi console (or `api.ui.com` in cloud mode), your OIDC provider,
+the notification services and GitHub issue sync you turn on in Settings → Integrations,
 and `api.github.com` every 6 hours for the update dot (turn off in Settings → Updates, or with
 `VLANMGR_UPDATE_CHECK=false`). The UI loads nothing from the internet: fonts and scripts are
 served by the container.
@@ -396,6 +400,10 @@ plain HTTP too.
   Pushes that don't bump the version only publish `:edge` and `:sha-…`.
 - To cut a release, add a `## x.y — YYYY-MM-DD` section at the top of `CHANGELOG.md` and
   update this README if behaviour changed, then push to `main`.
+- **Private repository?** Two things need a token: the in-app update check (Settings →
+  Integrations → GitHub) and pulling the image, since a private repository's GHCR package is
+  private too. On the host, `docker login ghcr.io -u <your-user>` once with a token that has
+  `read:packages`; `docker compose pull` then works as before.
 
 ## Development
 

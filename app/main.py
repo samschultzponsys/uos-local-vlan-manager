@@ -21,6 +21,7 @@ import brand
 import db
 import envs
 import feedback
+import integrations
 import perms
 import unifi
 import versioning
@@ -53,6 +54,8 @@ app.config.update(SESSION_COOKIE_NAME="vlanmgr_flow", SESSION_COOKIE_HTTPONLY=Tr
 app.secret_key = secrets.token_hex(32)
 auth.init_app(app)
 feedback.register(app)
+feedback.listeners.append(integrations.on_feedback)
+versioning.SOURCE = integrations.update_source
 
 
 @app.teardown_appcontext
@@ -1125,6 +1128,72 @@ def api_settings_put():
     return jsonify({"ok": True})
 
 
+@app.route("/api/settings/integrations")
+@auth.require("settings.manage")
+def api_integrations():
+    return jsonify({**integrations.public_config(), "events": integrations.EVENT_LABEL,
+                    "default_update_repo": versioning.REPO})
+
+
+@app.route("/api/settings/integrations", methods=["PUT"])
+@auth.require("settings.manage")
+def api_integrations_put():
+    data = request.get_json(silent=True) or {}
+    try:
+        integrations.save(data)
+    except ValueError as e:
+        return _deny(str(e))
+    # what changed, never the secrets themselves
+    auth.audit("settings.integrations", "", {k: sorted(x for x in v if x not in integrations.SECRET.get(k, []))
+                                             for k, v in data.items() if isinstance(v, dict)})
+    return jsonify({"ok": True, **integrations.public_config()})
+
+
+@app.route("/api/settings/integrations/test", methods=["POST"])
+@auth.require("settings.manage")
+def api_integrations_test():
+    data = request.get_json(silent=True) or {}
+    ch = data.get("channel")
+    vals = data.get("settings") or {}
+    try:
+        if ch == "github":
+            repo = (vals.get("repo") or vals.get("update_repo") or versioning.REPO).strip().strip("/")
+            return jsonify({"ok": True, **integrations.gh_test(repo, (vals.get("token") or "").strip() or integrations.gh_token() or "")})
+        if ch not in integrations.CHANNELS:
+            return _deny("Unknown channel")
+        integrations.send_test(ch, vals)
+    except ValueError as e:
+        return _deny(str(e))
+    except Exception as e:
+        return _deny(str(e), 502)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/settings/integrations/github/sync", methods=["POST"])
+@auth.require("settings.manage")
+def api_github_sync():
+    """Pull GitHub's side now; with {"push": true} also send bugs / ideas that aren't on GitHub yet."""
+    gh = integrations.config()["github"]
+    if not (gh["sync"] and gh["token"] and gh["repo"]):
+        return _deny("Turn on issue sync with a token and a repository first (and save)")
+    sent, failed = 0, None
+    try:
+        if (request.get_json(silent=True) or {}).get("push"):
+            rows = db.get().execute("SELECT * FROM feedback WHERE github_issue=0 AND kind IN (%s) ORDER BY id"
+                                    % ",".join("?" * len(gh["kinds"])), gh["kinds"]).fetchall() if gh["kinds"] else []
+            for r in rows:
+                integrations.gh_push_item(dict(r), auth.external_base())
+                sent += 1
+        pulled = integrations.gh_pull()
+    except Exception as e:
+        failed = str(e)
+        pulled = {"status": 0, "comments": 0}
+    auth.audit("github.sync", gh["repo"], {"sent": sent, **pulled, **({"error": failed} if failed else {})}, ok=not failed)
+    if failed:
+        return _deny(failed, 502)
+    return jsonify({"ok": True, "sent": sent, **pulled})
+
+
 @app.route("/api/settings/brand")
 @auth.require("settings.manage")
 def api_brand():
@@ -1385,6 +1454,7 @@ def startup():
 if __name__ == "__main__":
     startup()
     threading.Thread(target=_update_loop, daemon=True, name="update-check").start()
+    integrations.start_sync()
     from waitress import serve
     port = int(os.environ.get("PORT", "20090"))
     serve(app, host="0.0.0.0", port=port, threads=int(os.environ.get("VLANMGR_THREADS", "8")),

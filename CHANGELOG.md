@@ -5,6 +5,32 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.3 — 2026-10-01
+
+### Added
+- **Settings → Integrations** (admins).
+- **GitHub**: one token (a fine-grained personal access token) for
+  - the **update check**, so it keeps working once the repository is private, and from any
+    repository you choose;
+  - **issue sync**: new bugs and ideas become GitHub issues (labels *bug* / *enhancement* plus
+    one of your own), and comments and status go **both ways**. *Done* / *Won't do* close the
+    issue (as completed / not planned); closing or reopening it on GitHub does the same here,
+    and GitHub comments show up in the item's activity. It checks GitHub every 10 minutes, or
+    on **Sync now**. **Send existing items** sends what was posted before sync was on; a single
+    item has **Send to GitHub**. Who reported it and the technical details are optional, and the
+    page warns when the repository is public. Change requests are never sent.
+  - **Test token** shows the repository, whether it's private and whether the token can write.
+- **Notifications**: any mix of **email (SMTP)**, **Microsoft Teams**, **Slack**, **Discord**,
+  **Telegram** and a plain **JSON webhook**. Each picks its own events: new bugs and ideas,
+  new change requests, status changes and approvals, comments. Each has **Send a test**.
+  Email can also go to **the people involved** (whoever reported, voted or commented) when
+  their item changes.
+- Links in notifications open the item directly (`/?fb=12`).
+
+### Security
+- Tokens, passwords and webhook URLs are kept on the server and never sent back to the
+  browser (the page shows *saved*), and they're left out of the activity log.
+
 ## 3.2 — 2026-10-01
 
 ### Added

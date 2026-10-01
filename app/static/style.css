@@ -1251,3 +1251,18 @@ button.fb-status.on { box-shadow: 0 0 0 2px color-mix(in srgb, var(--st) 45%, tr
 .who-cell { display: grid; place-items: center; }
 .who-cell input { width: 18px; height: 18px; }
 @media (max-width: 600px) { .who-grid { gap: 8px 10px; } .who-col { font-size: 11px; } }
+
+/* --- integrations (settings) --- */
+.int-form { gap: 14px; }
+.int-card { display: grid; gap: 10px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--border); background: var(--bg2); }
+.int-card.on { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.int-head { display: flex; align-items: center; gap: 10px; }
+.int-head .toggle { margin: 0; }
+.int-head .icon { color: var(--accent); }
+.int-sub { display: grid; gap: 10px; }
+.int-sub > p, .int-card > p { margin: 0; }
+.int-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.int-events { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.int-events .field-label { flex-basis: 100%; }
+.good-badge { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+@media (max-width: 600px) { .int-grid { grid-template-columns: 1fr; } }

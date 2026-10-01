@@ -238,6 +238,46 @@ def _emit(event, item_id, u):
             print(f"[feedback] {event} listener failed: {e}", flush=True)
 
 
+def follower_emails(item_id, but=None):
+    ids = _followers(item_id) - {but}
+    if not ids:
+        return []
+    rows = db.get().execute(f"SELECT email FROM users WHERE disabled=0 AND id IN ({','.join('?' * len(ids))})", list(ids))
+    return [r["email"] for r in rows if r["email"]]
+
+
+GITHUB = {"id": None, "username": "GitHub", "display_name": "GitHub", "github": True}
+
+
+def github_status(item_id, status, note):
+    """GitHub closed or reopened the issue: follow it here (and tell people, but not GitHub)."""
+    r = _row(item_id)
+    if not r or r["status"] == status:
+        return
+    conn = db.get()
+    conn.execute("UPDATE feedback SET status=?, closed_at=? WHERE id=?", (status, db.now() if status in CLOSED else 0, item_id))
+    conn.execute("INSERT INTO feedback_comments (item_id, user_id, author, body, event, created_at) VALUES (?,?,?,?,?,?)",
+                 (item_id, None, "GitHub", note, f"status:{status}", db.now()))
+    _touch(item_id, None)
+    conn.commit()
+    _emit("status", item_id, {**GITHUB, "note": note})
+
+
+def github_comment(item_id, author, body, github_id):
+    conn = db.get()
+    conn.execute("INSERT INTO feedback_comments (item_id, user_id, author, body, created_at, github_id) VALUES (?,?,?,?,?,?)",
+                 (item_id, None, author, body[:4000], db.now(), github_id))
+    _touch(item_id, None)
+    conn.commit()
+    _emit("comment", item_id, {**GITHUB, "display_name": author, "comment": body[:4000]})
+
+
+def _github_on():
+    import integrations   # late: integrations imports this module
+    gh = integrations.config()["github"]
+    return bool(gh["sync"] and gh["token"] and gh["repo"])
+
+
 def _can_edit(u, r):
     """Managers always; the reporter while it's still open."""
     if perms.has(u, "feedback.manage"):
@@ -253,7 +293,8 @@ def register(app):
     def api_feedback():
         u = auth.current()
         return jsonify({"items": items_for(u), "statuses": [{"key": k, "label": STATUS_LABEL[k]} for k in STATUSES],
-                        "can": {"submit": perms.has(u, "feedback.submit"), "manage": perms.has(u, "feedback.manage")}})
+                        "can": {"submit": perms.has(u, "feedback.submit"), "manage": perms.has(u, "feedback.manage"),
+                                "github": _github_on()}})
 
     @app.route("/api/feedback/<int:item_id>")
     @auth.require("feedback.view")
@@ -370,7 +411,7 @@ def register(app):
         if sets:
             auth.audit("feedback.edit", f"#{item_id}", {k: v for k, v in sets.items() if k in ("status", "title", "kind")})
         if event:
-            _emit("status", item_id, u)
+            _emit("status", item_id, {**u, "note": str(data.get("note") or "").strip()[:2000]})
         return jsonify({"ok": True})
 
     @app.route("/api/feedback/<int:item_id>", methods=["DELETE"])
@@ -425,7 +466,7 @@ def register(app):
                            (item_id, u.get("id") or None, _who(u), body, db.now()))
         _touch(item_id, u.get("id"))
         conn.commit()
-        _emit("comment", item_id, {**u, "comment": body})
+        _emit("comment", item_id, {**u, "comment": body, "comment_id": cur.lastrowid})
         return jsonify({"ok": True, "id": cur.lastrowid})
 
     @app.route("/api/feedback/<int:item_id>/comments/<int:cid>", methods=["DELETE"])
@@ -480,7 +521,7 @@ def register(app):
         result = resp.get_json() or {}
         _close(item_id, u, "done", "status:done", note or result.get("warning") or "")
         auth.audit("request.approved", f"#{item_id}", {"title": r["title"], "by": r["author"]}, env_id=r["env_id"])
-        _emit("status", item_id, u)
+        _emit("status", item_id, {**u, "note": note})
         return jsonify({"ok": True, **result})
 
     @app.route("/api/feedback/<int:item_id>/decline", methods=["POST"])
@@ -497,5 +538,21 @@ def register(app):
         note = str((request.get_json(silent=True) or {}).get("note") or "").strip()[:2000]
         _close(item_id, u, "wontfix", "status:wontfix", note)
         auth.audit("request.declined", f"#{item_id}", {"title": r["title"], "by": r["author"], "note": note}, env_id=r["env_id"])
-        _emit("status", item_id, u)
+        _emit("status", item_id, {**u, "note": note})
         return jsonify({"ok": True})
+
+    @app.route("/api/feedback/<int:item_id>/github", methods=["POST"])
+    @auth.require("feedback.manage")
+    def api_feedback_github(item_id):
+        """Send an item to GitHub now (one made before sync was on, or whose sending failed)."""
+        import integrations
+        r = _row(item_id)
+        if not r or r["kind"] == REQUEST:
+            return _deny("Only bugs and ideas go to GitHub", 400)
+        try:
+            url = integrations.gh_push_item(dict(r), auth.external_base())
+        except Exception as e:
+            return _deny(str(e), 502)
+        if not url:
+            return _deny("GitHub issue sync is off, or this kind isn't synced (Settings → Integrations)")
+        return jsonify({"ok": True, "url": url})

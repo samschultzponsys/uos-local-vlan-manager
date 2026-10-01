@@ -68,13 +68,25 @@ CHANGELOG = load_changelog()
 VERSION = CHANGELOG[0]["version"] if CHANGELOG else "0.0"
 
 _state = {"latest": None, "url": None, "notes": None, "checked_at": 0, "error": None}
+# () -> (repository or None, token or None) from Settings -> Integrations; set by main.py
+SOURCE = lambda: (None, None)   # noqa: E731
+
+
+def source():
+    try:
+        repo, token = SOURCE()
+    except Exception:
+        repo, token = None, None
+    return repo or REPO, token
 _lock = threading.Lock()
 
 
 def fetch_latest():
-    r = requests.get(f"https://api.github.com/repos/{REPO}/releases/latest", timeout=10,
-                     headers={"Accept": "application/vnd.github+json",
-                              "User-Agent": f"vlan-manager/{VERSION}"})
+    repo, token = source()
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": f"vlan-manager/{VERSION}"}
+    if token:   # a private repository needs it
+        headers["Authorization"] = f"Bearer {token}"
+    r = requests.get(f"https://api.github.com/repos/{repo}/releases/latest", timeout=10, headers=headers)
     if r.status_code == 404:
         return None, None, None
     r.raise_for_status()
@@ -106,7 +118,7 @@ def status(enabled=True):
     on = UPDATE_ALLOWED and enabled
     latest = _state["latest"] if on else None
     return {
-        "enabled": on, "allowed": UPDATE_ALLOWED, "repo": REPO,
+        "enabled": on, "allowed": UPDATE_ALLOWED, "repo": source()[0],
         "latest": latest, "url": _state["url"] if on else None,
         "update_available": bool(latest and version_key(latest) > version_key(VERSION)),
         "checked_at": _state["checked_at"] if on else 0,
