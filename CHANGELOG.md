@@ -5,6 +5,18 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.4 — 2026-10-01
+
+### Added
+- **Wi-Fi on every access point** card (and in its device details):
+  - how many clients, split by band (2.4 / 5 / 6 GHz), and the **average signal**
+  - the **best** and **worst** client signal, with the client's name, band, SSID and IP, and a
+    colored meter: excellent (≥ −60 dBm), good, fair, poor (below −75 dBm)
+  - each radio's **channel**, channel width, **how busy** the channel is and its clients
+  - **All clients by signal**, worst at the bottom, to find who's struggling
+- Network devices with no wired ports, like a meshed access point, show their Wi-Fi instead
+  of "no wired ports".
+
 ## 2.3 — 2026-10-01
 
 ### Added

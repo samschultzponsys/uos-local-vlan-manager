@@ -976,3 +976,35 @@ select option:checked { background-color: var(--accent); color: #fff; }
 .scale-val { font-size: 20px; font-variant-numeric: tabular-nums; }
 .scale-box input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
 .scale-ticks { display: flex; justify-content: space-between; color: var(--faint); font-size: 11px; margin-top: -6px; }
+
+/* ---------- 2.4: access point Wi-Fi ---------- */
+.wifi { display: flex; flex-direction: column; gap: 8px; }
+.wifi-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.wifi-count { display: inline-flex; align-items: center; gap: 6px; margin-right: 4px; color: var(--muted); }
+.wifi-count b { color: var(--text); font-size: 15px; }
+.sig-row { display: grid; grid-template-columns: 46px minmax(0, 1fr) 110px 62px; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--border); --q: var(--muted); }
+.sig-row.excellent { --q: #34d399; } .sig-row.good { --q: #a3e635; } .sig-row.fair { --q: #fbbf24; } .sig-row.poor { --q: #f87171; }
+.sig-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--q); font-weight: 700; }
+.sig-main { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.sig-main b, .sig-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sig-meter { height: 6px; border-radius: 4px; background: var(--surface3); overflow: hidden; }
+.sig-meter span { display: block; height: 100%; border-radius: 4px; background: var(--q); box-shadow: 0 0 8px -1px var(--q); }
+.sig-dbm { text-align: right; font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--q); font-weight: 600; }
+.badge.sig-badge.excellent { color: #34d399; } .badge.sig-badge.good { color: #a3e635; } .badge.sig-badge.fair { color: #fbbf24; } .badge.sig-badge.poor { color: #f87171; }
+.radios { display: flex; flex-wrap: wrap; gap: 6px; }
+.radio { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 9px; border: 1px solid var(--border); font-size: 12.5px; }
+.radio .util { color: var(--good); } .radio .util.mid { color: var(--warn); } .radio .util.high { color: var(--err); }
+.wifi-list { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow: auto; }
+.wifi-list .sig-row { grid-template-columns: 0 minmax(0, 1fr) 110px 62px; }
+@media (max-width: 760px) {
+  .sig-row { grid-template-columns: 42px minmax(0, 1fr) 58px; }
+  .sig-meter { grid-column: 2 / span 2; grid-row: 2; }
+  .wifi-list .sig-row { grid-template-columns: 0 minmax(0, 1fr) 58px; }
+}
+.radio > *, .sig-dbm, .sig-label { white-space: nowrap; }
+@media (max-width: 760px) {
+  .sig-row { grid-template-columns: 50px minmax(0, 1fr) 72px; }
+  .wifi-list .sig-row { grid-template-columns: 0 minmax(0, 1fr) 72px; }
+  .radio { flex: 1 1 100%; justify-content: space-between; flex-wrap: wrap; row-gap: 2px; }
+}

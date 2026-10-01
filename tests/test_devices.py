@@ -266,3 +266,16 @@ def test_bulk_skips_what_a_supervisor_may_not_change(app, fake, admin):
     assert "protected" in body["skipped"][0]["reason"]
     r = _bulk(sup, eid, [("dev-sw8", 8)], native_network_id="net-cam", tagged_mode="block_all")
     assert r.status_code == 403
+
+
+def test_access_point_wifi_summary(fake, admin):
+    eid = configure_unifi(admin)
+    s = _state(admin, eid)
+    w = _dev(s, "dev-ap")["wifi"]
+    assert w["clients"] == 3 and w["bands"] == {"5": 2, "2.4": 1}
+    assert w["best"]["name"] == "phone" and w["best"]["signal"] == -48 and w["best"]["band"] == "5"
+    assert w["worst"]["name"] == "Lobby tablet" and w["worst"]["signal"] == -79 and w["worst"]["ssid"] == "IoT"
+    assert w["avg_signal"] == -63
+    r5 = next(r for r in w["radios"] if r["band"] == "5")
+    assert r5 == {"band": "5", "channel": 36, "width": 80, "utilization": 12, "tx_power": 23, "clients": 2}
+    assert _dev(s, "dev-mesh")["wifi"]["clients"] == 0 and _dev(s, "dev-sw8")["wifi"] is None

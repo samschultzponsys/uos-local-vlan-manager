@@ -428,7 +428,7 @@ def integration_snapshot(client):
             "version": d.get("firmwareVersion") or "", "serial": "", "online": d.get("state") == "ONLINE",
             "state": 1 if d.get("state") == "ONLINE" else 0, "uptime": 0, "legacy": False,
             "upgradable": False, "upgrade_to": "", "locating": False, "led_override": "default", "clients": 0,
-            "cpu": None, "mem": None, "uplink_to": None, "caps": {"tagged_vlans": False, "readonly": True},
+            "cpu": None, "mem": None, "uplink_to": None, "caps": {"tagged_vlans": False, "readonly": True}, "wifi": None,
             "port_count": len(ports), "ports": ports,
         })
     order = {"gateway": 0, "switch": 1, "ap": 2, "other": 3}
@@ -549,6 +549,50 @@ def normalize_app_devices(raw_apps):
     return out
 
 
+BAND = {"ng": "2.4", "na": "5", "6e": "6", "ad": "60"}
+
+
+def _float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _wifi_client(c):
+    signal = _int(c.get("signal"), 0) or None
+    return {"name": c.get("name") or c.get("hostname") or c.get("mac") or "?", "mac": c.get("mac") or "",
+            "ip": c.get("ip") or "", "signal": signal, "band": BAND.get(c.get("radio") or "", c.get("radio") or ""),
+            "ssid": c.get("essid") or "", "channel": _int(c.get("channel"), 0) or None,
+            "satisfaction": _int(c.get("satisfaction"), -1) if c.get("satisfaction") is not None else None,
+            "rate": round((_float(c.get("tx_rate")) or 0) / 1000) or None}
+
+
+def wifi_summary(dev, clients):
+    """What an access point's Wi-Fi looks like: clients per band, best / worst / average signal, and
+    each radio's channel, width, how busy it is and its clients."""
+    radios = []
+    stats = {r.get("radio"): r for r in dev.get("radio_table_stats") or []}
+    for r in dev.get("radio_table") or []:
+        st = stats.get(r.get("radio"), {})
+        radios.append({"band": BAND.get(r.get("radio") or "", r.get("radio") or "?"),
+                       "channel": _int(st.get("channel") or r.get("channel"), 0) or None,
+                       "width": _int(r.get("ht"), 0) or None,
+                       "utilization": _int(st.get("cu_total"), -1) if st.get("cu_total") is not None else None,
+                       "tx_power": _int(st.get("tx_power"), 0) or None,
+                       "clients": _int(st.get("num_sta"), 0)})
+    with_signal = sorted((c for c in clients if c["signal"] is not None), key=lambda c: c["signal"], reverse=True)
+    bands = {}
+    for c in clients:
+        bands[c["band"] or "?"] = bands.get(c["band"] or "?", 0) + 1
+    return {
+        "clients": len(clients), "bands": bands, "radios": radios,
+        "best": with_signal[0] if with_signal else None, "worst": with_signal[-1] if with_signal else None,
+        "avg_signal": round(sum(c["signal"] for c in with_signal) / len(with_signal)) if with_signal else None,
+        "list": with_signal[:100],
+    }
+
+
 def _is_wan(dtype, pt):
     if DEVICE_KIND.get(dtype) != "gateway":
         return False
@@ -585,6 +629,10 @@ def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_upl
             per_net[nid] = per_net.get(nid, 0) + 1
     for n in nets:
         n["clients"] = per_net.get(n["id"], 0)
+    wireless = {}   # access point MAC -> its Wi-Fi clients
+    for c in raw_clients:
+        if c.get("is_wired") is False and c.get("ap_mac"):
+            wireless.setdefault((c.get("ap_mac") or "").lower(), []).append(_wifi_client(c))
     clients = {}
     for c in raw_clients:
         if c.get("is_wired") is False or not c.get("sw_mac") or not c.get("sw_port"):
@@ -705,6 +753,7 @@ def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_upl
             "uplink_to": ({"name": peer.get("name") or peer.get("model") or "", "port": _int(up.get("uplink_remote_port"))}
                           if peer else None),
             "caps": {"tagged_vlans": model not in NATIVE_ONLY_MODELS},
+            "wifi": wifi_summary(d, wireless.get(mac, [])) if (dtype == "uap" or d.get("radio_table")) else None,
             "port_count": len(ports), "ports": ports,
         })
     order = {"gateway": 0, "switch": 1, "ap": 2, "other": 3}

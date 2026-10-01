@@ -94,7 +94,12 @@ def make_devices():
                                   "excluded_networkconf_ids": ["net-guest"]}]}
     ap = {"_id": "dev-ap", "mac": "aa:00:00:00:00:a1", "name": "Lobby AP", "model": "U7PRO", "type": "uap", "ip": "192.168.1.30", "state": 1, "version": "8.0.1",
           "uplink": {"uplink_mac": "aa:00:00:00:00:24", "uplink_remote_port": 1},
-          "port_table": [_port(1, True, 2500, media="2P5GE", uplink=True, name="Uplink")]}
+          "port_table": [_port(1, True, 2500, media="2P5GE", uplink=True, name="Uplink")],
+          "radio_table": [{"radio": "ng", "channel": 6, "ht": 20}, {"radio": "na", "channel": 36, "ht": 80},
+                          {"radio": "6e", "channel": 37, "ht": 160}],
+          "radio_table_stats": [{"radio": "ng", "channel": 6, "cu_total": 41, "num_sta": 1, "tx_power": 17},
+                                {"radio": "na", "channel": 36, "cu_total": 12, "num_sta": 2, "tx_power": 23},
+                                {"radio": "6e", "channel": 37, "cu_total": 3, "num_sta": 0, "tx_power": 23}]}
     mini = {"_id": "dev-mini", "mac": "aa:00:00:00:00:0f", "name": "Desk Flex Mini", "model": "USMINI",
             "type": "usw", "ip": "192.168.1.22", "state": 1, "version": "2.1.6", "uptime": 86400,
             "uplink": {"uplink_mac": "aa:00:00:00:00:24", "uplink_remote_port": 14, "port_idx": 1},
@@ -117,7 +122,14 @@ CLIENTS = [
      "sw_mac": "aa:00:00:00:00:24", "sw_port": 11, "network_id": "net-cam", "oui": "Ubiquiti Inc"},
     {"mac": "00:11:22:33:44:55", "hostname": "printer", "ip": "192.168.1.50", "is_wired": True,
      "sw_mac": "aa:00:00:00:00:24", "sw_port": 2, "network_id": "net-lan"},
-    {"mac": "66:11:22:33:44:55", "hostname": "phone", "ip": "10.0.40.9", "is_wired": False, "network_id": "net-guest"},
+    {"mac": "66:11:22:33:44:55", "hostname": "phone", "ip": "10.0.40.9", "is_wired": False, "network_id": "net-guest",
+     "ap_mac": "aa:00:00:00:00:a1", "signal": -48, "radio": "na", "essid": "Guest", "channel": 36, "tx_rate": 866000,
+     "satisfaction": 98},
+    {"mac": "66:11:22:33:44:56", "name": "Lobby tablet", "ip": "10.0.30.21", "is_wired": False, "network_id": "net-iot",
+     "ap_mac": "aa:00:00:00:00:a1", "signal": -79, "radio": "ng", "essid": "IoT", "channel": 6, "tx_rate": 72000,
+     "satisfaction": 61},
+    {"mac": "66:11:22:33:44:57", "hostname": "laptop", "ip": "10.0.30.22", "is_wired": False, "network_id": "net-iot",
+     "ap_mac": "aa:00:00:00:00:a1", "signal": -63, "radio": "na", "essid": "IoT", "channel": 36, "tx_rate": 433000}, 
 ]
 # what the Network app's v2 device list reports for other UniFi apps (Protect spells MACs without colons)
 APP_DEVICES = {

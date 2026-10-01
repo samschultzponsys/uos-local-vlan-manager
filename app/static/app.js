@@ -276,8 +276,47 @@ function DeviceCard({ device, collapsed, onCollapse, onManage, pv, ...rest }) {
       </div>
     </header>
     ${!collapsed && device.ports.length > 0 && html`<div class="device-body"><${Faceplate} device=${device} pv=${pv} ...${rest} /></div>`}
-    ${!collapsed && device.ports.length === 0 && html`<div class="device-body muted small">No wired ports reported${device.clients ? ` · ${plural(device.clients, "client")}` : ""}.</div>`}
+    ${!collapsed && device.wifi && html`<div class="device-body"><${WifiPanel} wifi=${device.wifi} /></div>`}
+    ${!collapsed && device.ports.length === 0 && !device.wifi && html`<div class="device-body muted small">No wired ports reported${device.clients ? ` · ${plural(device.clients, "client")}` : ""}.</div>`}
   </section>`;
+}
+
+// --- access point Wi-Fi --------------------------------------------------------------
+
+const quality = (dbm) => (dbm == null ? "" : dbm >= -60 ? "excellent" : dbm >= -67 ? "good" : dbm >= -75 ? "fair" : "poor");
+const BAND_LABEL = { "2.4": "2.4 GHz", 5: "5 GHz", 6: "6 GHz", 60: "60 GHz" };
+
+function SignalRow({ label, c }) {
+  if (!c) return null;
+  const q = quality(c.signal);
+  // -90 dBm (nothing) .. -30 dBm (right next to it)
+  const pct = Math.max(4, Math.min(100, ((c.signal + 90) / 60) * 100));
+  return html`<div class=${"sig-row " + q}>
+    <span class="sig-label">${label}</span>
+    <div class="sig-main"><b>${c.name}</b><span class="muted small">${[BAND_LABEL[c.band] || c.band, c.ssid, c.ip].filter(Boolean).join(" · ")}</span></div>
+    <div class="sig-meter" title=${`${c.signal} dBm, ${q}`}><span style=${`width:${pct}%`}></span></div>
+    <span class="sig-dbm">${c.signal} dBm</span></div>`;
+}
+
+function WifiPanel({ wifi, full }) {
+  const [all, setAll] = useState(false);
+  if (!wifi) return null;
+  return html`<div class="wifi">
+    <div class="wifi-top">
+      <span class="wifi-count"><${Icon} name="wifi" size=${15} /><b>${wifi.clients}</b> ${wifi.clients === 1 ? "client" : "clients"}</span>
+      ${Object.entries(wifi.bands).sort().map(([b, n]) => html`<span class="badge">${BAND_LABEL[b] || b} · ${n}</span>`)}
+      ${wifi.avg_signal != null && html`<span class=${"badge sig-badge " + quality(wifi.avg_signal)}>average ${wifi.avg_signal} dBm</span>`}
+    </div>
+    ${wifi.best && html`<${SignalRow} label="Best" c=${wifi.best} />`}
+    ${wifi.worst && wifi.worst !== wifi.best && wifi.list.length > 1 && html`<${SignalRow} label="Worst" c=${wifi.worst} />`}
+    ${wifi.radios.length > 0 && html`<div class="radios">${wifi.radios.map((r) => html`<div class="radio" key=${r.band}>
+      <b>${BAND_LABEL[r.band] || r.band}</b>
+      <span>${r.channel ? `ch ${r.channel}` : "—"}${r.width ? ` · ${r.width} MHz` : ""}</span>
+      ${r.utilization != null && html`<span class=${"util" + (r.utilization >= 60 ? " high" : r.utilization >= 35 ? " mid" : "")} title="How busy the channel is">${r.utilization}% busy</span>`}
+      <span class="muted">${plural(r.clients, "client")}</span></div>`)}</div>`}
+    ${(full || all) && wifi.list.length > 2 && html`<div class="wifi-list">${wifi.list.map((c) => html`<${SignalRow} key=${c.mac} label="" c=${c} />`)}</div>`}
+    ${!full && wifi.list.length > 2 && html`<button class="link-btn small" onClick=${() => setAll(!all)}>${all ? "Hide clients" : `All ${wifi.list.length} clients by signal`}</button>`}
+  </div>`;
 }
 
 // --- devices of other UniFi apps (Protect, Access, Talk...) ------------------------
@@ -732,6 +771,7 @@ function DeviceModal({ env, device, me, readonly, onClose, onChanged }) {
       ${kv("Uplink", device.uplink_to && `${device.uplink_to.name}${device.uplink_to.port ? ` · port ${device.uplink_to.port}` : ""}`)}
       ${device.kind === "switch" && kv("Tagged VLANs", device.caps.tagged_vlans ? "Filtered per port" : "Not filtered per port (native VLAN only)")}
     </div>
+    ${device.wifi && html`<h4 class="section">Wi-Fi</h4><${WifiPanel} wifi=${device.wifi} full />`}
     ${device.kind === "switch" && can("settings.manage") && !readonly && html`<p class="muted small">
       ${device.caps.tagged_vlans ? "If this model ignores tagged VLAN settings, " : "If this model can filter tagged VLANs, "}
       <button class="link-btn small" onClick=${() => setModelCaps(device, !device.caps.tagged_vlans, onChanged)}>change it for every ${device.model_name}</button>.</p>`}

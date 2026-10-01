@@ -57,6 +57,8 @@ manage only their own switches and only the VLANs you allow.
 - **Switches that can't filter tagged VLANs** (like the **USW Flex Mini**) only offer the
   native VLAN; the tagging setting, which the switch would ignore, is hidden. Admins can mark
   other models the same way, or undo it, from any port panel.
+- **Access point Wi-Fi**: clients per band, best / worst / average signal with the client's
+  name, each radio's channel, width and how busy it is, and every client sorted by signal.
 - **Protect, Access and other UniFi devices** (cameras, door hubs, readers, intercoms...),
   each with the switch port it's plugged into, a link to that port and a one-tap restart by
   power-cycling it. Ports with one show a camera or door mark.
