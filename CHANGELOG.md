@@ -5,6 +5,19 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.3 — 2026-10-01
+
+### Added
+- **Scale per screen** (Display options → Scale): make the whole app bigger or smaller,
+  70 % to 160 %, and it's remembered **for that screen resolution only**.
+  - Set 120 % on a 3440 × 1440 monitor, and a 1920 × 1080 screen you sign in on the next day
+    stays at 100 % (or its own setting).
+  - The resolution is the screen's real one (so Windows display scaling doesn't change it), and
+    a phone turned sideways counts as the same screen. A folding phone's cover and inner
+    screens are different resolutions, so each keeps its own scale.
+  - The slider shows the result live. **Back to stock (100 %)** for this screen, **Reset other
+    screens**, and *Reset to defaults* also clears this screen's scale.
+
 ## 2.2 — 2026-10-01
 
 ### Added

@@ -893,7 +893,7 @@ def init_app(app):
             return jsonify({"ok": True, "prefs": data})   # anonymous: browser keeps them
         row = get_user(u["id"])
         prefs = json.loads(row["prefs"] or "{}")
-        for k in ("devices", "vlan_colors", "theme", "compact", "hidden_vlans", "legend", "ports_view"):
+        for k in ("devices", "vlan_colors", "theme", "compact", "hidden_vlans", "legend", "ports_view", "scales"):
             if k in data:
                 prefs[k] = data[k]
         d = db.get()

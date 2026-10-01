@@ -13,13 +13,29 @@ function TipHost() {
   setTipGlobal = setTip;
   if (!tip) return null;
   const { rect, content } = tip;
+  const z = pageZoom();
   const below = rect.top < 220;
-  const style = `left:${Math.min(Math.max(rect.left + rect.width / 2, 150), innerWidth - 150)}px;` +
-    (below ? `top:${rect.bottom + 10}px` : `top:${rect.top - 10}px;transform:translate(-50%,-100%)`);
+  const style = `left:${Math.min(Math.max(rect.left + rect.width / 2, 150), innerWidth - 150) / z}px;` +
+    (below ? `top:${(rect.bottom + 10) / z}px` : `top:${(rect.top - 10) / z}px;transform:translate(-50%,-100%)`);
   return html`<div class=${"tip" + (below ? " below" : "")} style=${style}>${content}</div>`;
 }
 const showTip = (e, content) => setTipGlobal({ rect: e.currentTarget.getBoundingClientRect(), content });
 const hideTip = () => setTipGlobal(null);
+
+// --- page scale, remembered per screen resolution ------------------------------------
+
+/** This screen's physical resolution, landscape (so a phone turned sideways is the same screen).
+ *  A folding phone's cover and inner screens differ, so each keeps its own scale. */
+export function screenKey() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(screen.width * dpr), h = Math.round(screen.height * dpr);
+  return `${Math.max(w, h)}x${Math.min(w, h)}`;
+}
+export const pageZoom = () => Number(document.documentElement.style.zoom) || 1;
+export function applyZoom(scales) {
+  const z = (scales || {})[screenKey()];
+  document.documentElement.style.zoom = z && z !== 1 ? String(z) : "";
+}
 
 // --- display preferences (per person) ---------------------------------------------
 
@@ -401,14 +417,33 @@ function ColorsModal({ networks, colors, mine, onSave, onClose }) {
 
 const SHOW_OPTS = [{ value: "off", label: "Off" }, { value: "always", label: "Always" }, { value: "hover", label: canHover ? "On hover" : "On tap" }];
 
-function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, onClose }) {
+function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, onClose, scales, setScale }) {
   const screen = useScreen();
+  const here = screenKey();
+  const cur = (scales || {})[here] || 1;
+  const [draft, setDraft] = useState(cur);
+  const others = Object.entries(scales || {}).filter(([k]) => k !== here);
   const row = (label, hint, key) => html`<div class="opt-row"><div><b>${label}</b><div class="muted small">${hint}</div></div>
     <${Segmented} value=${lg[key]} options=${SHOW_OPTS} onChange=${(v) => setLg({ [key]: v })} /></div>`;
   return html`<${Modal} title="Display options" icon="sliders" onClose=${onClose} wide
-    footer=${html`<button class="btn ghost" onClick=${() => { setLg({ ...LEGEND_DEFAULTS }); setPv({ ...PORTS_DEFAULTS }); }}>Reset to defaults</button>
+    footer=${html`<button class="btn ghost" onClick=${() => { setLg({ ...LEGEND_DEFAULTS }); setPv({ ...PORTS_DEFAULTS }); setDraft(1); setScale(here, null); }}>Reset to defaults</button>
       <button class="btn primary" onClick=${onClose}>Done</button>`}>
     <p class="muted small">Just for you, on every device you sign in from. Changes show right away.</p>
+    <h4 class="section">Scale</h4>
+    <div class="scale-box">
+      <div class="scale-head"><div><b>This screen</b> <span class="badge">${here.replace("x", " × ")}</span>
+        <div class="muted small">Only screens with this resolution use it. Others stay at their own scale (stock is 100%).</div></div>
+        <b class="scale-val">${Math.round(draft * 100)}%</b></div>
+      <input type="range" min="0.7" max="1.6" step="0.05" value=${draft}
+        onInput=${(e) => { const v = Number(e.target.value); setDraft(v); document.documentElement.style.zoom = v === 1 ? "" : String(v); }}
+        onChange=${(e) => setScale(here, Number(e.target.value))} aria-label="Scale for this screen" />
+      <div class="scale-ticks"><span>70%</span><span>100%</span><span>130%</span><span>160%</span></div>
+      <div class="row">
+        <button class="btn sm" disabled=${draft === 1} onClick=${() => { setDraft(1); setScale(here, null); }}>Back to stock (100%)</button>
+        ${others.length > 0 && html`<button class="btn sm ghost" onClick=${() => setScale(null, null, true)}>Reset other screens</button>`}
+      </div>
+      ${others.length > 0 && html`<div class="muted small">Also saved: ${others.map(([k, v]) => `${k.replace("x", " × ")} at ${Math.round(v * 100)}%`).join(", ")}</div>`}
+    </div>
     <h4 class="section">Network bubbles</h4>
     ${sample && html`<div class="opt-preview"><${NetChip} n=${sample} color=${sampleColor} lg=${lg} ports=${sampleCount} example />
       <span class="muted small">${canHover ? "“On hover” parts show when you point at a bubble, and in its tooltip." : "“On tap” parts show when you tap a bubble to highlight it."}</span></div>`}
@@ -1001,6 +1036,7 @@ function App() {
     if (m.method === "none") m.prefs = lsGet("vlanmgr.prefs", {});
     setMe(m);
   }, []);
+  useEffect(() => { if (me) applyZoom((me.prefs || {}).scales); }, [me && JSON.stringify((me.prefs || {}).scales || {})]);
   const loadEnvs = useCallback(async () => {
     const r = await api("/api/envs");
     setEnvList(r);
@@ -1073,6 +1109,14 @@ function App() {
   const lg = { ...LEGEND_DEFAULTS, ...(prefs.legend || {}) };
   const pv = { ...PORTS_DEFAULTS, ...(prefs.ports_view || {}) };
   const setLg = (patch) => savePrefs({ legend: { ...lg, ...patch } });
+  const scales = prefs.scales || {};
+  // setScale(key, value) for one screen; setScale(null, null, true) keeps only this screen's
+  const setScale = (key, v, onlyHere) => {
+    if (onlyHere) { const here = screenKey(); savePrefs({ scales: scales[here] ? { [here]: scales[here] } : {} }); return; }
+    const next = { ...scales };
+    if (v === null || v === 1) delete next[key]; else next[key] = v;
+    savePrefs({ scales: next });
+  };
   const setPv = (patch) => savePrefs({ ports_view: { ...pv, ...patch } });
   const can = (c) => (me.caps || []).includes(c);
   const isAdmin = can("settings.manage");
@@ -1240,7 +1284,7 @@ function App() {
       onSave=${(macs) => { savePrefs({ devices: { ...picks, [env.id]: macs } }); setModal(null); }} />`}
     ${devOpen && html`<${DeviceModal} env=${env} device=${devOpen} me=${me} readonly=${!!st.readonly} onClose=${() => setDevModal(null)}
       onChanged=${() => load(true)} />`}
-    ${modal === "display" && html`<${DisplayModal} lg=${lg} setLg=${setLg} pv=${pv} setPv=${setPv} sample=${sample}
+    ${modal === "display" && html`<${DisplayModal} lg=${lg} setLg=${setLg} pv=${pv} setPv=${setPv} sample=${sample} scales=${scales} setScale=${setScale}
       sampleColor=${sample ? colors[sample.id] : ""} sampleCount=${sampleCount}
       onClose=${() => { setModal(null); if (lg.key_open) setLg({ key_open: false }); }} />`}
     ${modal === "colors" && html`<${ColorsModal} networks=${networks} colors=${vlanColors(networks, env ? env.vlan_colors : {}, {})} mine=${prefs.vlan_colors || {}}

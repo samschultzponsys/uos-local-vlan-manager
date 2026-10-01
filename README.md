@@ -48,7 +48,8 @@ manage only their own switches and only the VLANs you allow.
   connected clients, IP subnet) shown always, on hover / tap, or never; bubbles wrapped, in one
   row or a grid; and the ports drawn as tiles / faceplate, a compact grid or a list. Settings are saved to your account, so they follow you to
   any browser; the port view is kept per screen size (phone, tablet / folding phone, laptop /
-  monitor, ultrawide / 4K) and picked live from the window width.
+  monitor, ultrawide / 4K) and picked live from the window width. A **scale** (70 – 160 %) can be set per
+  screen resolution, so 120 % on your ultrawide doesn't follow you to a 1080p screen.
 - **Safety rails**: uplinks, links to other UniFi devices, LAG and mirror ports are
   **protected**: changing one could cut off the switch or what's behind it, so it takes the
   *Change protected ports* ability and a confirmation. WAN ports can't be changed here at
