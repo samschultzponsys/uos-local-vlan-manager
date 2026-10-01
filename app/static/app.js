@@ -43,7 +43,7 @@ export function applyZoom(scales) {
 export const LEGEND_DEFAULTS = { vlan: "always", ports: "always", clients: "hover", ip: "hover", ip_format: "subnet",
   layout: "wrap", sort: "vlan", hide_unused: false, open: true, key_open: true };
 export const PORTS_DEFAULTS = { phone: "tiles", desktop: "faceplate", hide_down: false, tag_marks: true, group: true,
-  apps: true, fx: "pulse", size: "auto" };
+  apps: true, fx: "pulse", size: "auto", overview: false, start: "all" };
 
 const TAG_TEXT = { auto: "All VLANs tagged", block_all: "Untagged only", custom: "Some VLANs tagged" };
 const ROLE = {
@@ -271,7 +271,7 @@ function DeviceCard({ device, collapsed, onCollapse, onManage, pv, ...rest }) {
       <div class="device-stats">
         ${device.ports.length > 0 && html`<span class="stat" title="Ports with link"><${Icon} name="link" size=${13} />${up}/${device.ports.length}</span>`}
         ${poe > 0 && html`<span class="stat poe"><${Icon} name="bolt" size=${13} fill />${poe.toFixed(1)} W</span>`}
-        <button class="icon-btn sm" title="Device details" onClick=${(e) => { e.stopPropagation(); onManage(device); }}><${Icon} name="sliders" size=${15} /></button>
+        ${onManage && html`<button class="icon-btn sm" title="Device details" onClick=${(e) => { e.stopPropagation(); onManage(device); }}><${Icon} name="sliders" size=${15} /></button>`}
         <span class="chev" style=${collapsed ? "transform:rotate(-90deg)" : ""}><${Icon} name="chevron" /></span>
       </div>
     </header>
@@ -321,7 +321,7 @@ function WifiPanel({ wifi, full }) {
 
 // --- devices of other UniFi apps (Protect, Access, Talk...) ------------------------
 
-function AppDevices({ apps, devices, me, env, onOpenPort, collapsed, onCollapse, onChanged }) {
+function AppDevices({ apps, devices, me, env, onOpenPort, collapsed, onCollapse, onChanged, readOnly }) {
   const can = (c) => (me.caps || []).includes(c);
   const byApp = {};
   for (const a of apps) (byApp[a.app] = byApp[a.app] || []).push(a);
@@ -338,7 +338,7 @@ function AppDevices({ apps, devices, me, env, onOpenPort, collapsed, onCollapse,
         <div class="app-main"><b>${a.name}</b><span class="muted small">${a.model}${a.ip ? ` · ${a.ip}` : ""}</span></div>
         ${port ? html`<button class="link-btn small" onClick=${() => onOpenPort(sw.id, port.idx)}>${sw.name} · port ${port.idx}</button>`
           : html`<span class="muted small">${a.switch_name ? `${a.switch_name} · port ${a.sw_port}` : "port unknown"}</span>`}
-        ${cycle && html`<button class="btn sm ghost" title="Turn PoE off and on to restart it" onClick=${() => powerCycle(env, sw, port, onChanged)}><${Icon} name="power" size=${14} />Restart</button>`}
+        ${cycle && !readOnly && html`<button class="btn sm ghost" title="Turn PoE off and on to restart it" onClick=${() => powerCycle(env, sw, port, onChanged)}><${Icon} name="power" size=${14} />Restart</button>`}
       </div>`;
     })}</div>`}
   </section>`);
@@ -355,7 +355,7 @@ function useNetStats(networks, devices) {
 }
 
 /** One network bubble. `lg` decides which parts show always, on hover (or when tapped) or never. */
-export function NetChip({ n, color, lg, ports, on, faded, onClick, example }) {
+export function NetChip({ n, color, lg, ports, on, faded, onClick, example, still }) {
   const show = (part, val) => val !== null && val !== undefined && val !== "" && (lg[part] === "always" || (lg[part] === "hover" && on));
   const ip = n.subnet ? ipText(n.subnet, lg.ip_format) : n.purpose === "vlan-only" ? "no subnet" : "";
   const tip = () => html`<div class="tip-title">${n.name}</div>
@@ -368,7 +368,8 @@ export function NetChip({ n, color, lg, ports, on, faded, onClick, example }) {
     ${show("ports", ports) && html`<span class="chip-meta" data-part="ports" title="Ports on this network"><${Icon} name="grid" size=${11} />${ports}</span>`}
     ${show("clients", n.clients) && html`<span class="chip-meta" data-part="clients" title="Connected clients"><${Icon} name="plug" size=${11} />${n.clients}</span>`}
     ${show("ip", ip) && html`<span class="chip-ip" data-part="ip">${ip}</span>`}`;
-  if (example) return html`<span class="chip on example" style=${`--c:${color}`}>${parts}</span>`;
+  if (example || still) return html`<span class=${"chip example" + (still ? "" : " on")} style=${`--c:${color}`}
+    onMouseEnter=${still && canHover ? (e) => showTip(e, tip()) : undefined} onMouseLeave=${still && canHover ? hideTip : undefined}>${parts}</span>`;
   return html`<button class=${"chip" + (on ? " on" : "") + (faded ? " faded" : "")} style=${`--c:${color}`} onClick=${onClick}
     onMouseEnter=${canHover ? (e) => showTip(e, tip()) : undefined} onMouseLeave=${canHover ? hideTip : undefined}
     title=${canHover ? undefined : "Highlight ports carrying this network"}>${parts}</button>`;
@@ -517,6 +518,13 @@ function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, 
     <${Toggle} checked=${pv.hide_down} onChange=${(v) => setPv({ hide_down: v })} label="Hide ports without link" hint="In the Compact and List views." />
     <${Toggle} checked=${pv.tag_marks} onChange=${(v) => setPv({ tag_marks: v })} label="Mark ports that carry tagged VLANs"
       hint="Ordinary ports set to Allow All or Custom. Uplinks and links to UniFi devices always show their own mark." />
+
+    <h4 class="section">All devices page</h4>
+    <${Toggle} checked=${pv.overview} onChange=${(v) => setPv({ overview: v, start: v ? "all" : pv.start })} label="Show the All devices page"
+      hint="Every environment on one long page, view only. When it's on, it's where you start." />
+    ${pv.overview && html`<div class="opt-row"><div><b>Start on</b></div>
+      <${Segmented} value=${pv.start} onChange=${(v) => setPv({ start: v })}
+        options=${[{ value: "all", label: "All devices" }, { value: "env", label: "My environment" }]} /></div>`}
 
     <h4 class="section">Devices</h4>
     <${Toggle} checked=${pv.group} onChange=${(v) => setPv({ group: v })} label="Group by type" hint="Gateways, switches, access points." />
@@ -857,6 +865,57 @@ function PortTools({ env, device, port, me, onApplied }) {
   </div>`;
 }
 
+// --- All devices: every environment on one page, view only --------------------------------
+
+function Overview({ me, pv, lg, prefs, poll, onOpen }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [closed, setClosed] = useState(lsGet("vlanmgr.ovClosed", {}));
+  const load = useCallback(async (refresh) => {
+    try { setData(await api("/api/overview" + (refresh ? "?refresh=1" : ""))); setErr(null); } catch (e) { setErr(e.message); }
+  }, []);
+  useEffect(() => { load(true); }, []);
+  useInterval(() => { if (!document.hidden) load(); }, poll);
+  if (err && !data) return html`<div class="notice err"><${Icon} name="alert" /><div>${err}</div></div>`;
+  if (!data) return html`<div class="empty"><${Spinner} /></div>`;
+  const toggle = (k) => { const c = { ...closed, [k]: !closed[k] }; setClosed(c); lsSet("vlanmgr.ovClosed", c); };
+  const total = data.envs.reduce((a, x) => a + x.devices.length, 0);
+  return html`<div class="overview">
+    <div class="notice slim"><${Icon} name="eye" /><div><b>All devices</b> — ${plural(data.envs.length, "environment")}, ${plural(total, "device")}.
+      View only: ${canHover ? "click" : "tap"} a port to open it in its environment. <span class="muted">Updated ${ago(data.fetched_at)}.</span></div></div>
+    ${data.envs.map((x) => {
+      const colors = vlanColors(x.networks, x.env.vlan_colors, prefs.vlan_colors || {});
+      const groups = pv.group
+        ? KIND_ORDER.map((k) => ({ kind: k, list: x.devices.filter((d) => (d.kind || "other") === k) })).filter((g) => g.list.length)
+        : [{ kind: null, list: x.devices }];
+      const counts = {};
+      for (const d of x.devices) for (const p of d.ports) if (!p.wan) counts[p.native_network_id] = (counts[p.native_network_id] || 0) + 1;
+      return html`<section class=${"ov-env" + (closed[x.env.id] ? " closed" : "")} key=${x.env.id}>
+        <header class="ov-head">
+          <button class="ov-toggle" onClick=${() => toggle(x.env.id)} aria-expanded=${!closed[x.env.id]}>
+            <span class="chev" style=${closed[x.env.id] ? "transform:rotate(-90deg)" : ""}><${Icon} name="chevron" /></span>
+            <${Icon} name="server" size=${17} /><b>${x.env.name}</b>
+            <span class="muted small">${x.env.mode === "cloud" ? "UniFi cloud" : "UniFi"} · ${plural(x.devices.length, "device")}</span></button>
+          <span class="grow"></span>
+          <button class="btn sm ghost" onClick=${() => onOpen(x.env.id)}>Open<${Icon} name="chevron" size=${13} cls="fwd-chev" /></button>
+        </header>
+        ${!closed[x.env.id] && html`<div class="ov-body">
+          ${x.error ? html`<div class="notice err slim"><${Icon} name="alert" /><div>${x.error === "not_configured" ? "Not connected yet." : x.error}</div></div>` : html`
+          ${!x.readonly && x.networks.length > 0 && html`<div class="legend wrap ov-legend">${x.networks.map((n) => html`<${NetChip} key=${n.id} n=${n}
+            color=${colors[n.id]} lg=${lg} ports=${counts[n.id] || 0} still />`)}</div>`}
+          ${groups.map((g) => html`<div class="ov-group" key=${g.kind || "all"}>
+            ${g.kind && html`<div class="ov-kind"><${Icon} name=${KIND[g.kind].icon} size=${14} />${KIND[g.kind].label}</div>`}
+            <div class="devices">${g.list.map((d) => html`<${DeviceCard} key=${d.id} device=${d} networks=${x.networks} colors=${colors} pv=${pv}
+              highlight=${null} sel=${null} onPick=${(dev, idx) => onOpen(x.env.id, dev, idx)} onManage=${null}
+              collapsed=${false} onCollapse=${() => {}} />`)}</div></div>`)}
+          ${pv.apps && x.app_devices.length > 0 && html`<${AppDevices} apps=${x.app_devices} devices=${x.devices} me=${me} env=${x.env} readOnly
+            collapsed=${{}} onCollapse=${() => {}} onOpenPort=${(dev, idx) => onOpen(x.env.id, dev, idx)} />`}`}
+        </div>`}
+      </section>`;
+    })}
+  </div>`;
+}
+
 // --- many ports at once --------------------------------------------------------------
 
 function BulkDrawer({ env, access, items, networks, colors, me, settings, onRemove, onClose, onApplied }) {
@@ -1050,6 +1109,8 @@ function App() {
   const [collapsed, setCollapsed] = useState(lsGet("vlanmgr.collapsed", {}));
   const [closedGroups, setClosedGroups] = useState(lsGet("vlanmgr.groups", {}));
   const [devModal, setDevModal] = useState(null);   // id of the device whose details are open
+  const [view, setView] = useState(null);           // "env" or "all" (the All devices page)
+  const [pending, setPending] = useState(null);     // a port to open once its environment has loaded
   const [menu, setMenu] = useState(false);
   const [theme, setTheme] = useState(lsGet("vlanmgr.theme", "dark"));
   const [bootErr, setBootErr] = useState(null);
@@ -1114,6 +1175,15 @@ function App() {
     });
   }, []);
   useEffect(() => { lsSet("vlanmgr.env", envId); setSel(null); setHighlight(null); setSt(null); load(true); }, [envId]);
+  // the start page: All devices when that page is on and chosen, otherwise the environment
+  useEffect(() => {
+    if (!me || view) return;
+    const p = { ...PORTS_DEFAULTS, ...((me.prefs || {}).ports_view || {}) };
+    setView(p.overview && p.start === "all" ? "all" : "env");
+  }, [me]);
+  useEffect(() => {
+    if (pending && st && st.env.id === pending.env) { setSel({ d: pending.d, i: pending.i }); setPending(null); }
+  }, [st, pending]);
   // back to the app (phone unlocked, tab focused): fetch what changed in UniFi meanwhile
   useEffect(() => {
     const back = () => { if (!document.hidden) { load(true); loadEnvs().catch(() => {}); loadVersion().catch(() => {}); } };
@@ -1128,7 +1198,7 @@ function App() {
     return () => removeEventListener("keydown", k);
   }, [modal]);
   const poll = ((envList && envList.settings.poll_seconds) || 10) * 1000;
-  useInterval(() => { if (!document.hidden && !modal) load(); }, poll);
+  useInterval(() => { if (!document.hidden && !modal && view !== "all") load(); }, poll);
   useInterval(() => { if (!document.hidden) loadVersion(); }, 30 * 60 * 1000);
 
   async function savePrefs(patch) {
@@ -1158,6 +1228,12 @@ function App() {
     savePrefs({ scales: next });
   };
   const setPv = (patch) => savePrefs({ ports_view: { ...pv, ...patch } });
+  const showAll = pv.overview && view === "all";
+  const openFromOverview = (envTo, d, i) => {
+    setView("env");
+    if (d) setPending({ env: envTo, d, i });
+    if (envTo !== envId) setEnvId(envTo); else if (d) { setSel({ d, i }); setPending(null); }
+  };
   const can = (c) => (me.caps || []).includes(c);
   const isAdmin = can("settings.manage");
   const canEnvs = can("envs.manage");
@@ -1294,8 +1370,13 @@ function App() {
       </div>
     </header>
 
-    <main class=${"main" + (selPort || multiPorts.length ? " with-drawer" : "") + (selectMode ? " select-mode" : "") + (pv.fx === "solid" ? "" : " fx-pulse") + (pv.size && pv.size !== "auto" ? ` ps-${pv.size}` : "")}>
-      ${env && html`<div class="env-bar">
+    <main class=${"main" + (!showAll && (selPort || multiPorts.length) ? " with-drawer" : "") + (selectMode ? " select-mode" : "") + (pv.fx === "solid" ? "" : " fx-pulse") + (pv.size && pv.size !== "auto" ? ` ps-${pv.size}` : "")}>
+      ${pv.overview && html`<div class="view-tabs" role="tablist">
+        <button role="tab" aria-selected=${showAll} class=${showAll ? "on" : ""} onClick=${() => setView("all")}><${Icon} name="grid" size=${15} />All devices</button>
+        <button role="tab" aria-selected=${!showAll} class=${!showAll ? "on" : ""} onClick=${() => setView("env")}><${Icon} name="server" size=${15} />Environment</button>
+      </div>`}
+      ${showAll && html`<${Overview} me=${me} pv=${pv} lg=${lg} prefs=${prefs} poll=${poll} onOpen=${openFromOverview} />`}
+      ${!showAll && env && html`<div class="env-bar">
         ${envList.envs.length > 1 ? html`<label class="env-select"><${Icon} name="server" size=${16} />
           <select value=${envId || ""} onChange=${(e) => setEnvId(Number(e.target.value))} aria-label="Environment">
             ${envList.envs.map((e) => html`<option value=${e.id}>${e.name}</option>`)}</select></label>`
@@ -1306,13 +1387,13 @@ function App() {
           onClick=${() => { setSelectMode(!selectMode); if (selectMode) clearMulti(); }}>
           <${Icon} name="check" size=${14} />${selectMode ? `Selecting${multi.length ? ` · ${multi.length}` : ""}` : "Select ports"}</button>`}
       </div>`}
-      ${body}
+      ${!showAll && body}
     </main>
 
-    ${multiPorts.length > 0 && html`<${BulkDrawer} env=${env} access=${env.access} items=${multiPorts} networks=${networks} colors=${colors}
+    ${!showAll && multiPorts.length > 0 && html`<${BulkDrawer} env=${env} access=${env.access} items=${multiPorts} networks=${networks} colors=${colors}
       me=${me} settings=${settings} onRemove=${(d, i) => setMulti(multi.filter((x) => x !== keyOf(d, i)))}
       onClose=${() => { clearMulti(); setSelectMode(false); }} onApplied=${() => { clearMulti(); setSelectMode(false); load(true); }} />`}
-    ${selPort && !multiPorts.length && html`<${PortDrawer} readonly=${!!(st && st.readonly)} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
+    ${!showAll && selPort && !multiPorts.length && html`<${PortDrawer} readonly=${!!(st && st.readonly)} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
       settings=${settings} onClose=${() => setSel(null)} onApplied=${() => load(true)} />`}
 
     <button class=${"version" + (upd ? " has-update" : "")} onClick=${() => setModal("changelog")} title=${upd ? `Version ${version.update.latest} is available` : "Changelog"}>

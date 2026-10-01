@@ -67,6 +67,8 @@ manage only their own switches and only the VLANs you allow.
   rename, blink the locate light, set the status LED, restart, update firmware, name ports,
   turn PoE on / off and power-cycle a port to restart what it powers.
 - **Activity log**: who changed which port or device, from what to what, and whether UniFi confirmed it.
+- **All devices page** (optional, per person): every environment on one view-only page; a port
+  opens in its environment. It can be your start page.
 - **Many environments, scoped per user**: see [Environments & access](#environments--access).
 - **Always current**: nothing about your switches is stored here. Every view is read live
   from UniFi, so changes made in the UniFi console or cloud UI show up within seconds (see

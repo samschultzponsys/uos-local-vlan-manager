@@ -5,6 +5,19 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.5 — 2026-10-01
+
+### Added
+- **All devices page**: every environment you can open on one long page, with each
+  environment's networks, devices (grouped by type) and ports, plus Protect / Access devices.
+  - **View only**: click or tap a port and it opens in its environment, ready to change (if
+    you may). **Open** jumps to an environment.
+  - Each environment can be collapsed. The page keeps itself up to date like the rest of the
+    app, and environments are read from UniFi in parallel.
+  - Turn it on in **Display options → All devices page**. When it's on it's your **start
+    page**; *Start on* can switch that back to your environment. Tabs at the top switch between
+    **All devices** and **Environment**.
+
 ## 2.4 — 2026-10-01
 
 ### Added

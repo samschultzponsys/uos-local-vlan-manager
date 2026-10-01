@@ -229,6 +229,12 @@ def api_env_state(env_id):
     except unifi.UniFiError as e:
         out["error"] = str(e)
         return jsonify(out)
+    _shape(out, env, acc, data)
+    return jsonify(out)
+
+
+def _shape(out, env, acc, data):
+    """An environment's snapshot as this person may see it."""
     out.update(data)
     out["networks"] = [{**n, "allowed": envs.vlan_allowed(acc, n["id"]),
                         # client counts are site-wide: only for people who see every device
@@ -238,8 +244,40 @@ def api_env_state(env_id):
                                             db.get_json("model_caps", {}))
     out["app_devices"] = [a for a in data.get("app_devices") or [] if _sees(me, acc, a["mac"], a["app"])]
     if not data.get("readonly"):
-        envs.annotate_locks(env_id, out["devices"])
-    return jsonify(out)
+        envs.annotate_locks(env["id"], out["devices"])
+    return out
+
+
+@app.route("/api/overview")
+@auth.require()
+def api_overview():
+    """Every environment this person can open, devices and ports, for the read-only All devices page.
+    Environments are fetched from UniFi in parallel."""
+    from concurrent.futures import ThreadPoolExecutor
+    me = auth.current()
+    pairs = envs.accessible(me)
+    protect = db.setting_bool("protect_uplinks")
+    force = request.args.get("refresh") == "1"
+    clients = [(e, acc, envs.client(e)) for e, acc in pairs]
+
+    def fetch(item):
+        e, _, c = item
+        if not c.configured():
+            return None, "not_configured"
+        try:
+            return envs.snapshot(e["id"]).get(c, protect, force=force)[0], None
+        except unifi.UniFiError as ex:
+            return None, str(ex)
+
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(clients)))) as pool:
+        results = list(pool.map(fetch, clients))
+    out = []
+    for (e, acc, _), (data, error) in zip(clients, results):
+        item = {"env": envs.public(e), "access": acc, "networks": [], "devices": [], "app_devices": [], "error": error}
+        if data is not None:
+            _shape(item, e, acc, data)
+        out.append(item)
+    return jsonify({"envs": out, "fetched_at": int(time.time())})
 
 
 @app.route("/api/envs/<int:env_id>/config")

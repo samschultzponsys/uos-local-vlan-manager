@@ -279,3 +279,16 @@ def test_access_point_wifi_summary(fake, admin):
     r5 = next(r for r in w["radios"] if r["band"] == "5")
     assert r5 == {"band": "5", "channel": 36, "width": 80, "utilization": 12, "tx_power": 23, "clients": 2}
     assert _dev(s, "dev-mesh")["wifi"]["clients"] == 0 and _dev(s, "dev-sw8")["wifi"] is None
+
+
+def test_overview_lists_every_environment(app, fake, admin):
+    e1 = configure_unifi(admin, "Rack 7")
+    e2 = configure_unifi(admin, "Rack 8")
+    r = admin.get("/api/overview").get_json()
+    assert [x["env"]["name"] for x in r["envs"]] == ["Rack 7", "Rack 8"]
+    assert all(x["error"] is None and len(x["devices"]) == 6 for x in r["envs"])
+    uid, viewer = make_user(admin, app, "ov")
+    admin.put(f"/api/users/{uid}/access", json={"envs": [{"env_id": e2, "all_devices": False, "devices": ["aa:00:00:00:00:08"]}]})
+    r = viewer.get("/api/overview").get_json()
+    assert [x["env"]["id"] for x in r["envs"]] == [e2] and [d["id"] for d in r["envs"][0]["devices"]] == ["dev-sw8"]
+    assert e1 not in [x["env"]["id"] for x in r["envs"]]

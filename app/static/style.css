@@ -1008,3 +1008,21 @@ select option:checked { background-color: var(--accent); color: #fff; }
   .wifi-list .sig-row { grid-template-columns: 0 minmax(0, 1fr) 72px; }
   .radio { flex: 1 1 100%; justify-content: space-between; flex-wrap: wrap; row-gap: 2px; }
 }
+
+/* ---------- 2.5: All devices page ---------- */
+.view-tabs { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
+.view-tabs button { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px; border: 0; border-radius: 9px;
+  background: none; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; }
+.view-tabs button.on { background: var(--surface3); color: var(--text); box-shadow: inset 0 0 0 1px var(--border2); }
+.overview { display: flex; flex-direction: column; gap: 16px; }
+.ov-env { border: 1px solid var(--border); border-radius: 16px; background: color-mix(in srgb, var(--surface) 55%, transparent); }
+.ov-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; }
+.ov-head .grow { flex: 1; }
+.ov-toggle { display: inline-flex; align-items: center; gap: 9px; min-width: 0; border: 0; background: none; color: var(--text); font: inherit; font-size: 16px; cursor: pointer; }
+.ov-toggle .chev { color: var(--muted); }
+.ov-body { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 12px; }
+.ov-legend { margin: 0; }
+.ov-legend .chip { cursor: default; }
+.ov-kind { display: flex; align-items: center; gap: 7px; margin: 2px 2px 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.fwd-chev { transform: rotate(-90deg); margin-left: 2px; }
+@media (max-width: 760px) { .view-tabs { display: flex; } .view-tabs button { flex: 1; justify-content: center; } }
