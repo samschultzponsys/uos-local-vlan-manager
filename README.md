@@ -44,6 +44,10 @@ manage only their own switches and only the VLANs you allow.
   of them, with one confirmation for protected / locked / profile ports.
 - **VLAN colors**: every network has a color. Admins set the defaults and each user can pick
   their own. Tap a network in the legend to highlight every port that carries it.
+- **Setup wizard** on first sign-in (and from the menu → *Set up my view*): which device
+  types to show, ports on your main monitor and your phone (folding phones included) with live
+  examples, scale, network bubbles, colors (optionally **matched across environments by VLAN
+  number or name**) and your start page. Every step can keep the defaults.
 - **Display options, per person**: each part of a network bubble (VLAN number, ports on it,
   connected clients, IP subnet) shown always, on hover / tap, or never; bubbles wrapped, in one
   row or a grid; and the ports drawn as tiles / faceplate, a compact grid or a list. Settings are saved to your account, so they follow you to

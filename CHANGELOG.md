@@ -5,6 +5,35 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.7 — 2026-10-01
+
+### Added
+- **Setup wizard.** It opens once for everyone after this update (after *What's new*), never
+  for someone still waiting for setup, and again any time from the menu → **Set up my view**.
+  Every step has **Keep the defaults**, and the first has **Skip, keep stock**.
+  1. **What to show**: gateways, switches, access points, other network devices, and Protect /
+     Access / other UniFi apps, offering only the ones your role allows.
+  2. **Your main computer screen**: pick its resolution (this screen is suggested) and see the
+     ports as **Faceplate**, **Compact** or **List** on a live example, plus a scale for that
+     resolution.
+  3. **Your phone**: phone, large phone or **folding phone**, and for a folding phone whether
+     you mostly use the **cover** or the **inner** screen (the inner one gets the tablet
+     layout), with examples of Tiles, Compact and List.
+  4. **Network bubbles**: VLAN number, ports, clients and IP, each off / always / on hover or tap.
+  5. **Colors**: pick a color per network, and, with more than one environment, whether to
+     **match colors across environments by VLAN number or by name**.
+  6. **Last touches**: pulse or solid ports, the All devices page and your start page.
+- **Matching colors across environments** (also in **My VLAN colors**): *Separate* (as
+  before), *By VLAN* or *By name*. With matching on, a color you pick applies to that VLAN
+  number / name everywhere, and the automatic colors match too. Environments stay completely
+  separate by default.
+- When you haven't picked devices, only the device types you chose in the wizard show.
+
+### Fixed
+- The **Compact** port view was squeezed into a narrow column on larger screens.
+- Changelog text in *italics*, and **bold** that wraps onto the next line, showed raw
+  asterisks in *What's new*.
+
 ## 2.6 — 2026-10-01
 
 ### Added

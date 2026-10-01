@@ -1,9 +1,10 @@
 import { render, useState, useEffect, useMemo, useCallback, useErrorBoundary } from "./vendor/preact-htm.module.js";
 import {
   html, api, Icon, Modal, Segmented, Toggle, Toasts, toast, Spinner, useInterval, Logo, markdown,
-  vlanColors, readable, glyphHalo, speedLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
+  vlanColors, colorsFor, colorKey, readable, glyphHalo, speedLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
 } from "./ui.js";
 import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
+import { SetupWizard } from "./wizard.js";
 
 // --- tooltip ------------------------------------------------------------------
 
@@ -43,7 +44,7 @@ export function applyZoom(scales) {
 export const LEGEND_DEFAULTS = { vlan: "always", ports: "always", clients: "hover", ip: "hover", ip_format: "subnet",
   layout: "wrap", sort: "vlan", hide_unused: false, open: true, key_open: true };
 export const PORTS_DEFAULTS = { phone: "tiles", desktop: "faceplate", hide_down: false, tag_marks: true, group: true,
-  apps: true, fx: "pulse", size: "auto", overview: false, start: "all" };
+  apps: true, fx: "pulse", size: "auto", overview: false, start: "all", kinds: {}, app_kinds: {} };
 
 const TAG_TEXT = { auto: "All VLANs tagged", block_all: "Untagged only", custom: "Some VLANs tagged" };
 const ROLE = {
@@ -215,9 +216,11 @@ export function viewFor(pv, screen) {
 
 function chunk(list, n) { const out = []; for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n)); return out; }
 
-function Faceplate({ device, pv, ...rest }) {
-  const mobile = useMobile();
-  const view = viewFor(pv, useScreen());
+function Faceplate({ device, pv, forceView, forceMobile, ...rest }) {
+  const isMobile = useMobile();
+  const screenNow = useScreen();
+  const mobile = forceMobile !== undefined ? forceMobile : isMobile;
+  const view = forceView || viewFor(pv, screenNow);
   const marked = (p) => !!(rest.multi && rest.multi.has(`${device.id}|${p.idx}`));
   const sel = (p) => (rest.sel && rest.sel.d === device.id && rest.sel.i === p.idx) || marked(p);
   const tile = (p, mini) => html`<${PortTile} key=${p.idx} port=${p} device=${device} selected=${sel(p)} marked=${marked(p)} pv=${pv} mini=${mini} ...${rest} />`;
@@ -438,17 +441,32 @@ function KeyBox({ open, onToggle, sample, sampleColor, sampleCount, lg, onDispla
   </section>`;
 }
 
-function ColorsModal({ networks, colors, mine, onSave, onClose }) {
-  const [val, setVal] = useState({ ...mine });
+export const SYNC_LABEL = { off: "Each environment separately", vlan: "Same VLAN number, same color", name: "Same network name, same color" };
+
+function ColorsModal({ networks, prefs, envColors, onSave, onClose }) {
+  const [mode, setMode] = useState(prefs.color_sync || "off");
+  const [mine, setMine] = useState({ ...(prefs.vlan_colors || {}) });
+  const [shared, setShared] = useState({ ...(prefs.shared_colors || {}) });
+  const p = { ...prefs, color_sync: mode, vlan_colors: mine, shared_colors: shared };
+  const auto = vlanColors(networks, envColors || {}, {}, mode !== "off" ? mode : null);
+  const colors = colorsFor(networks, envColors, p);
+  const own = (n) => { const k = colorKey(n, mode !== "off" ? mode : null); return k ? shared[k] : mine[n.id]; };
+  const set = (n, v) => {
+    const k = colorKey(n, mode !== "off" ? mode : null);
+    if (k) { const x = { ...shared }; if (v) x[k] = v; else delete x[k]; setShared(x); } else { const x = { ...mine }; if (v) x[n.id] = v; else delete x[n.id]; setMine(x); }
+  };
   return html`<${Modal} title="My VLAN colors" icon="palette" onClose=${onClose}
-    footer=${html`<button class="btn ghost" onClick=${() => setVal({})}>Reset all</button>
-      <button class="btn primary" onClick=${() => onSave(val)}>Save</button>`}>
+    footer=${html`<button class="btn ghost" onClick=${() => { if (mode === "off") setMine({}); else setShared({}); }}>Reset all</button>
+      <button class="btn primary" onClick=${() => onSave({ color_sync: mode, vlan_colors: mine, shared_colors: shared })}>Save</button>`}>
     <p class="muted">Pick a color per network. Ports take the color of their native VLAN. These colors are yours; an admin sets the defaults for everyone.</p>
+    <div class="opt-row"><div><b>Across environments</b><div class="muted small">${mode === "off" ? "Colors here apply to this environment only."
+      : mode === "vlan" ? "A color applies to every network with that VLAN number, in every environment." : "A color applies to every network with that name, in every environment."}</div></div>
+      <${Segmented} value=${mode} onChange=${setMode} options=${[{ value: "off", label: "Separate" }, { value: "vlan", label: "By VLAN" }, { value: "name", label: "By name" }]} /></div>
     <div class="color-list">
       ${networks.map((n) => html`<label class="color-row" key=${n.id}>
-        <input type="color" value=${val[n.id] || colors[n.id]} onInput=${(e) => setVal({ ...val, [n.id]: e.target.value })} />
+        <input type="color" value=${colors[n.id]} onInput=${(e) => set(n, e.target.value)} />
         <span class="color-name">${n.name}</span><span class="chip-vlan">VLAN ${n.vlan}</span>
-        ${val[n.id] && html`<button class="link-btn" onClick=${(e) => { e.preventDefault(); const v = { ...val }; delete v[n.id]; setVal(v); }}>default</button>`}
+        ${own(n) && html`<button class="link-btn" title=${`Back to ${auto[n.id]}`} onClick=${(e) => { e.preventDefault(); set(n, null); }}>default</button>`}
       </label>`)}
     </div></${Modal}>`;
 }
@@ -884,7 +902,7 @@ function Overview({ me, pv, lg, prefs, poll, onOpen }) {
     <div class="notice slim"><${Icon} name="eye" /><div><b>All devices</b> — ${plural(data.envs.length, "environment")}, ${plural(total, "device")}.
       View only: ${canHover ? "click" : "tap"} a port to open it in its environment. <span class="muted">Updated ${ago(data.fetched_at)}.</span></div></div>
     ${data.envs.map((x) => {
-      const colors = vlanColors(x.networks, x.env.vlan_colors, prefs.vlan_colors || {});
+      const colors = colorsFor(x.networks, x.env.vlan_colors, prefs);
       const groups = pv.group
         ? KIND_ORDER.map((k) => ({ kind: k, list: x.devices.filter((d) => (d.kind || "other") === k) })).filter((g) => g.list.length)
         : [{ kind: null, list: x.devices }];
@@ -1111,6 +1129,7 @@ function App() {
   const [devModal, setDevModal] = useState(null);   // id of the device whose details are open
   const [view, setView] = useState(null);           // "env" or "all" (the All devices page)
   const [pending, setPending] = useState(null);     // a port to open once its environment has loaded
+  const [wizardLater, setWizardLater] = useState(false);   // closed the setup wizard: ask again next visit
   const [menu, setMenu] = useState(false);
   const [theme, setTheme] = useState(lsGet("vlanmgr.theme", "dark"));
   const [bootErr, setBootErr] = useState(null);
@@ -1182,6 +1201,10 @@ function App() {
     setView(p.overview && p.start === "all" ? "all" : "env");
   }, [me]);
   useEffect(() => {
+    if (!me || !envList || modal || wizardLater || me.pending || me.impersonator) return;
+    if (!(me.prefs || {}).setup_done && envList.envs.length > 0) setModal("wizard");
+  }, [me, envList, modal, wizardLater]);
+  useEffect(() => {
     if (pending && st && st.env.id === pending.env) { setSel({ d: pending.d, i: pending.i }); setPending(null); }
   }, [st, pending]);
   // back to the app (phone unlocked, tab focused): fetch what changed in UniFi meanwhile
@@ -1242,10 +1265,14 @@ function App() {
   const ready = st && env && st.env.id === env.id;
   const networks = ready ? st.networks : [];
   const devices = ready ? st.devices : [];
-  const colors = vlanColors(networks, env ? env.vlan_colors : {}, prefs.vlan_colors || {});
+  const colors = colorsFor(networks, env ? env.vlan_colors : {}, prefs);
   const picks = prefs.devices && !Array.isArray(prefs.devices) ? prefs.devices : {};
   const chosen = env && Array.isArray(picks[env.id]) ? picks[env.id] : null;
-  const shown = chosen ? chosen.map((mac) => devices.find((d) => d.mac === mac)).filter(Boolean) : devices;
+  // until someone picks devices, the device types they chose to show (all by default)
+  const shown = chosen ? chosen.map((mac) => devices.find((d) => d.mac === mac)).filter(Boolean)
+    : devices.filter((d) => (pv.kinds || {})[d.kind || "other"] !== false);
+  const appKey = (a) => (["protect", "access"].includes(String(a).toLowerCase()) ? String(a).toLowerCase() : "other");
+  const appDevices = ready ? (st.app_devices || []).filter((a) => (pv.app_kinds || {})[appKey(a.app)] !== false) : [];
   // by type (gateways, switches, access points, other), keeping the person's own order inside each
   const groups = pv.group
     ? KIND_ORDER.map((k) => ({ kind: k, list: shown.filter((d) => (d.kind || "other") === k) })).filter((g) => g.list.length)
@@ -1319,7 +1346,7 @@ function App() {
               highlight=${highlight} sel=${sel} multi=${multiSet} onPick=${pick} collapsed=${!!collapsed[d.mac]} onManage=${(x) => setDevModal(x.id)}
               onCollapse=${() => { const c = { ...collapsed, [d.mac]: !collapsed[d.mac] }; setCollapsed(c); lsSet("vlanmgr.collapsed", c); }} />`)}</div>`}
           </section>`)}
-      ${pv.apps && (st.app_devices || []).length > 0 && html`<${AppDevices} apps=${st.app_devices} devices=${devices} me=${me} env=${env}
+      ${pv.apps && appDevices.length > 0 && html`<${AppDevices} apps=${appDevices} devices=${devices} me=${me} env=${env}
         collapsed=${Object.fromEntries(Object.entries(closedGroups).filter(([k]) => k.startsWith("app:")).map(([k, v]) => [k.slice(4), v]))}
         onCollapse=${(app) => toggleGroup("app:" + app)} onOpenPort=${(d, i) => setSel({ d, i })} onChanged=${() => load(true)} />`}
       <${KeyBox} open=${lg.key_open} onToggle=${() => setLg({ key_open: !lg.key_open })} sample=${!st.readonly && sample}
@@ -1367,6 +1394,7 @@ function App() {
             ${me.id ? html`<button onClick=${() => { setMenu(false); setModal("account"); }}><${Icon} name="user" />My account</button>` : null}
             ${env && html`<button onClick=${() => { setMenu(false); setModal("colors"); }}><${Icon} name="palette" />My VLAN colors</button>`}
             <button onClick=${() => { setMenu(false); setModal("display"); }}><${Icon} name="sliders" />Display options</button>
+            ${!me.impersonator && html`<button onClick=${() => { setMenu(false); setModal("wizard"); }}><${Icon} name="sparkle" />Set up my view</button>`}
             <button onClick=${() => setTheme(theme === "dark" ? "light" : "dark")}><${Icon} name=${theme === "dark" ? "sun" : "moon"} />${theme === "dark" ? "Light" : "Dark"} theme</button>
             ${me.method !== "none" ? html`<button onClick=${async () => { const r = await api("/api/auth/logout", { method: "POST" }); location.href = r.redirect; }}><${Icon} name="logout" />Sign out</button>`
               : html`<a href="/login?manual=1"><${Icon} name="login" />Sign in</a>`}
@@ -1410,11 +1438,15 @@ function App() {
       onSave=${(macs) => { savePrefs({ devices: { ...picks, [env.id]: macs } }); setModal(null); }} />`}
     ${devOpen && html`<${DeviceModal} env=${env} device=${devOpen} me=${me} readonly=${!!st.readonly} onClose=${() => setDevModal(null)}
       onChanged=${() => load(true)} />`}
+    ${modal === "wizard" && html`<${SetupWizard} me=${me} prefs=${prefs}
+      kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS }}
+      onClose=${() => { setModal(null); setWizardLater(true); }}
+      onSave=${async (patch) => { await savePrefs(patch); setModal(null); toast("All set. Redo it any time from the menu: Set up my view"); }} />`}
     ${modal === "display" && html`<${DisplayModal} lg=${lg} setLg=${setLg} pv=${pv} setPv=${setPv} sample=${sample} scales=${scales} setScale=${setScale}
       sampleColor=${sample ? colors[sample.id] : ""} sampleCount=${sampleCount}
       onClose=${() => { setModal(null); if (lg.key_open) setLg({ key_open: false }); }} />`}
-    ${modal === "colors" && html`<${ColorsModal} networks=${networks} colors=${vlanColors(networks, env ? env.vlan_colors : {}, {})} mine=${prefs.vlan_colors || {}}
-      onClose=${() => setModal(null)} onSave=${(v) => { savePrefs({ vlan_colors: v }); setModal(null); toast("Colors saved"); }} />`}
+    ${modal === "colors" && html`<${ColorsModal} networks=${networks} prefs=${prefs} envColors=${env ? env.vlan_colors : {}}
+      onClose=${() => setModal(null)} onSave=${(patch) => { savePrefs(patch); setModal(null); toast("Colors saved"); }} />`}
     ${modal === "settings" && html`<${SettingsModal} onClose=${() => setModal(null)} onSaved=${onEnvsChanged} />`}
     ${modal === "users" && html`<${UsersModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "account" && html`<${AccountModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}

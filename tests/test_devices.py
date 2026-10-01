@@ -292,3 +292,10 @@ def test_overview_lists_every_environment(app, fake, admin):
     r = viewer.get("/api/overview").get_json()
     assert [x["env"]["id"] for x in r["envs"]] == [e2] and [d["id"] for d in r["envs"][0]["devices"]] == ["dev-sw8"]
     assert e1 not in [x["env"]["id"] for x in r["envs"]]
+
+
+def test_setup_and_color_prefs_are_saved(admin):
+    body = {"setup_done": "2.7", "color_sync": "vlan", "shared_colors": {"vlan:20": "#ff0000"}, "scales": {"3440x1440": 1.2}}
+    assert admin.put("/api/me/prefs", json=body).status_code == 200
+    prefs = admin.get("/api/me").get_json()["prefs"]
+    assert {k: prefs[k] for k in body} == body

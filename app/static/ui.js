@@ -128,16 +128,40 @@ export const PALETTE = ["#3b82f6", "#22c55e", "#f59e0b", "#ec4899", "#8b5cf6", "
   "#06b6d4", "#f97316", "#a855f7", "#10b981", "#eab308", "#6366f1", "#f43f5e", "#0ea5e9"];
 
 // network id -> color: auto palette < site defaults < this user's choices
-export function vlanColors(networks, site = {}, mine = {}) {
+/** How a network is recognised in other environments when someone matches colors across them. */
+export const colorKey = (n, mode) => (mode === "vlan" ? `vlan:${n.vlan}` : mode === "name" ? `name:${String(n.name).trim().toLowerCase()}` : null);
+const hashOf = (str) => { let h = 0; for (const ch of str) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
+
+/** Colors for these networks: automatic, then the environment's defaults, then the person's own.
+ *  With `sync` ("vlan" or "name") the automatic color comes from the VLAN number / name, so the same
+ *  network gets the same color in every environment. */
+export function vlanColors(networks, site = {}, mine = {}, sync = null) {
   const out = {};
   let i = 0;
   for (const n of networks) {
-    out[n.id] = n.is_default ? "#64748b" : PALETTE[i++ % PALETTE.length];
+    const k = colorKey(n, sync);
+    out[n.id] = n.is_default ? "#64748b" : k ? PALETTE[hashOf(k) % PALETTE.length] : PALETTE[i++ % PALETTE.length];
     if (site[n.id]) out[n.id] = site[n.id];
     if (mine[n.id]) out[n.id] = mine[n.id];
   }
   return out;
 }
+
+/** A person's own colors for these networks: per network, or shared across environments by VLAN / name. */
+export function myColors(networks, prefs) {
+  const mode = prefs.color_sync && prefs.color_sync !== "off" ? prefs.color_sync : null;
+  const shared = prefs.shared_colors || {};
+  const mine = prefs.vlan_colors || {};
+  const out = {};
+  for (const n of networks) {
+    const k = colorKey(n, mode);
+    if (k && shared[k]) out[n.id] = shared[k];
+    else if (mine[n.id]) out[n.id] = mine[n.id];
+  }
+  return out;
+}
+export const colorsFor = (networks, envColors, prefs) =>
+  vlanColors(networks, envColors || {}, myColors(networks, prefs), prefs.color_sync && prefs.color_sync !== "off" ? prefs.color_sync : null);
 
 /** Black or white text for a background color, whichever contrasts more (WCAG luminance).
  *  Port tiles are drawn a little lighter at the top, so the color is lifted 10% toward white first. */
@@ -160,31 +184,47 @@ export function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); 
 function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function inline(s) {
   return esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^\w*])\*([^*\s][^*]*?)\*(?=[^\w*]|$)/g, "$1<em>$2</em>")
     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
+/** The small Markdown the changelog uses: headings, nested bullets (wrapped lines included), bold, italic,
+ *  code and links. A bullet's wrapped lines are joined before formatting, so **bold** may span them. */
 export function markdown(src) {
   const out = [];
   let list = 0;
+  let item = null;   // raw text of the bullet being read
+  let para = null;   // raw text of an indented paragraph inside a list
+  const flush = () => {
+    if (item !== null) out.push(`<li>${inline(item)}</li>`);
+    if (para !== null) out.push(`<p class="cont">${inline(para)}</p>`);
+    item = para = null;
+  };
   for (const raw of (src || "").split("\n")) {
     const m = raw.match(/^(\s*)[-*] (.*)$/);
     if (m) {
+      flush();
       const depth = Math.floor(m[1].length / 2) + 1;
       while (list < depth) { out.push("<ul>"); list++; }
       while (list > depth) { out.push("</ul>"); list--; }
-      out.push(`<li>${inline(m[2])}</li>`);
+      item = m[2];
       continue;
     }
-    // an indented line continues the previous bullet
-    if (list && /^\s{2,}\S/.test(raw) && out.length && out[out.length - 1].endsWith("</li>")) {
-      out[out.length - 1] = out[out.length - 1].slice(0, -5) + " " + inline(raw.trim()) + "</li>";
+    if (list && /^\s{2,}\S/.test(raw)) {
+      if (item !== null) { item += " " + raw.trim(); continue; }
+      // a paragraph after a blank line belongs to the list level its indent says
+      const depth = Math.max(1, Math.floor(raw.match(/^\s*/)[0].length / 2));
+      if (para === null) while (list > depth) { out.push("</ul>"); list--; }
+      para = (para === null ? "" : para + " ") + raw.trim();
       continue;
     }
-    if (list && /^\s{2,}\S/.test(raw)) { out.push(`<p class="cont">${inline(raw.trim())}</p>`); continue; }
+    if (!raw.trim() && list) { flush(); continue; }   // a blank line inside a list ends the bullet, not the list
+    flush();
     while (list) { out.push("</ul>"); list--; }
     const h = raw.match(/^(#{3,4}) (.*)$/);
     if (h) out.push(`<h4>${inline(h[2])}</h4>`);
     else if (raw.trim()) out.push(`<p>${inline(raw.trim())}</p>`);
   }
+  flush();
   while (list) { out.push("</ul>"); list--; }
   return out.join("");
 }
