@@ -12,8 +12,23 @@ function visible(el) {
   return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
 }
 
-/** The stops for this person. `c` = { can(cap), multiEnv, hasPorts, hasDevices, appName, canRequest } */
-export function tourSteps(c) {
+// the abilities the tour talks about: a change in these is worth a short "what's new for you" tour
+export const TOUR_CAPS = ["ports.change", "requests.ports", "requests.poe", "requests.restart", "devices.manage",
+  "feedback.view", "activity.view", "users.view", "settings.manage", "envs.manage"];
+export const tourCaps = (caps) => TOUR_CAPS.filter((c) => (caps || []).includes(c));
+
+/** The stops for this person. `c` = { can(cap), multiEnv, hasPorts, hasDevices, appName, canRequest }.
+ *  With `since` (the abilities they had at their last tour), only the stops about what they've gained. */
+export function tourSteps(c, since) {
+  const all = allSteps(c);
+  if (!since) return all;
+  const fresh = all.filter((x) => x.need && x.need.some((k) => c.can(k) && !since.includes(k)));
+  if (!fresh.length) return [];
+  return [{ title: "Your access changed", body: `You can do more in ${c.appName} now. Here's a quick look at what's new for you.` },
+    ...fresh, { title: "That's what's new", body: "Take the whole tour any time from your menu." }];
+}
+
+function allSteps(c) {
   const click = hover() ? "Click" : "Tap";
   const s = [
     { title: `Welcome to ${c.appName}`, body: "A quick look around, made for what you can do here. Use the arrows or Next; Esc ends it any time." },
@@ -21,27 +36,27 @@ export function tourSteps(c) {
       body: "Each environment is one UniFi site. Switch between the ones you have access to here." },
     { target: ".legend-box", title: "Networks",
       body: `Every network has a color. ${click} one to light up every port that carries it. The slider button sets what the bubbles show.` },
-    c.hasPorts && { target: '.device [aria-label^="Port "]', title: "Ports",
+    c.hasPorts && { need: ["ports.change", "requests.ports"], target: '.device [aria-label^="Port "]', title: "Ports",
       body: c.can("ports.change")
         ? `${click} a port to see its link, PoE and what's plugged in, and to change its VLAN and tagging.`
         : c.can("requests.ports")
           ? `${click} a port to see its link, PoE and what's plugged in. You can't change ports yourself, but you can request a change from there.`
           : `${click} a port to see its link, PoE, network and what's plugged in.` },
-    c.hasPorts && c.can("ports.change") && { target: '[data-tour="select"]', title: "Many ports at once",
+    c.hasPorts && c.can("ports.change") && { need: ["ports.change"], target: '[data-tour="select"]', title: "Many ports at once",
       body: hover() ? "Ctrl / ⌘ click ports to pick several, even on different switches, and Shift click for a range. Or use Select ports."
         : "Tap Select ports, then tap several ports to change them together." },
-    c.hasDevices && { target: '.device button[title="Device details"]', title: "Device details",
+    c.hasDevices && { need: ["devices.manage"], target: '.device button[title="Device details"]', title: "Device details",
       body: "Model, firmware, uptime, uplink and clients." + (c.can("devices.manage") ? " You can also rename it, blink its light, restart it or update its firmware." : "") },
     c.hasDevices && { target: '[data-tour="devices"]', title: "Choose devices", body: "Pick exactly which devices you see, and in what order." },
-    c.can("feedback.view") && { target: '[data-tour="feedback"]', title: "Feedback",
+    c.can("feedback.view") && { need: ["feedback.view", "requests.ports", "requests.poe", "requests.restart"], target: '[data-tour="feedback"]', title: "Feedback",
       body: "Report a bug or suggest an idea, vote for others' and see where they're at."
         + (c.canRequest ? " Change requests you send show up here too, until someone approves them." : "")
         + (c.can("ports.change") || c.can("devices.manage") ? " Requests waiting for you are counted on the tab." : "") },
-    c.can("activity.view") && { target: '[data-tour="activity"]', fallback: '[data-tour="menu"]', title: "Activity",
+    c.can("activity.view") && { need: ["activity.view"], target: '[data-tour="activity"]', fallback: '[data-tour="menu"]', title: "Activity",
       body: "Who changed what and when, by day or by person." + (c.can("ports.change") ? " Port changes can be undone from there." : "") },
-    c.can("users.view") && { target: '[data-tour="users"]', fallback: '[data-tour="menu"]', title: "People",
+    c.can("users.view") && { need: ["users.view"], target: '[data-tour="users"]', fallback: '[data-tour="menu"]', title: "People",
       body: "Add people, give them environments, roles and abilities" + (c.can("users.view_as") ? ", and view the app as them" : "") + "." },
-    (c.can("settings.manage") || c.can("envs.manage")) && { target: '[data-tour="settings"]', fallback: '[data-tour="menu"]', title: "Settings",
+    (c.can("settings.manage") || c.can("envs.manage")) && { need: ["settings.manage", "envs.manage"], target: '[data-tour="settings"]', fallback: '[data-tour="menu"]', title: "Settings",
       body: "Environments and API keys" + (c.can("settings.manage") ? ", sign-in and SSO, branding, notifications and GitHub, updates" : "") + "." },
     { target: '[data-tour="theme"]', title: "Day or night", body: "Switch the theme any time." },
     { target: '[data-tour="menu"]', title: "Your menu",

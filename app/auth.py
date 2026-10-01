@@ -953,7 +953,7 @@ def init_app(app):
         row = get_user(u["id"])
         prefs = json.loads(row["prefs"] or "{}")
         for k in ("devices", "vlan_colors", "theme", "compact", "hidden_vlans", "legend", "ports_view", "scales",
-                  "color_sync", "shared_colors", "setup_done", "tour_done"):
+                  "color_sync", "shared_colors", "setup_done", "tour_done", "tour_caps"):
             if k in data:
                 prefs[k] = data[k]
         d = db.get()

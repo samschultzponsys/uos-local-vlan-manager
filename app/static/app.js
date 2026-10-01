@@ -6,7 +6,7 @@ import {
 import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
 import { SetupWizard, wizardNeeded } from "./wizard.js";
 import { FeedbackPage } from "./feedback.js";
-import { Tour, tourSteps } from "./tour.js";
+import { Tour, tourSteps, tourCaps } from "./tour.js";
 
 // --- tooltip ------------------------------------------------------------------
 
@@ -1227,7 +1227,14 @@ function App() {
   const [devModal, setDevModal] = useState(null);   // id of the device whose details are open
   const [view, setView] = useState(null);           // "env", "all" (the All devices page) or "feedback"
   const lastPage = useRef("env");
-  const [tour, setTour] = useState(false);
+  const [tour, setTour] = useState(null);   // null, or { since: abilities at the last tour (only what's new) or null (all) }
+  const modalRef = useRef(null);
+  modalRef.current = modal;
+  // open the tour once nothing else is up (What's new, the setup wizard...) - never on top of them
+  const manualTour = useRef(false);   // "Take the tour" from the menu wins over an automatic one
+  const startTour = (t) => setTimeout(() => {
+    if (!modalRef.current && (!t.since || !manualTour.current)) setTour(t);
+  }, 450);
   // a link from a notification: /?fb=12 opens that feedback item
   const deepFb = useRef(Number(new URLSearchParams(location.search).get("fb")) || null);
   const [pending, setPending] = useState(null);     // a port to open once its environment has loaded
@@ -1313,9 +1320,16 @@ function App() {
     setView(deepFb.current && fb ? "feedback" : startValue(p, fb));
   }, [me]);
   useEffect(() => {
-    if (!me || !envList || modal || tour || me.pending || me.impersonator || me.must_change_password || me.method === "none") return;
+    if (!me || !envList || modal || tour || manualTour.current || me.pending || me.impersonator || me.must_change_password || me.method === "none") return;
     const p = me.prefs || {};
-    if (p.setup_done && !p.tour_done && envList.envs.length > 0 && st && !st.error) { setView("env"); setTimeout(() => setTour(true), 400); }
+    // the tour comes last: after What's new and after any setup still to do
+    if (!p.setup_done || wizardNeeded(p) || !envList.envs.length || !st || st.error) return;
+    if (!p.tour_done) { setView("env"); startTour({ since: null }); return; }
+    if (!Array.isArray(p.tour_caps)) { savePrefs({ tour_caps: tourCaps(me.caps) }); return; }   // toured before 3.9
+    const gained = tourCaps(me.caps).filter((c) => !p.tour_caps.includes(c));
+    const lost = p.tour_caps.filter((c) => !(me.caps || []).includes(c));
+    if (gained.length) { setView("env"); startTour({ since: p.tour_caps }); }
+    else if (lost.length) savePrefs({ tour_caps: tourCaps(me.caps) });   // less access: nothing to show, just remember
   }, [me, envList, modal, st && st.env && st.env.id]);
   useEffect(() => {
     if (!me || !envList || modal || wizardLater || me.pending || me.impersonator) return;
@@ -1524,7 +1538,12 @@ function App() {
             ${env && html`<button onClick=${() => { setMenu(false); setModal("colors"); }}><${Icon} name="palette" />My VLAN colors</button>`}
             <button onClick=${() => { setMenu(false); setModal("display"); }}><${Icon} name="sliders" />Display options</button>
             ${!me.impersonator && html`<button onClick=${() => { setMenu(false); setModal("wizard"); }}><${Icon} name="sparkle" />Set up my view</button>`}
-            <button onClick=${() => { setMenu(false); setSel(null); clearMulti(); setView("env"); setTimeout(() => setTour(true), 300); }}><${Icon} name="target" />Take the tour</button>
+            <button onClick=${async () => {
+              // fresh from the server, so the tour follows what they can do right now
+              setMenu(false); setSel(null); clearMulti(); setView("env"); manualTour.current = true;
+              try { await Promise.all([loadMe(), loadEnvs()]); } catch (e) { /* the tour still runs on what's known */ }
+              load(true); startTour({ since: null });
+            }}><${Icon} name="target" />Take the tour</button>
             <button onClick=${toggleTheme}><${Icon} name=${theme === "dark" ? "sun" : "moon"} />${theme === "dark" ? "Light" : "Dark"} theme</button>
             ${me.method !== "none" ? html`<button onClick=${async () => { const r = await api("/api/auth/logout", { method: "POST" }); location.href = r.redirect; }}><${Icon} name="logout" />Sign out</button>`
               : html`<a href="/login?manual=1"><${Icon} name="login" />Sign in</a>`}
@@ -1599,10 +1618,14 @@ function App() {
     ${modal === "envinfo" && env && html`<${EnvInfoModal} env=${env} networks=${networks} devices=${devices} onClose=${() => setModal(null)} />`}
     ${pv.tips !== false && html`<${TipsHost} ctx=${{ change: can("ports.change"), multiEnv: envList.envs.length > 1, feedback: can("feedback.submit") }} paused=${tipsPaused}
       onOff=${() => { setPv({ tips: false }); toast("No more tips. Display options can turn them back on."); }} />`}
-    ${tour && html`<${Tour} steps=${tourSteps({ can, multiEnv: envList.envs.length > 1, appName: settings.app_name,
-      hasDevices: showEnv && shown.length > 0, hasPorts: showEnv && !!(st && !st.readonly) && shown.some((d) => d.ports.length),
-      canRequest: ["requests.ports", "requests.poe", "requests.restart"].some(can) })}
-      onDone=${() => { setTour(false); if (me.id) savePrefs({ tour_done: TOUR_VERSION }); }} />`}
+    ${tour && !modal && (() => {
+      const steps = tourSteps({ can, multiEnv: envList.envs.length > 1, appName: settings.app_name,
+        hasDevices: showEnv && shown.length > 0, hasPorts: showEnv && !!(st && !st.readonly) && shown.some((d) => d.ports.length),
+        canRequest: ["requests.ports", "requests.poe", "requests.restart"].some(can) }, tour.since);
+      const done = () => { setTour(null); manualTour.current = false; if (me.id) savePrefs({ tour_done: TOUR_VERSION, tour_caps: tourCaps(me.caps) }); };
+      if (!steps.length) { setTimeout(done, 0); return null; }
+      return html`<${Tour} key=${tour.since ? "new" : "all"} steps=${steps} onDone=${done} />`;
+    })()}
     <${TipHost} /><${AskHost} /><${Toasts} />`;
 }
 

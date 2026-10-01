@@ -5,6 +5,19 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.9 — 2026-10-01
+
+### Fixed
+- The guided tour could open on top of the "A few new choices" dialog. It now always comes
+  **last**: after What's new and after any setup still to do.
+
+### Added
+- **Take the tour** (menu) first re-reads what you can do, so it follows your access as it is
+  now, even if it changed since you signed in.
+- **What's new for you**: when someone gains access the tour covers (changing ports,
+  requesting changes, device management, Activity, People, Settings...), their next visit
+  shows a short tour of just those parts. Losing access shows nothing.
+
 ## 3.8 — 2026-10-01
 
 ### Changed

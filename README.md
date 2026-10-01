@@ -98,7 +98,8 @@ manage only their own switches and only the VLANs you allow.
   follow the logo or be its own. The name shows in the top bar, the browser tab, the sign-in
   page, the setup wizard and the installed app.
 - **Guided tour** after setup (and from the menu): highlights the real screen one stop at a time,
-  only for what that person can see and do.
+  only for what that person can see and do. When their access grows, they get a short tour of
+  just what's new for them.
 - **Looks like an app** when launched from its icon (PWA), in dark or light.
 - **Changelog** in the app (click the version). It opens by itself after an update, and a
   pulsing dot means a newer release is on GitHub.
