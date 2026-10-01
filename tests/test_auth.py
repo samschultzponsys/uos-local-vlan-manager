@@ -9,7 +9,7 @@ def test_first_admin_seeded_and_password_banner(app, client):
     r = login(client, "admin", app.config["ADMIN_PASSWORD"])
     assert r.status_code == 200
     me = client.get("/api/me").get_json()
-    assert me["role"] == "admin" and me["initial_password"] is True
+    assert me["role"] == "superadmin" and me["initial_password"] is True
 
 
 def test_unauthenticated_is_redirected_to_login(client):
@@ -258,7 +258,7 @@ def test_admin_can_view_as_lower_user(app, admin):
     assert admin.get("/api/users").status_code == 403                     # sees what they see
     assert admin.put("/api/me/password", json={"password": "hijack1234"}).status_code == 403
     assert admin.post("/api/impersonate/stop", json={}).status_code == 200
-    assert admin.get("/api/me").get_json()["role"] == "admin"
+    assert admin.get("/api/me").get_json()["role"] == "superadmin"
     actions = [e["action"] for e in admin.get("/api/audit").get_json()["entries"]]
     assert "user.impersonate" in actions and "user.impersonate_stop" in actions
     # never another admin
@@ -419,3 +419,40 @@ def test_local_only_people_cannot_drop_their_password(app, admin):
     c = app.test_client()
     login(c, "loc", "temppass123")
     assert c.put("/api/me/password", json={"remove": True}).status_code == 400
+
+
+def test_super_admin_is_above_admins(app, admin):
+    import perms
+    caps = set(admin.get("/api/me").get_json()["caps"])
+    assert caps == set(perms.ALL_CAPS) and "system.manage" in caps   # every ability there is
+    uid = admin.post("/api/users", json={"username": "adm2", "password": "adm2pass12", "role": "admin",
+                                         "must_change": False}).get_json()["user"]["id"]
+    me_id = admin.get("/api/me").get_json()["id"]
+    a2 = app.test_client()
+    login(a2, "adm2", "adm2pass12")
+    mine = set(a2.get("/api/me").get_json()["caps"])
+    assert "settings.manage" in mine and "system.manage" not in mine
+    # owner-level settings are the super admin's
+    assert a2.get("/api/settings/integrations").status_code == 403
+    assert a2.put("/api/audit/retention", json={"days": 30}).status_code == 403
+    assert admin.get("/api/settings/integrations").status_code == 200
+    # admins can't touch super admins or make one
+    assert a2.put(f"/api/users/{me_id}", json={"display_name": "x"}).status_code == 404
+    v = admin.post("/api/users", json={"username": "vic9", "password": "vicpass123", "must_change": False}).get_json()["user"]["id"]
+    assert a2.put(f"/api/users/{v}", json={"role": "superadmin"}).status_code == 403
+    assert "superadmin" not in a2.get("/api/users").get_json()["assignable_roles"]
+    # super admins can, and the last one can't be removed
+    assert a2.put(f"/api/users/{me_id}", json={"password": "taken-over-1"}).status_code == 404
+    assert next(u for u in a2.get("/api/users").get_json()["users"] if u["id"] == me_id)["manageable"] is False
+    # super admins can make another; the last one can't be removed, disabled or demoted
+    assert admin.put(f"/api/users/{me_id}", json={"role": "admin"}).status_code == 400
+    assert admin.put(f"/api/users/{uid}", json={"role": "superadmin"}).status_code == 200
+    assert "system.manage" in a2.get("/api/me").get_json()["caps"]
+    assert a2.put(f"/api/users/{me_id}", json={"role": "admin"}).status_code == 200   # two of them now: fine
+    assert a2.delete(f"/api/users/{uid}", json={}).status_code == 400              # not yourself
+    assert admin.get("/api/settings/integrations").status_code == 403              # demoted to admin
+
+
+def test_super_admin_role_is_fixed(admin):
+    assert admin.put("/api/roles/superadmin", json={"name": "Boss"}).status_code == 400
+    assert admin.delete("/api/roles/superadmin", json={}).status_code == 400

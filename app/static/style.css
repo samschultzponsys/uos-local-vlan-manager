@@ -1290,3 +1290,18 @@ button.fb-status.on { box-shadow: 0 0 0 2px color-mix(in srgb, var(--st) 45%, tr
 .choose-pw .field { display: grid; gap: 6px; }
 .choose-pw-sso { display: grid; justify-items: center; gap: 2px; padding-top: 4px; }
 .grid3 .span3 { grid-column: 1 / -1; }
+
+/* --- guided tour --- */
+.tour { position: fixed; inset: 0; z-index: 2000; }
+.tour-shade { position: absolute; inset: 0; }
+.tour-dim { position: absolute; inset: 0; background: rgba(5, 8, 14, .6); }
+.tour-spot { position: fixed; border-radius: 12px; pointer-events: none; transition: all .25s ease;
+  box-shadow: 0 0 0 9999px rgba(5, 8, 14, .6), 0 0 0 2px var(--accent), 0 0 24px 4px color-mix(in srgb, var(--accent) 50%, transparent); }
+.tour-card { position: fixed; display: grid; gap: 8px; padding: 16px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border2);
+  box-shadow: var(--shadow); transition: top .25s ease, left .25s ease; }
+.tour-card h3 { margin: 0; font-size: 17px; }
+.tour-card p { margin: 0; line-height: 1.5; color: var(--text); }
+.tour-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.icon.rot90 { transform: rotate(90deg); }
+.role-badge.superadmin { color: #fde68a; background: rgba(251, 191, 36, .16); }
+[data-theme="light"] .role-badge.superadmin { color: #92400e; }

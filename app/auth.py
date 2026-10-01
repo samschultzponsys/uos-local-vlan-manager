@@ -320,9 +320,16 @@ def find_user(username):
                             (username,)).fetchone()
 
 
-def admin_count(exclude_id=None):
-    return db.get().execute("SELECT COUNT(*) FROM users WHERE role='admin' AND disabled=0 AND id!=?",
-                            (exclude_id or -1,)).fetchone()[0]
+def admin_count(exclude_id=None, role=None):
+    """Active people with a fixed role (super admin and admin, or just `role`), not counting one."""
+    roles_ = [role] if role else list(perms.FULL)
+    return db.get().execute(f"SELECT COUNT(*) FROM users WHERE role IN ({','.join('?' * len(roles_))}) AND disabled=0 AND id!=?",
+                            (*roles_, exclude_id or -1)).fetchone()[0]
+
+
+def last_super(row):
+    """Removing this person would leave no super admin."""
+    return row["role"] == perms.SUPER and admin_count(row["id"], perms.SUPER) == 0
 
 
 def free_username(wanted):
@@ -393,12 +400,12 @@ def bootstrap(app):
     seeded = d.execute("SELECT * FROM users WHERE seeded=1 ORDER BY id LIMIT 1").fetchone()
     if seeded is None and d.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         pw = new_password()
-        seeded = create_user("admin", pw, "admin", "Administrator", seeded=True)
+        seeded = create_user("admin", pw, perms.SUPER, "Administrator", seeded=True)
         db.set_setting("initial_admin_password", pw)
         _log("created the first admin user 'admin'")
     if seeded is not None and _truthy(_env("VLANMGR_RESET_ADMIN")):
         pw = new_password()
-        d.execute("UPDATE users SET password_hash=?, role='admin', disabled=0 WHERE id=?",
+        d.execute("UPDATE users SET password_hash=?, role='superadmin', disabled=0 WHERE id=?",
                   (generate_password_hash(pw), seeded["id"]))
         d.execute("DELETE FROM sessions WHERE user_id=?", (seeded["id"],))
         d.commit()
@@ -516,7 +523,7 @@ def _session_user():
     # viewing the app as someone below you (only while you still may)
     if row["acting_as"] and role == row["role"]:
         t = get_user(row["acting_as"])
-        if t is not None and not t["disabled"] and t["role"] != perms.ADMIN \
+        if t is not None and not t["disabled"] and t["role"] not in perms.FULL \
                 and perms.has(me, "users.view_as") and perms.above(me, t["role"]):
             return {"id": t["id"], "username": t["username"], "display_name": t["display_name"],
                     "role": t["role"], "method": row["method"],
@@ -620,8 +627,8 @@ def _may_manage(row):
     me = current()
     if not me:
         return False
-    if is_admin(me):
-        return True
+    if is_admin(me):   # every admin manages everyone, except that only super admins manage super admins
+        return row["id"] == me["id"] or perms.above(me, row["role"])
     return row["id"] != me["id"] and perms.above(me, row["role"])
 
 
@@ -946,7 +953,7 @@ def init_app(app):
         row = get_user(u["id"])
         prefs = json.loads(row["prefs"] or "{}")
         for k in ("devices", "vlan_colors", "theme", "compact", "hidden_vlans", "legend", "ports_view", "scales",
-                  "color_sync", "shared_colors", "setup_done"):
+                  "color_sync", "shared_colors", "setup_done", "tour_done"):
             if k in data:
                 prefs[k] = data[k]
         d = db.get()
@@ -992,7 +999,7 @@ def init_app(app):
         t = get_user(uid)
         if t is None:
             return _deny("No such user", 404)
-        if t["role"] == perms.ADMIN or t["disabled"] or not perms.above(me, t["role"]):
+        if t["role"] in perms.FULL or t["disabled"] or not perms.above(me, t["role"]):
             return _deny("You can only view as an active person below you (never an admin)", 400)
         d = db.get()
         d.execute("UPDATE sessions SET acting_as=? WHERE token_hash=?", (uid, sha(token)))
@@ -1168,7 +1175,7 @@ def init_app(app):
         env_n = {r["user_id"]: r["n"] for r in db.get().execute(
             "SELECT user_id, COUNT(*) AS n FROM user_env GROUP BY user_id")}
         rs = perms.roles()
-        return jsonify({"users": [_people_row(r, sess, env_n) for r in rows],
+        return jsonify({"users": [{**_people_row(r, sess, env_n), "manageable": _may_manage(r)} for r in rows],
                         "roles": [rs[k] for k in rs],
                         "assignable_roles": perms.assignable_roles(me),
                         "caps": perms.public_caps(),
@@ -1218,8 +1225,8 @@ def init_app(app):
                 return _deny("You don't have permission to delete people", 403)
             if uid == me["id"]:
                 return _deny("You can't delete yourself", 400)
-            if row["role"] == perms.ADMIN and admin_count(uid) == 0:
-                return _deny("That's the last admin", 400)
+            if last_super(row):
+                return _deny("That's the last super admin - make someone else super admin first", 400)
             d.execute("DELETE FROM users WHERE id=?", (uid,))
             d.commit()
             remove_avatar(uid)
@@ -1237,8 +1244,8 @@ def init_app(app):
                 return _deny("Unknown role", 400)
             if data["role"] not in perms.assignable_roles(me):
                 return _deny("You can only give roles below your own", 403)
-            if row["role"] == perms.ADMIN and admin_count(uid) == 0:
-                return _deny("That's the last admin - make someone else admin first", 400)
+            if last_super(row):
+                return _deny("That's the last super admin - make someone else super admin first", 400)
             changes["role"] = data["role"]
         for k in ("caps_grant", "caps_deny"):
             if k in data:
@@ -1252,8 +1259,8 @@ def init_app(app):
         if "disabled" in data and bool(data["disabled"]) != bool(row["disabled"]):
             if uid == me["id"]:
                 return _deny("You can't disable yourself", 400)
-            if data["disabled"] and row["role"] == perms.ADMIN and admin_count(uid) == 0:
-                return _deny("That's the last admin", 400)
+            if data["disabled"] and last_super(row):
+                return _deny("That's the last super admin", 400)
             changes["disabled"] = 1 if data["disabled"] else 0
         if "username" in data and str(data["username"] or "").strip() != row["username"]:
             new = str(data["username"] or "").strip()
@@ -1350,8 +1357,8 @@ def init_app(app):
         role = perms.roles().get(key)
         if role is None:
             return _deny("No such role", 404)
-        if key == perms.ADMIN:
-            return _deny("The Admin role always has every ability", 400)
+        if key in perms.FULL:
+            return _deny("Super admin and Admin are built in: their abilities are fixed", 400)
         d = db.get()
         if request.method == "DELETE":
             if role["builtin"]:

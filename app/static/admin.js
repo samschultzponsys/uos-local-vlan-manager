@@ -5,6 +5,9 @@ import {
 } from "./ui.js";
 
 
+/** Super admin and Admin: built in, every environment, abilities fixed */
+const isFull = (role) => role === "admin" || role === "superadmin";
+
 const APP_NAMES = { network: "Network", protect: "Protect", access: "Access", other: "other UniFi" };
 const APP_ICONS = { network: "server", protect: "camera", access: "door", other: "grid" };
 const appKey = (app) => { const a = (app || "network").toLowerCase(); return APP_NAMES[a] && a !== "other" ? a : "other"; };
@@ -21,10 +24,11 @@ const roleName = (roles, key) => ((roles || []).find((r) => r.key === key) || { 
 // Settings
 // ============================================================================
 
-export function SettingsModal({ onClose, onSaved, addEnv }) {
+export function SettingsModal({ onClose, onSaved, addEnv, me }) {
   const [tab, setTab] = useState("envs");
+  const owner = ((me && me.caps) || []).includes("system.manage");
   const tabs = [["envs", "Environments", "server"], ["auth", "Sign-in", "shield"], ["behavior", "Ports", "grid"],
-    ["brand", "Branding", "palette"], ["integrations", "Integrations", "link"], ["updates", "Updates", "sparkle"]];
+    ["brand", "Branding", "palette"], ...(owner ? [["integrations", "Integrations", "link"]] : []), ["updates", "Updates", "sparkle"]];
   return html`<${Modal} title="Settings" icon="settings" onClose=${onClose} wide>
     <nav class="tabs">${tabs.map(([k, l, i]) => html`<button class=${tab === k ? "on" : ""} onClick=${() => setTab(k)}><${Icon} name=${i} size=${15} />${l}</button>`)}</nav>
     <div class="tab-body">
@@ -669,7 +673,7 @@ export function UsersModal({ me, onClose }) {
             const { with_pw, ...body } = form;
             const r = await api("/api/users", { method: "POST", body });
             toast(`Added ${form.display_name || r.user.username}`); setForm(blank); setAdding(false);
-            if (r.user.role !== "admin" && can("users.access")) setView({ kind: "access", user: r.user }); else load();
+            if (!isFull(r.user.role) && can("users.access")) setView({ kind: "access", user: r.user }); else load();
           } catch (e) { toast(e.message, "err"); }
         }}>Create</button></div>
       </div></div>`}
@@ -677,6 +681,7 @@ export function UsersModal({ me, onClose }) {
       <thead><tr><th>User</th><th>Role</th><th>Access</th><th>Last sign-in</th><th>Status</th><th></th></tr></thead>
       <tbody>${data.users.map((u) => {
         const self = u.id === me.id;
+        const locked = u.manageable === false;   // a super admin, seen by an admin
         const extra = u.caps_grant.length + u.caps_deny.length;
         return html`<tr key=${u.id} class=${u.disabled ? "disabled" : ""}>
         <td><div class="u-cell"><${Avatar} user=${u} size=${32} />${u.avatar_locked ? html`<span class="av-lock" title="Picture locked"><${Icon} name="lock" size=${10} /></span>` : null}
@@ -684,19 +689,19 @@ export function UsersModal({ me, onClose }) {
             ${u.pending && html` <span class="badge warn" title="Signed in with SSO; sees a 'your admin hasn't set you up yet' page until you give them access, a role or abilities">waiting for setup</span>`}
             ${u.must_change_password && html` <span class="badge" title="An admin set their password; they choose their own at next sign-in">new password due</span>`}
             <div class="muted small">${u.username}${u.email ? ` · ${u.email}` : ""}${u.sso ? (u.has_password ? " · SSO + password" : " · SSO") : u.sso_allowed ? (u.has_password ? " · password, SSO ready" : " · SSO ready") : ""}</div></div></div></td>
-        <td>${!self && (data.admin || can("users.roles")) && (data.admin || data.assignable_roles.includes(u.role))
+        <td>${!self && !locked && (data.admin || can("users.roles")) && (data.admin || data.assignable_roles.includes(u.role))
             ? html`<select class="sm" value=${u.role} onChange=${(e) => update(u, { role: e.target.value }, `${u.username} is now ${roleName(data.roles, e.target.value)}`)}>
                 ${rolesByLevel.filter((r) => data.assignable_roles.includes(r.key) || r.key === u.role).map((r) => html`<option value=${r.key}>${r.name}</option>`)}</select>`
             : html`<span class=${"role-badge " + u.role}>${u.role_name}</span>`}
           ${extra > 0 && html`<div class="muted small" title="Abilities changed for this person">${u.caps_grant.length ? `+${u.caps_grant.length}` : ""}${u.caps_grant.length && u.caps_deny.length ? " " : ""}${u.caps_deny.length ? `−${u.caps_deny.length}` : ""} abilities</div>`}</td>
-        <td>${u.role === "admin" ? html`<span class="badge good">All environments</span>`
+        <td>${isFull(u.role) ? html`<span class="badge good">All environments</span>`
           : can("users.access") && !self ? html`<button class=${"btn sm " + (u.envs ? "ghost" : "primary")} onClick=${() => setView({ kind: "access", user: u })}>
               <${Icon} name="shield" size=${14} />${u.envs ? `${u.envs} environment${u.envs > 1 ? "s" : ""}` : "Give access"}</button>`
           : html`<span class="muted small">${u.envs} environment${u.envs === 1 ? "" : "s"}</span>`}</td>
         <td class="muted small">${ago(u.last_login)}${u.sessions ? html`<div>${u.sessions} active session${u.sessions > 1 ? "s" : ""}</div>` : null}</td>
-        <td>${!self && can("users.edit") ? html`<${Toggle} checked=${!u.disabled} onChange=${(on) => update(u, { disabled: !on }, on ? "Enabled" : "Disabled")} label=${u.disabled ? "Disabled" : "Active"} />` : html`<span class="muted small">${self ? "you" : u.disabled ? "disabled" : "active"}</span>`}</td>
-        <td class="actions">
-          ${!self && u.role !== "admin" && !u.disabled && !me.impersonator && can("users.view_as") && html`<button class="icon-btn sm" title=${`View as ${u.username}`} onClick=${async () => {
+        <td>${!self && !locked && can("users.edit") ? html`<${Toggle} checked=${!u.disabled} onChange=${(on) => update(u, { disabled: !on }, on ? "Enabled" : "Disabled")} label=${u.disabled ? "Disabled" : "Active"} />` : html`<span class="muted small">${self ? "you" : u.disabled ? "disabled" : "active"}</span>`}</td>
+        <td class="actions">${locked ? html`<span class="muted small" title="Only super admins manage super admins">super admin</span>` : html`
+          ${!self && !isFull(u.role) && !u.disabled && !me.impersonator && can("users.view_as") && html`<button class="icon-btn sm" title=${`View as ${u.username}`} onClick=${async () => {
             try { await api(`/api/users/${u.id}/impersonate`, { method: "POST" }); location.href = "/"; } catch (e) { toast(e.message, "err"); }
           }}><${Icon} name="eye" size=${15} /></button>`}
           ${(data.admin || (!self && (can("users.edit") || can("users.roles")))) && html`<button class="icon-btn sm" title="Edit, abilities" onClick=${() => setView({ kind: "edit", user: u })}><${Icon} name="user" size=${15} /></button>`}
@@ -706,7 +711,7 @@ export function UsersModal({ me, onClose }) {
             if (await ask({ title: `Delete ${u.username}?`, body: "Their sessions, sign-in links and access are removed too.", danger: true, confirm: "Delete" })) {
               try { await api(`/api/users/${u.id}`, { method: "DELETE" }); toast("Deleted"); load(); } catch (e) { toast(e.message, "err"); }
             }
-          }}><${Icon} name="trash" size=${15} /></button>`}
+          }}><${Icon} name="trash" size=${15} /></button>`}`}
         </td></tr>`;
       })}</tbody></table></div>`}
     ${pwFor && html`<${SetPasswordModal} user=${pwFor} onClose=${() => setPwFor(null)}
@@ -746,7 +751,7 @@ function RolesEditor({ onChanged }) {
     <div class="role-list">
     ${roles.map((r0) => {
       const r = val(r0);
-      const admin = r.key === "admin";
+      const admin = isFull(r.key);
       const dirty = !!edits[r.key];
       return html`<div class=${"role-card" + (admin ? " admin" : "")} key=${r.key}>
         <div class="role-head">
@@ -756,7 +761,7 @@ function RolesEditor({ onChanged }) {
           <span class="badge">${r0.users} ${r0.users === 1 ? "person" : "people"}</span>
           <span class="grow"></span>
           ${!r.builtin && html`<button class="btn sm ghost danger-text" onClick=${async () => {
-            const others = roles.filter((x) => x.key !== r.key && x.key !== "admin");
+            const others = roles.filter((x) => x.key !== r.key && !isFull(x.key));
             const move = prompt(`Delete ${r.name}? Its people move to another role. Type one of: ${others.map((x) => x.name).join(", ")}`, others[others.length - 1].name);
             if (!move) return;
             const target = others.find((x) => x.name.toLowerCase() === move.trim().toLowerCase());
@@ -766,7 +771,9 @@ function RolesEditor({ onChanged }) {
           }}>Delete</button>`}
           ${!admin && html`<button class="btn sm primary" disabled=${!dirty} onClick=${() => save(r0)}>Save</button>`}
         </div>
-        ${admin ? html`<p class="muted small">Every ability, always — including environments and API keys, sign-in settings and roles.</p>`
+        ${admin ? html`<p class="muted small">${r.key === "superadmin"
+            ? "Every ability, always, including any added in future versions. Only super admins can make or change super admins, and they alone manage integrations (GitHub, notifications) and how long activity is kept."
+            : "Every ability except the super admin ones — including environments and API keys, sign-in settings and roles."}</p>`
           : html`<div class="cap-grid">${groups.map((g) => html`<div class="cap-group"><div class="field-label">${g.group}</div>
             ${g.caps.map((c) => html`<label class="cap-row" title=${c.hint}><input type="checkbox" checked=${r.caps.includes(c.key)}
               onChange=${(e) => put(r.key, { caps: e.target.checked ? [...r.caps, c.key] : r.caps.filter((x) => x !== c.key) })} />
@@ -778,7 +785,7 @@ function RolesEditor({ onChanged }) {
         <${Field} label="New role name"><input value=${adding.name} placeholder="Lead tech" onInput=${(e) => setAdding({ ...adding, name: e.target.value })} /></${Field}>
         <${Field} label="Level (11 – 99)" hint="Supervisor is 50, Viewer is 10."><input type="number" min="11" max="99" value=${adding.level} onInput=${(e) => setAdding({ ...adding, level: e.target.value })} /></${Field}>
         <${Field} label="Start from"><select value=${adding.from} onChange=${(e) => setAdding({ ...adding, from: e.target.value })}>
-          ${roles.filter((x) => x.key !== "admin").map((x) => html`<option value=${x.key}>${x.name}</option>`)}</select></${Field}>
+          ${roles.filter((x) => !isFull(x.key)).map((x) => html`<option value=${x.key}>${x.name}</option>`)}</select></${Field}>
       </div>
       <div class="form-actions"><button class="btn ghost" onClick=${() => setAdding(null)}>Cancel</button><button class="btn primary" onClick=${async () => {
         const from = roles.find((x) => x.key === adding.from);
@@ -818,7 +825,7 @@ function UserEditor({ user, data, me, onSave, onCancel }) {
   const [grant, setGrant] = useState(user.caps_grant || []);
   const [deny, setDeny] = useState(user.caps_deny || []);
   const mayEdit = data.admin || data.my_caps.includes("users.edit");
-  const mayRoles = (data.admin || data.my_caps.includes("users.roles")) && user.role !== "admin" && user.id !== me.id;
+  const mayRoles = (data.admin || data.my_caps.includes("users.roles")) && !isFull(user.role) && user.id !== me.id;
   const roleCaps = ((data.roles.find((r) => r.key === user.role) || {}).caps) || [];
   const stateOf = (k) => (grant.includes(k) ? "allow" : deny.includes(k) ? "deny" : "role");
   const setState = (k, st) => {
@@ -899,7 +906,7 @@ function AccessEditor({ user, roles, onDone }) {
   const toggleIn = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
   if (!envList) return html`<${Spinner} />`;
   return html`<div class="form">
-    ${user.role === "admin" && html`<div class="notice"><${Icon} name="info" /><div>Admins always have every environment. This only matters if you change their role.</div></div>`}
+    ${isFull(user.role) && html`<div class="notice"><${Icon} name="info" /><div>${user.role === "superadmin" ? "Super admins" : "Admins"} always have every environment. This only matters if you change their role.</div></div>`}
     <p class="muted">${user.display_name || user.username} (${roleName(roles, user.role)}) sees the devices you pick${(user.caps || []).includes("ports.change") ? ", and changes ports using the networks you pick" : ""}.
       ${" "}Networks and devices come live from each console.</p>
     ${envList.length === 0 && html`<div class="empty-sm">Add an environment under Settings → Environments first.</div>`}

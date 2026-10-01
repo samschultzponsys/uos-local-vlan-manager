@@ -5,7 +5,9 @@ Every person has one role. A role is a named set of abilities with a level;
 the level decides who is "above" whom. Per person, an admin can also allow or
 deny single abilities on top of their role.
 
-    Admin (level 100)   every ability, always - not editable
+    Super admin (1000)  every ability, always, including any added later - not editable. Only super
+                        admins can make or change super admins, and the last one can't be removed.
+    Admin (level 100)   every ability except the owner-level ones (system.manage) - not editable
     Supervisor (50)     default: change ports, see environment settings, see activity
                         (PoE control and device management start admin-only)
     Viewer (10)         default: nothing beyond seeing their devices
@@ -27,6 +29,9 @@ import db
 
 ADMIN = "admin"
 ADMIN_LEVEL = 100
+SUPER = "superadmin"
+SUPER_LEVEL = 1000
+FULL = (SUPER, ADMIN)   # built-in roles whose abilities are fixed, not stored
 
 # (key, group, label, hint)
 CAPS = [
@@ -67,9 +72,19 @@ CAPS = [
 CAP_KEYS = [c[0] for c in CAPS]
 # never grantable: whoever has these could give themselves everything else
 ADMIN_CAPS = ["envs.manage", "settings.manage", "roles.manage"]
-ALL_CAPS = CAP_KEYS + ADMIN_CAPS
+# owner-level, super admins only: integration tokens (GitHub, notifications) and how long activity is kept
+SUPER_CAPS = ["system.manage"]
+ALL_CAPS = CAP_KEYS + ADMIN_CAPS + SUPER_CAPS
+
+
+def full_caps(role_key):
+    """Abilities of the fixed roles: a super admin has every ability that exists, now or later."""
+    if role_key == SUPER:
+        return set(ALL_CAPS)
+    return set(ALL_CAPS) - set(SUPER_CAPS)
 
 DEFAULT_ROLES = [
+    (SUPER, "Super admin", SUPER_LEVEL, ALL_CAPS),
     (ADMIN, "Admin", ADMIN_LEVEL, ALL_CAPS),
     ("supervisor", "Supervisor", 50, ["ports.change", "env.info", "activity.view", "apps.network",
                                       "feedback.view", "feedback.submit"]),
@@ -115,6 +130,11 @@ def migrate(conn):
             if more:
                 conn.execute("UPDATE roles SET caps=? WHERE key=?", (json.dumps(caps + more), r["key"]))
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '1')", (flag,))
+    # 3.7: someone has to be super admin - the first admin (or the longest-standing one)
+    if not conn.execute("SELECT 1 FROM users WHERE role=?", (SUPER,)).fetchone():
+        r = conn.execute("SELECT id FROM users WHERE role=? AND disabled=0 ORDER BY seeded DESC, id LIMIT 1", (ADMIN,)).fetchone()
+        if r:
+            conn.execute("UPDATE users SET role=? WHERE id=?", (SUPER, r[0]))
 
 
 def roles():
@@ -124,7 +144,7 @@ def roles():
         return cached
     out = {}
     for r in db.get().execute("SELECT * FROM roles ORDER BY level DESC, name"):
-        caps = ALL_CAPS if r["key"] == ADMIN else [c for c in _loads(r["caps"]) if c in CAP_KEYS]
+        caps = sorted(full_caps(r["key"])) if r["key"] in FULL else [c for c in _loads(r["caps"]) if c in CAP_KEYS]
         out[r["key"]] = {"key": r["key"], "name": r["name"], "level": r["level"], "caps": caps,
                          "builtin": bool(r["builtin"])}
     if _in_request():
@@ -171,8 +191,8 @@ def role_caps(role_key):
 
 def user_caps(role_key, grant=None, deny=None):
     """Abilities of someone with this role and these per-person overrides."""
-    if role_key == ADMIN:
-        return set(ALL_CAPS)
+    if role_key in FULL:
+        return full_caps(role_key)
     caps = role_caps(role_key) | {c for c in (grant or []) if c in CAP_KEYS}
     return caps - set(deny or [])
 
@@ -185,7 +205,7 @@ def caps_for(user):
     if cached is not None:
         return cached
     if user.get("method") == "none":
-        caps = role_caps(user["role"]) if user["role"] != ADMIN else set(ALL_CAPS)
+        caps = full_caps(user["role"]) if user["role"] in FULL else role_caps(user["role"])
     else:
         row = db.get().execute("SELECT role, caps_grant, caps_deny FROM users WHERE id=?", (user["id"],)).fetchone()
         if row is None:
@@ -207,17 +227,25 @@ def is_admin(user):
     return bool(user) and has(user, "settings.manage")
 
 
+def is_super(user):
+    return bool(user) and has(user, "system.manage")
+
+
 def above(user, target_role):
-    """May `user` manage someone with `target_role`? Admins manage everyone."""
-    if is_admin(user):
+    """May `user` manage someone with `target_role`? Super admins manage everyone, admins everyone but super admins."""
+    if is_super(user):
         return True
+    if is_admin(user):
+        return target_role != SUPER
     return level(target_role) < level(user["role"])
 
 
 def assignable_roles(user):
     """Roles `user` may give to people."""
-    if is_admin(user):
+    if is_super(user):
         return list(roles())
+    if is_admin(user):
+        return [k for k in roles() if k != SUPER]
     return [k for k in roles() if level(k) < level(user["role"])]
 
 

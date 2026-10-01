@@ -5,6 +5,28 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.7 — 2026-10-01
+
+### Added
+- **Guided tour**: after setup, a short walkthrough highlights the real screen one thing at a
+  time (environments, networks, ports, picking many ports, device details, Feedback, Activity,
+  People, Settings, theme, your menu) and says what each does. **It only shows what that person
+  can see and do**, and the wording follows their abilities (e.g. "request a change" for
+  someone who can only ask). Everyone gets it once, existing people and admins included;
+  **Take the tour** in the menu replays it. Arrows / Enter step through, Esc ends it.
+- **Super admin**, a built-in role above Admin:
+  - **every ability, always, including any added in later versions**; it can't be edited or
+    deleted;
+  - only super admins can make someone super admin or change, disable or delete one, and the
+    last super admin can't be removed or demoted;
+  - owner-level settings are theirs: **Settings → Integrations** (the GitHub token, issue sync,
+    notification secrets) and **how long activity is kept**.
+  - On upgrade, the first admin (or the longest-standing active admin) becomes super admin. A
+    fresh install's first account is a super admin.
+
+### Changed
+- Admins keep every other ability, but can no longer see or change super admins' accounts.
+
 ## 3.6 — 2026-10-01
 
 ### Changed

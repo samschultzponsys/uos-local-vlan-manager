@@ -6,6 +6,7 @@ import {
 import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
 import { SetupWizard, wizardNeeded } from "./wizard.js";
 import { FeedbackPage } from "./feedback.js";
+import { Tour, tourSteps } from "./tour.js";
 
 // --- tooltip ------------------------------------------------------------------
 
@@ -1226,6 +1227,7 @@ function App() {
   const [devModal, setDevModal] = useState(null);   // id of the device whose details are open
   const [view, setView] = useState(null);           // "env", "all" (the All devices page) or "feedback"
   const lastPage = useRef("env");
+  const [tour, setTour] = useState(false);
   // a link from a notification: /?fb=12 opens that feedback item
   const deepFb = useRef(Number(new URLSearchParams(location.search).get("fb")) || null);
   const [pending, setPending] = useState(null);     // a port to open once its environment has loaded
@@ -1310,6 +1312,11 @@ function App() {
     const fb = (me.caps || []).includes("feedback.view");
     setView(deepFb.current && fb ? "feedback" : startValue(p, fb));
   }, [me]);
+  useEffect(() => {
+    if (!me || !envList || modal || tour || me.pending || me.impersonator || me.must_change_password || me.method === "none") return;
+    const p = me.prefs || {};
+    if (p.setup_done && !p.tour_done && envList.envs.length > 0 && st && !st.error) { setView("env"); setTimeout(() => setTour(true), 400); }
+  }, [me, envList, modal, st && st.env && st.env.id]);
   useEffect(() => {
     if (!me || !envList || modal || wizardLater || me.pending || me.impersonator) return;
     const need = wizardNeeded(me.prefs);
@@ -1425,7 +1432,7 @@ function App() {
     setAnchor({ d, i });
   };
   const multiSet = new Set(multi);
-  tipsPaused.current = !!(modal || sel || multi.length || showFb);
+  tipsPaused.current = !!(modal || sel || multi.length || showFb || tour);
   const multiPorts = multi.map((k) => { const [d, i] = k.split("|"); const dev = devices.find((x) => x.id === d);
     const port = dev && dev.ports.find((p) => p.idx === Number(i)); return port ? { dev, port } : null; }).filter(Boolean);
   const clearMulti = () => { setMulti([]); setAnchor(null); };
@@ -1493,16 +1500,16 @@ function App() {
       <div class="top-actions">
         <button class="btn ghost" disabled=${!env} onClick=${() => load(true)} title="Refresh from UniFi">
           <${Icon} name="refresh" cls=${loading ? "spin" : ""} /><span class="hide-sm">Refresh</span></button>
-        <button class="btn ghost" onClick=${() => setModal("picker")} disabled=${!devices.length}><${Icon} name="grid" /><span class="hide-sm">Devices</span></button>
-        ${can("activity.view") && html`<button class="btn ghost hide-sm" onClick=${() => setModal("audit")}><${Icon} name="list" /><span class="hide-sm">Activity</span></button>`}
-        ${can("users.view") && html`<button class="btn ghost hide-sm" onClick=${() => setModal("users")}><${Icon} name="users" /><span class="hide-sm">Users</span>
+        <button class="btn ghost" data-tour="devices" onClick=${() => setModal("picker")} disabled=${!devices.length}><${Icon} name="grid" /><span class="hide-sm">Devices</span></button>
+        ${can("activity.view") && html`<button class="btn ghost hide-sm" data-tour="activity" onClick=${() => setModal("audit")}><${Icon} name="list" /><span class="hide-sm">Activity</span></button>`}
+        ${can("users.view") && html`<button class="btn ghost hide-sm" data-tour="users" onClick=${() => setModal("users")}><${Icon} name="users" /><span class="hide-sm">Users</span>
           ${me.waiting > 0 && html`<span class="count-dot">${me.waiting}</span>`}</button>`}
-        ${(isAdmin || canEnvs) && html`<button class="icon-btn hide-sm" onClick=${() => setModal("settings")} title="Settings"><${Icon} name="settings" /></button>`}
-        <button class="icon-btn theme-btn" onClick=${toggleTheme}
+        ${(isAdmin || canEnvs) && html`<button class="icon-btn hide-sm" data-tour="settings" onClick=${() => setModal("settings")} title="Settings"><${Icon} name="settings" /></button>`}
+        <button class="icon-btn theme-btn" data-tour="theme" onClick=${toggleTheme}
           title=${theme === "dark" ? "Switch to light" : "Switch to dark"} aria-label="Toggle day / night">
           <${Icon} name=${theme === "dark" ? "sun" : "moon"} /></button>
         <div class="menu-wrap">
-          <button class="user-btn" onClick=${() => setMenu(!menu)}>
+          <button class="user-btn" data-tour="menu" onClick=${() => setMenu(!menu)}>
             <${Avatar} user=${me} />
             <span class="hide-sm user-name">${me.display_name || me.username}</span>
             <span class=${"role-badge " + me.role}>${me.role_name}</span></button>
@@ -1517,6 +1524,7 @@ function App() {
             ${env && html`<button onClick=${() => { setMenu(false); setModal("colors"); }}><${Icon} name="palette" />My VLAN colors</button>`}
             <button onClick=${() => { setMenu(false); setModal("display"); }}><${Icon} name="sliders" />Display options</button>
             ${!me.impersonator && html`<button onClick=${() => { setMenu(false); setModal("wizard"); }}><${Icon} name="sparkle" />Set up my view</button>`}
+            <button onClick=${() => { setMenu(false); setSel(null); clearMulti(); setView("env"); setTimeout(() => setTour(true), 300); }}><${Icon} name="target" />Take the tour</button>
             <button onClick=${toggleTheme}><${Icon} name=${theme === "dark" ? "sun" : "moon"} />${theme === "dark" ? "Light" : "Dark"} theme</button>
             ${me.method !== "none" ? html`<button onClick=${async () => { const r = await api("/api/auth/logout", { method: "POST" }); location.href = r.redirect; }}><${Icon} name="logout" />Sign out</button>`
               : html`<a href="/login?manual=1"><${Icon} name="login" />Sign in</a>`}
@@ -1529,7 +1537,7 @@ function App() {
       ${(pv.overview || canFb) && html`<div class="view-tabs" role="tablist">
         ${pv.overview && html`<button role="tab" aria-selected=${showAll} class=${showAll ? "on" : ""} onClick=${() => setView("all")}><${Icon} name="grid" size=${15} />All devices</button>`}
         <button role="tab" aria-selected=${showEnv} class=${showEnv ? "on" : ""} onClick=${() => setView("env")}><${Icon} name="server" size=${15} />Environment</button>
-        ${canFb && html`<button role="tab" aria-selected=${showFb} class=${showFb ? "on" : ""} onClick=${() => setView("feedback")}><${Icon} name="comment" size=${15} />Feedback
+        ${canFb && html`<button role="tab" data-tour="feedback" aria-selected=${showFb} class=${showFb ? "on" : ""} onClick=${() => setView("feedback")}><${Icon} name="comment" size=${15} />Feedback
           ${(me.feedback_unseen || 0) + (me.requests_waiting || 0) > 0 && html`<span class="count-dot"
             title=${[me.requests_waiting ? `${me.requests_waiting} request${me.requests_waiting === 1 ? "" : "s"} waiting for you` : "",
               me.feedback_unseen ? `news on ${me.feedback_unseen} item${me.feedback_unseen === 1 ? "" : "s"} you follow` : ""].filter(Boolean).join(", ")}>
@@ -1541,7 +1549,7 @@ function App() {
         info=${{ version: version ? version.version : "", page: lastPage.current === "all" ? "All devices" : "Environment",
           env: env ? env.name : "", view: viewFor(pv, screenOf(innerWidth)) }} />`}
       ${showEnv && env && html`<div class="env-bar">
-        ${envList.envs.length > 1 ? html`<label class="env-select"><${Icon} name="server" size=${16} />
+        ${envList.envs.length > 1 ? html`<label class="env-select" data-tour="env"><${Icon} name="server" size=${16} />
           <select value=${envId || ""} aria-label="Environment"
             onChange=${(e) => { if (e.target.value === "__add") { e.target.value = String(envId); setModal("settings-add"); } else setEnvId(Number(e.target.value)); }}>
             ${envList.envs.map((e) => html`<option value=${e.id}>${e.name}</option>`)}
@@ -1553,7 +1561,7 @@ function App() {
               </select></label>`
           : html`<span class="env-select single"><${Icon} name="server" size=${16} /><b>${env.name}</b></span>`}
         ${ready && st.fetched_at ? html`<span class="muted small env-updated">Updated ${ago(st.fetched_at)}</span>` : null}
-        ${ready && !st.readonly && can("ports.change") && devices.length > 0 && html`<button class=${"btn sm select-btn" + (selectMode ? " primary" : " ghost")}
+        ${ready && !st.readonly && can("ports.change") && devices.length > 0 && html`<button data-tour="select" class=${"btn sm select-btn" + (selectMode ? " primary" : " ghost")}
           title=${canHover ? "Or Ctrl / ⌘ click ports to pick several, and Shift click for a range" : "Tap ports to pick several"}
           onClick=${() => { setSelectMode(!selectMode); if (selectMode) clearMulti(); }}>
           <${Icon} name="check" size=${14} />${selectMode ? `Selecting${multi.length ? ` · ${multi.length}` : ""}` : "Select ports"}</button>`}
@@ -1584,17 +1592,22 @@ function App() {
       onClose=${() => { setModal(null); if (lg.key_open) setLg({ key_open: false }); }} />`}
     ${modal === "colors" && html`<${ColorsModal} networks=${networks} prefs=${prefs} envColors=${env ? env.vlan_colors : {}}
       onClose=${() => setModal(null)} onSave=${(patch) => { savePrefs(patch); setModal(null); toast("Colors saved"); }} />`}
-    ${(modal === "settings" || modal === "settings-add") && html`<${SettingsModal} addEnv=${modal === "settings-add"} onClose=${() => setModal(null)} onSaved=${onEnvsChanged} />`}
+    ${(modal === "settings" || modal === "settings-add") && html`<${SettingsModal} me=${me} addEnv=${modal === "settings-add"} onClose=${() => setModal(null)} onSaved=${onEnvsChanged} />`}
     ${modal === "users" && html`<${UsersModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "account" && html`<${AccountModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "audit" && html`<${AuditModal} me=${me} onClose=${() => { setModal(null); load(true); }} />`}
     ${modal === "envinfo" && env && html`<${EnvInfoModal} env=${env} networks=${networks} devices=${devices} onClose=${() => setModal(null)} />`}
     ${pv.tips !== false && html`<${TipsHost} ctx=${{ change: can("ports.change"), multiEnv: envList.envs.length > 1, feedback: can("feedback.submit") }} paused=${tipsPaused}
       onOff=${() => { setPv({ tips: false }); toast("No more tips. Display options can turn them back on."); }} />`}
+    ${tour && html`<${Tour} steps=${tourSteps({ can, multiEnv: envList.envs.length > 1, appName: settings.app_name,
+      hasDevices: showEnv && shown.length > 0, hasPorts: showEnv && !!(st && !st.readonly) && shown.some((d) => d.ports.length),
+      canRequest: ["requests.ports", "requests.poe", "requests.restart"].some(can) })}
+      onDone=${() => { setTour(false); if (me.id) savePrefs({ tour_done: TOUR_VERSION }); }} />`}
     <${TipHost} /><${AskHost} /><${Toasts} />`;
 }
 
 const BUILD = (document.querySelector('meta[name="vlanmgr-build"]') || {}).content || "";
+const TOUR_VERSION = "3.7";
 
 /** First sign-in (password or SSO) after an admin chose their password: pick your own. Nothing else until then. */
 function ChoosePassword({ me }) {

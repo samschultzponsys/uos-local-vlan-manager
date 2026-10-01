@@ -1152,12 +1152,12 @@ def api_audit():
         out["people"] = sorted(p for p in people if p and p != "?")
         out["oldest"] = conn.execute(f"SELECT MIN(a.ts) FROM audit a{sw}", scope_args).fetchone()[0]
         out["retention_days"] = int(db.get_setting("audit_retention_days") or 0)
-        out["can_retention"] = perms.has(me, "settings.manage")
+        out["can_retention"] = perms.has(me, "system.manage")
     return jsonify(out)
 
 
 @app.route("/api/audit/retention", methods=["PUT"])
-@auth.require("settings.manage")
+@auth.require("system.manage")
 def api_audit_retention():
     try:
         days = max(0, min(3650, int((request.get_json(silent=True) or {}).get("days") or 0)))
@@ -1252,14 +1252,14 @@ def api_settings_put():
 
 
 @app.route("/api/settings/integrations")
-@auth.require("settings.manage")
+@auth.require("system.manage")
 def api_integrations():
     return jsonify({**integrations.public_config(), "events": integrations.EVENT_LABEL,
                     "default_update_repo": versioning.REPO})
 
 
 @app.route("/api/settings/integrations", methods=["PUT"])
-@auth.require("settings.manage")
+@auth.require("system.manage")
 def api_integrations_put():
     data = request.get_json(silent=True) or {}
     try:
@@ -1273,7 +1273,7 @@ def api_integrations_put():
 
 
 @app.route("/api/settings/integrations/test", methods=["POST"])
-@auth.require("settings.manage")
+@auth.require("system.manage")
 def api_integrations_test():
     data = request.get_json(silent=True) or {}
     ch = data.get("channel")
@@ -1293,7 +1293,7 @@ def api_integrations_test():
 
 
 @app.route("/api/settings/integrations/github/sync", methods=["POST"])
-@auth.require("settings.manage")
+@auth.require("system.manage")
 def api_github_sync():
     """Pull GitHub's side now; with {"push": true} also send bugs / ideas that aren't on GitHub yet."""
     gh = integrations.config()["github"]

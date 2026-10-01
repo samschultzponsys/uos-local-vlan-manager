@@ -97,6 +97,8 @@ manage only their own switches and only the VLANs you allow.
   on a color palette (8 presets or your own colors), or an uploaded picture. The tab icon can
   follow the logo or be its own. The name shows in the top bar, the browser tab, the sign-in
   page, the setup wizard and the installed app.
+- **Guided tour** after setup (and from the menu): highlights the real screen one stop at a time,
+  only for what that person can see and do.
 - **Looks like an app** when launched from its icon (PWA), in dark or light.
 - **Changelog** in the app (click the version). It opens by itself after an update, and a
   pulsing dot means a newer release is on GitHub.
@@ -218,7 +220,7 @@ Everything a person can do is an **ability**. A **role** is a named set of abili
 **level**, and the level decides who is above whom. Admins edit roles under
 **Users → Roles & abilities**.
 
-| Ability | Admin | Supervisor* | Viewer* |
+| Ability | Super admin / Admin | Supervisor* | Viewer* |
 |---|:-:|:-:|:-:|
 | Change port VLANs (their devices, their networks) | ✓ | ✓ | |
 | Change protected ports | ✓ | | |
@@ -235,6 +237,11 @@ Everything a person can do is an **ability**. A **role** is a named set of abili
 | Environments & API keys, sign-in settings, roles | ✓ (admin-only) | | |
 
 \* defaults, which can be changed.
+
+- **Super admin** (level 1000, built in) has every ability there is, including any a later
+  version adds. Only super admins manage super admins (the last one can't be removed), and
+  only they set up **Integrations** and **how long activity is kept**. **Admin** (100) has
+  everything else. The first account is a super admin.
 
 - **Supervisor** (level 50) and **Viewer** (level 10) can be renamed and given any
   abilities.
