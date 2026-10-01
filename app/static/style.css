@@ -1094,3 +1094,26 @@ select option:checked { background-color: var(--accent); color: #fff; }
 .ver-chip .pulse { position: static; width: 7px; height: 7px; }
 .brand-name .bn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .brand > div { min-width: 0; }
+
+/* ---------- 2.9: wizard theme choice, tips ---------- */
+.wz-themes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.wz-theme { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 14px; border: 2px solid var(--border);
+  background: var(--bg2); color: var(--text); font: inherit; cursor: pointer; }
+.wz-theme.on { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.wz-theme-art { display: grid; grid-template-columns: 1fr 2fr; grid-template-rows: 14px 1fr; gap: 6px; height: 90px; padding: 8px; border-radius: 10px; }
+.wz-theme-art span { border-radius: 5px; }
+.wz-theme-art span:first-child { grid-column: 1 / span 2; }
+.wz-theme.dark .wz-theme-art { background: #0a0c11; } .wz-theme.dark .wz-theme-art span { background: #1a1f2a; }
+.wz-theme.dark .wz-theme-art span:last-child { background: linear-gradient(135deg, #3b82f6, #8b5cf6); }
+.wz-theme.light .wz-theme-art { background: #eef1f6; } .wz-theme.light .wz-theme-art span { background: #ffffff; }
+.wz-theme.light .wz-theme-art span:last-child { background: linear-gradient(135deg, #60a5fa, #a78bfa); }
+.wz-theme-label { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; }
+.tip-card { position: fixed; left: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 42; display: flex; align-items: flex-start; gap: 12px;
+  max-width: min(440px, calc(100vw - 32px)); padding: 12px 10px 12px 14px; border-radius: 14px; background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border2)); box-shadow: 0 18px 40px -14px rgba(0, 0, 0, .7); animation: sheet .25s ease-out; }
+.tip-icon { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 10px; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.tip-text { flex: 1; font-size: 13.5px; line-height: 1.45; }
+.tip-head { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--warn); margin-bottom: 2px; }
+.tip-actions { margin-top: 6px; color: var(--faint); }
+@media (max-width: 760px) { .tip-card { left: 12px; right: 12px; max-width: none; } }

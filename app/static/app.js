@@ -1,4 +1,4 @@
-import { render, useState, useEffect, useMemo, useCallback, useErrorBoundary } from "./vendor/preact-htm.module.js";
+import { render, useState, useEffect, useMemo, useCallback, useRef, useErrorBoundary } from "./vendor/preact-htm.module.js";
 import {
   html, api, Icon, Modal, Segmented, Toggle, Toasts, toast, Spinner, useInterval, Logo, markdown,
   vlanColors, colorsFor, colorKey, readable, glyphHalo, speedLabel, linkLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
@@ -44,7 +44,7 @@ export function applyZoom(scales) {
 export const LEGEND_DEFAULTS = { vlan: "always", ports: "always", clients: "hover", ip: "hover", ip_format: "subnet",
   layout: "wrap", sort: "vlan", hide_unused: false, open: true, key_open: true };
 export const PORTS_DEFAULTS = { phone: "tiles", desktop: "faceplate", hide_down: false, tag_marks: true, group: true,
-  apps: true, fx: "pulse", size: "auto", overview: false, start: "all", kinds: {}, app_kinds: {} };
+  apps: true, fx: "pulse", size: "auto", overview: false, start: "all", kinds: {}, app_kinds: {}, tips: true };
 
 const TAG_TEXT = { auto: "All VLANs tagged", block_all: "Untagged only", custom: "Some VLANs tagged" };
 const ROLE = {
@@ -551,6 +551,7 @@ function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, 
 
     <h4 class="section">Devices</h4>
     <${Toggle} checked=${pv.group} onChange=${(v) => setPv({ group: v })} label="Group by type" hint="Gateways, switches, access points." />
+    <${Toggle} checked=${pv.tips !== false} onChange=${(v) => setPv({ tips: v })} label="Show tips now and then" hint="A short tip at the bottom every few minutes." />
     <${Toggle} checked=${pv.apps} onChange=${(v) => setPv({ apps: v })} label="Show Protect, Access and other UniFi devices"
       hint="With the port each one is plugged into." />
 
@@ -939,6 +940,51 @@ function Overview({ me, pv, lg, prefs, poll, onOpen }) {
   </div>`;
 }
 
+// --- tips, now and then ------------------------------------------------------------------
+
+const TIPS = [
+  { id: "ctrl", when: (c) => canHover && c.change, text: html`<b>Ctrl</b> / <b>⌘</b> click ports to pick several, even on different switches, and change them together.` },
+  { id: "shift", when: (c) => canHover && c.change, text: html`<b>Shift</b> click a port to pick every port from the last one you clicked, by port number.` },
+  { id: "select", when: (c) => !canHover && c.change, text: html`Tap <b>Select ports</b>, then tap several ports to change them together, even on different switches.` },
+  { id: "esc", when: (c) => canHover && c.change, text: html`<b>Esc</b> lets go of the ports you picked.` },
+  { id: "bubble", text: html`${canHover ? "Click" : "Tap"} a network bubble to highlight every port that carries it.` },
+  { id: "hover", when: () => canHover, text: html`Point at a port to see its link, PoE, network and what's plugged in.` },
+  { id: "display", text: html`<b>Display options</b> (the sliders on Networks) choose what bubbles show and how ports look on each screen size.` },
+  { id: "scale", text: html`<b>Display options → Scale</b> makes the app bigger or smaller, for this screen only.` },
+  { id: "details", text: html`The sliders button on a device shows its firmware, uptime, uplink and more.` },
+  { id: "colors", when: (c) => c.multiEnv, text: html`<b>My VLAN colors</b> can match colors across environments, by VLAN number or by name.` },
+  { id: "all", when: (c) => c.multiEnv, text: html`Turn on the <b>All devices</b> page in Display options to see every environment at once.` },
+  { id: "hide", text: html`Display options can hide ports without link and networks with no ports, to keep big switches calm.` },
+  { id: "ver", text: html`The version next to the title opens <b>What's new</b>.` },
+  { id: "wizard", text: html`<b>Set up my view</b>, in your menu, runs the setup again.` },
+  { id: "theme", text: html`The sun / moon button switches between day and night.` },
+];
+
+function TipsHost({ ctx, paused, onOff }) {
+  const [tip, setTip] = useState(null);
+  const list = TIPS.filter((t) => !t.when || t.when(ctx));
+  const next = () => {
+    if (!list.length) return;
+    const i = (lsGet("vlanmgr.tip", -1) + 1) % list.length;
+    lsSet("vlanmgr.tip", i);
+    setTip(list[i]);
+  };
+  useEffect(() => {
+    let shown = null;
+    const show = () => { if (!document.hidden && !paused.current) { next(); clearTimeout(shown); shown = setTimeout(() => setTip(null), 15000); } };
+    const first = setTimeout(show, 40000);
+    const every = setInterval(show, 7 * 60000);
+    return () => { clearTimeout(first); clearInterval(every); clearTimeout(shown); };
+  }, []);
+  if (!tip) return null;
+  return html`<div class="tip-card" role="status">
+    <span class="tip-icon"><${Icon} name="bulb" size=${17} /></span>
+    <div class="tip-text"><div class="tip-head">Tip</div>${tip.text}
+      <div class="tip-actions"><button class="link-btn small" onClick=${next}>Next tip</button> · <button class="link-btn small" onClick=${() => { setTip(null); onOff(); }}>Don't show tips</button></div></div>
+    <button class="icon-btn sm" onClick=${() => setTip(null)} aria-label="Close"><${Icon} name="x" size=${14} /></button>
+  </div>`;
+}
+
 // --- many ports at once --------------------------------------------------------------
 
 function BulkDrawer({ env, access, items, networks, colors, me, settings, onRemove, onClose, onApplied }) {
@@ -1135,6 +1181,7 @@ function App() {
   const [view, setView] = useState(null);           // "env" or "all" (the All devices page)
   const [pending, setPending] = useState(null);     // a port to open once its environment has loaded
   const [wizardLater, setWizardLater] = useState(false);   // closed the setup wizard: ask again next visit
+  const tipsPaused = useRef(false);                         // no tips over dialogs and port panels
   const [menu, setMenu] = useState(false);
   const [theme, setTheme] = useState(lsGet("vlanmgr.theme", "dark"));
   const [bootErr, setBootErr] = useState(null);
@@ -1145,6 +1192,9 @@ function App() {
     const m = document.querySelector('meta[name="theme-color"]');
     if (m) m.content = theme === "light" ? "#eef1f6" : "#0a0c11";
   }, [theme]);
+  // the theme is part of the person's settings, so it follows them to other browsers
+  useEffect(() => { const t = me && (me.prefs || {}).theme; if (t === "light" || t === "dark") setTheme(t); }, [me && (me.prefs || {}).theme]);
+  const toggleTheme = () => { const t = theme === "dark" ? "light" : "dark"; setTheme(t); if (me && !me.impersonator) savePrefs({ theme: t }); };
   useEffect(() => {
     const place = () => {
       const t = document.querySelector(".topbar");
@@ -1311,6 +1361,7 @@ function App() {
     setAnchor({ d, i });
   };
   const multiSet = new Set(multi);
+  tipsPaused.current = !!(modal || sel || multi.length);
   const multiPorts = multi.map((k) => { const [d, i] = k.split("|"); const dev = devices.find((x) => x.id === d);
     const port = dev && dev.ports.find((p) => p.idx === Number(i)); return port ? { dev, port } : null; }).filter(Boolean);
   const clearMulti = () => { setMulti([]); setAnchor(null); };
@@ -1383,7 +1434,7 @@ function App() {
         ${can("users.view") && html`<button class="btn ghost hide-sm" onClick=${() => setModal("users")}><${Icon} name="users" /><span class="hide-sm">Users</span>
           ${me.waiting > 0 && html`<span class="count-dot">${me.waiting}</span>`}</button>`}
         ${(isAdmin || canEnvs) && html`<button class="icon-btn hide-sm" onClick=${() => setModal("settings")} title="Settings"><${Icon} name="settings" /></button>`}
-        <button class="icon-btn theme-btn" onClick=${() => setTheme(theme === "dark" ? "light" : "dark")}
+        <button class="icon-btn theme-btn" onClick=${toggleTheme}
           title=${theme === "dark" ? "Switch to light" : "Switch to dark"} aria-label="Toggle day / night">
           <${Icon} name=${theme === "dark" ? "sun" : "moon"} /></button>
         <div class="menu-wrap">
@@ -1402,7 +1453,7 @@ function App() {
             ${env && html`<button onClick=${() => { setMenu(false); setModal("colors"); }}><${Icon} name="palette" />My VLAN colors</button>`}
             <button onClick=${() => { setMenu(false); setModal("display"); }}><${Icon} name="sliders" />Display options</button>
             ${!me.impersonator && html`<button onClick=${() => { setMenu(false); setModal("wizard"); }}><${Icon} name="sparkle" />Set up my view</button>`}
-            <button onClick=${() => setTheme(theme === "dark" ? "light" : "dark")}><${Icon} name=${theme === "dark" ? "sun" : "moon"} />${theme === "dark" ? "Light" : "Dark"} theme</button>
+            <button onClick=${toggleTheme}><${Icon} name=${theme === "dark" ? "sun" : "moon"} />${theme === "dark" ? "Light" : "Dark"} theme</button>
             ${me.method !== "none" ? html`<button onClick=${async () => { const r = await api("/api/auth/logout", { method: "POST" }); location.href = r.redirect; }}><${Icon} name="logout" />Sign out</button>`
               : html`<a href="/login?manual=1"><${Icon} name="login" />Sign in</a>`}
           </div>`}
@@ -1451,8 +1502,8 @@ function App() {
     ${devOpen && html`<${DeviceModal} env=${env} device=${devOpen} me=${me} readonly=${!!st.readonly} onClose=${() => setDevModal(null)}
       onChanged=${() => load(true)} />`}
     ${modal === "wizard" && html`<${SetupWizard} me=${me} prefs=${prefs}
-      kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS }}
-      onClose=${() => { setModal(null); setWizardLater(true); }}
+      kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, appName: settings.app_name }}
+      theme=${theme} setTheme=${setTheme}
       onSave=${async (patch) => { await savePrefs(patch); setModal(null); toast("All set. Redo it any time from the menu: Set up my view"); }} />`}
     ${modal === "display" && html`<${DisplayModal} lg=${lg} setLg=${setLg} pv=${pv} setPv=${setPv} sample=${sample} scales=${scales} setScale=${setScale}
       sampleColor=${sample ? colors[sample.id] : ""} sampleCount=${sampleCount}
@@ -1464,6 +1515,8 @@ function App() {
     ${modal === "account" && html`<${AccountModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "audit" && html`<${AuditModal} onClose=${() => setModal(null)} />`}
     ${modal === "envinfo" && env && html`<${EnvInfoModal} env=${env} networks=${networks} devices=${devices} onClose=${() => setModal(null)} />`}
+    ${pv.tips !== false && html`<${TipsHost} ctx=${{ change: can("ports.change"), multiEnv: envList.envs.length > 1 }} paused=${tipsPaused}
+      onOff=${() => { setPv({ tips: false }); toast("No more tips. Display options can turn them back on."); }} />`}
     <${TipHost} /><${AskHost} /><${Toasts} />`;
 }
 

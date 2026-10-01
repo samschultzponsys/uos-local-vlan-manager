@@ -5,6 +5,25 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.9 — 2026-10-01
+
+### Added
+- **Tips now and then**: every few minutes a short tip slides in at the bottom for 15 seconds,
+  e.g. *Ctrl / ⌘ click ports to pick several*, *Shift click for a range by port number*,
+  *Select ports* on a phone, highlighting a network, Display options, scale, device details,
+  matching colors, the All devices page. Tips fit your device (mouse or touch) and what you can
+  do; they never cover a dialog or port panel. **Next tip**, **Don't show tips**, and
+  Display options → *Show tips now and then*.
+- The setup wizard starts with **Night or Day**, shown as two previews you pick from (it
+  changes as you click).
+- The wizard asks whether to **show or hide networks with no ports**, and says how many there
+  are right now.
+
+### Changed
+- **The setup wizard can't be skipped**; every step still has *Keep the defaults*.
+- **Day / night is saved to your account**, like your other display choices, so it follows you
+  to any browser.
+
 ## 2.8 — 2026-10-01
 
 ### Added

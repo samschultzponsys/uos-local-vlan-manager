@@ -3,7 +3,7 @@
 import { useState, useEffect } from "./vendor/preact-htm.module.js";
 import { html, api, Icon, Modal, Segmented, Toggle, Spinner, colorsFor, colorKey, vlanColors } from "./ui.js";
 
-export const SETUP_VERSION = "2.7";
+export const SETUP_VERSION = "2.9";
 
 const MONITORS = [
   ["1366x768", "1366 × 768", "small laptop"], ["1920x1080", "1920 × 1080", "Full HD"], ["2560x1440", "2560 × 1440", "QHD"],
@@ -38,7 +38,7 @@ function sampleDevice(networks) {
 
 function screenClass(SCREENS, w) { return SCREENS.find((x) => w <= x.max).key; }
 
-export function SetupWizard({ me, prefs, kit, onSave, onClose }) {
+export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme }) {
   const { NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS } = kit;
   const caps = me.caps || [];
   const [data, setData] = useState(null);
@@ -65,7 +65,7 @@ export function SetupWizard({ me, prefs, kit, onSave, onClose }) {
   const views = SCREENS.reduce((a, x) => ({ ...a, [x.key]: viewFor(pv, x.key) }), {});
   const setView = (cls, v) => setPv({ views: { ...views, [cls]: v } });
 
-  if (!data) return html`<${Modal} title="Set up your view" icon="sparkle" onClose=${onClose}><div class="empty-sm"><${Spinner} /></div></${Modal}>`;
+  if (!data) return html`<${Modal} title="Set up your view" icon="sparkle"><div class="empty-sm"><${Spinner} /></div></${Modal}>`;
 
   const allNets = data.envs.flatMap((x) => x.networks.map((n) => ({ ...n, env: x.env })));
   const nets = data.envs[0] ? data.envs[0].networks : [];
@@ -76,9 +76,11 @@ export function SetupWizard({ me, prefs, kit, onSave, onClose }) {
   const kinds = [...new Set(data.envs.flatMap((x) => x.devices.map((d) => d.kind || "other")))];
   const appKinds = ["protect", "access", "other"].filter((a) => caps.includes(`apps.${a}`));
   const multiEnv = data.envs.length > 1;
+  const used = new Set(data.envs.flatMap((x) => x.devices.flatMap((d) => d.ports.map((p) => p.native_network_id))));
+  const unused = allNets.filter((n) => !used.has(n.id)).length;
 
-  const finish = () => onSave({ legend: lg, ports_view: pv, scales, color_sync: sync, vlan_colors: mine, shared_colors: shared, setup_done: SETUP_VERSION });
-  const skipAll = () => onSave({ setup_done: SETUP_VERSION });
+  const finish = () => onSave({ theme, legend: lg, ports_view: pv, scales, color_sync: sync, vlan_colors: mine, shared_colors: shared,
+    setup_done: SETUP_VERSION });
 
   const viewPicker = (cls, phoneLike) => html`<div class="wz-views">
     ${[[phoneLike ? "tiles" : "faceplate", phoneLike ? "Tiles" : "Faceplate", phoneLike ? "Big tap targets, every port in order" : "Drawn like the hardware"],
@@ -90,9 +92,14 @@ export function SetupWizard({ me, prefs, kit, onSave, onClose }) {
 
   const steps = [
     { key: "welcome", title: "Welcome", body: html`
-      <p>Let's make VLAN Manager look the way you like. It takes a minute, every step can keep the defaults, and you can redo it any
+      <p>Let's make ${kit.appName} look the way you like. It takes a minute, every step can keep the defaults, and you can redo it any
         time from the menu (<b>Set up my view</b>).</p>
-      <p class="muted small">Your choices are saved to your account, so they follow you to any browser. Port layouts and scale are kept per screen size.</p>` },
+      <div class="wz-themes">${[["dark", "Night", "moon"], ["light", "Day", "sun"]].map(([t, label, icon]) => html`
+        <button key=${t} class=${"wz-theme " + t + (theme === t ? " on" : "")} onClick=${() => setTheme(t)}>
+          <span class="wz-theme-art"><span></span><span></span><span></span></span>
+          <span class="wz-theme-label"><${Icon} name=${icon} size=${16} />${label}</span></button>`)}</div>
+      <p class="muted small">Night or day? You can flip it any time with the ${theme === "dark" ? "sun" : "moon"} button at the top. Your choices are saved to
+        your account, so they follow you to any browser. Port layouts and scale are kept per screen size.</p>` },
     { key: "devices", title: "What to show", body: html`
       <p class="muted">Which devices should show by default? You can always pick exact devices later with <b>Devices</b>.</p>
       <div class="wz-checks">
@@ -127,7 +134,10 @@ export function SetupWizard({ me, prefs, kit, onSave, onClose }) {
         <div class="opt-row" key=${k}><b>${label}</b><${Segmented} value=${lg[k]} onChange=${(v) => setLg({ [k]: v })}
           options=${[{ value: "off", label: "Off" }, { value: "always", label: "Always" }, { value: "hover", label: "On hover / tap" }]} /></div>`)}
       <div class="opt-row"><b>IP shown as</b><${Segmented} value=${lg.ip_format} onChange=${(v) => setLg({ ip_format: v })}
-        options=${[{ value: "subnet", label: "Subnet" }, { value: "gateway", label: "Gateway IP" }, { value: "both", label: "Gateway/mask" }]} /></div>` },
+        options=${[{ value: "subnet", label: "Subnet" }, { value: "gateway", label: "Gateway IP" }, { value: "both", label: "Gateway/mask" }]} /></div>
+      <div class="opt-row"><div><b>Networks with no ports</b><div class="muted small">Networks that no port on your devices uses yet${unused ? ` (${unused} right now)` : ""}.</div></div>
+        <${Segmented} value=${lg.hide_unused ? "hide" : "show"} onChange=${(v) => setLg({ hide_unused: v === "hide" })}
+          options=${[{ value: "show", label: "Show them" }, { value: "hide", label: "Hide them" }]} /></div>` },
     { key: "colors", title: "Colors", body: html`
       ${multiEnv && html`<div class="opt-row"><div><b>Match colors across environments?</b>
         <div class="muted small">By VLAN number suits sites that use the same VLAN plan; by name suits sites that name networks the same.</div></div>
@@ -159,16 +169,18 @@ export function SetupWizard({ me, prefs, kit, onSave, onClose }) {
     if (s.key === "devices") setPv({ kinds: {}, app_kinds: {} });
     if (s.key === "monitor") { setView(monClass, PORTS_DEFAULTS.desktop); const x = { ...scales }; delete x[monitor]; setScales(x); }
     if (s.key === "phone") setView(phoneClass, phoneClass === "phone" ? "tiles" : "faceplate");
+    if (s.key === "welcome") setTheme("dark");
     if (s.key === "bubbles") setLgS({ ...LEGEND_DEFAULTS });
     if (s.key === "colors") { setSync("off"); }
     if (s.key === "finish") setPv({ fx: "pulse", overview: false });
     if (last) finish(); else setStep(step + 1);
   };
-  return html`<${Modal} title="Set up your view" icon="sparkle" onClose=${onClose} wide
+  // no way around it: everyone goes through once (each step can keep the defaults)
+  return html`<${Modal} title="Set up your view" icon="sparkle" wide
     footer=${html`<div class="wz-dots">${steps.map((x, i) => html`<span class=${i === step ? "on" : i < step ? "done" : ""} key=${x.key}></span>`)}</div>
       <span class="grow"></span>
-      ${step === 0 ? html`<button class="btn ghost" onClick=${skipAll}>Skip, keep stock</button>`
-        : html`<button class="btn ghost" onClick=${() => setStep(step - 1)}>Back</button><button class="btn ghost" onClick=${keepDefaults}>Keep the defaults</button>`}
+      ${step > 0 && html`<button class="btn ghost" onClick=${() => setStep(step - 1)}>Back</button>`}
+      <button class="btn ghost" onClick=${keepDefaults}>Keep the defaults</button>
       <button class="btn primary" onClick=${() => (last ? finish() : setStep(step + 1))}>${step === 0 ? "Let's go" : last ? "Done" : "Next"}</button>`}>
     <div class="wz">
       <div class="wz-step muted small">Step ${step + 1} of ${steps.length}</div>
