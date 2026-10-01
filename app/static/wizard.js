@@ -165,8 +165,8 @@ export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme, onlyNew }
           ${multiEnv && sync !== "off" && n.count > 1 && html`<span class="muted small">in ${n.count} environments</span>`}</label>`;
       })}</div>` },
     { key: "finish", title: "Last touches", body: html`
-      <div class="opt-row"><div><b>Ports with link</b><div class="muted small">Pulse gently in their network's color, or stay solid.</div></div>
-        <${Segmented} value=${pv.fx} onChange=${(v) => setPv({ fx: v })} options=${[{ value: "pulse", label: "Pulse" }, { value: "solid", label: "Solid" }]} /></div>
+      <div class="opt-row"><div><b>Ports with link</b><div class="muted small">Glow gently in their network's color: faint, soft or bright, or stay solid.</div></div>
+        <${Segmented} value=${pv.fx} onChange=${(v) => setPv({ fx: v })} options=${kit.FX_OPTIONS} /></div>
       <p class="muted small">Everything here is also under <b>Display options</b> and <b>My VLAN colors</b>.</p>` },
     { key: "start", since: "3.1", title: "Where do you want to land?", body: html`
       <p class="muted">The page you see first after signing in. The tabs at the top switch between them any time.</p>

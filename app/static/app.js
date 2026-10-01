@@ -544,8 +544,8 @@ function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, 
     <div class="opt-row"><div><b>Port size</b><div class="muted small">Auto grows the ports on big and 4K screens.</div></div>
       <${Segmented} value=${pv.size || "auto"} onChange=${(v) => setPv({ size: v })}
         options=${[{ value: "auto", label: "Auto" }, { value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }, { value: "xl", label: "XL" }]} /></div>
-    <div class="opt-row"><div><b>Ports with link</b><div class="muted small">Pulse gently in their network's color, or stay solid.</div></div>
-      <${Segmented} value=${pv.fx} onChange=${(v) => setPv({ fx: v })} options=${[{ value: "pulse", label: "Pulse" }, { value: "solid", label: "Solid" }]} /></div>
+    <div class="opt-row"><div><b>Ports with link</b><div class="muted small">Glow gently in their network's color: faint, soft or bright, or stay solid.</div></div>
+      <${Segmented} value=${pv.fx} onChange=${(v) => setPv({ fx: v })} options=${FX_OPTIONS} /></div>
     <${Toggle} checked=${pv.hide_down} onChange=${(v) => setPv({ hide_down: v })} label="Hide ports without link"
       hint="Tiles, Compact and List leave them out; the Faceplate keeps its layout and shows an empty socket." />
     <${Toggle} checked=${pv.tag_marks} onChange=${(v) => setPv({ tag_marks: v })} label="Mark ports that carry tagged VLANs"
@@ -1552,7 +1552,7 @@ function App() {
       </div>
     </header>
 
-    <main class=${"main" + (showEnv && (selPort || multiPorts.length) ? " with-drawer" : "") + (selectMode ? " select-mode" : "") + (pv.fx === "solid" ? "" : " fx-pulse") + (pv.size && pv.size !== "auto" ? ` ps-${pv.size}` : "")}>
+    <main class=${"main" + (showEnv && (selPort || multiPorts.length) ? " with-drawer" : "") + (selectMode ? " select-mode" : "") + (pv.fx === "solid" ? "" : ` fx-pulse${pv.fx === "faint" ? " fx-faint" : pv.fx === "bright" ? " fx-bright" : ""}`) + (pv.size && pv.size !== "auto" ? ` ps-${pv.size}` : "")}>
       ${(pv.overview || canFb) && html`<div class="view-tabs" role="tablist">
         ${pv.overview && html`<button role="tab" aria-selected=${showAll} class=${showAll ? "on" : ""} onClick=${() => setView("all")}><${Icon} name="grid" size=${15} />All devices</button>`}
         <button role="tab" aria-selected=${showEnv} class=${showEnv ? "on" : ""} onClick=${() => setView("env")}><${Icon} name="server" size=${15} />Environment</button>
@@ -1602,7 +1602,7 @@ function App() {
     ${devOpen && html`<${DeviceModal} env=${env} device=${devOpen} me=${me} readonly=${!!st.readonly} onClose=${() => setDevModal(null)}
       onChanged=${() => load(true)} />`}
     ${(modal === "wizard" || modal === "wizard-new") && html`<${SetupWizard} me=${me} prefs=${prefs} onlyNew=${modal === "wizard-new"}
-      kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, appName: settings.app_name, startOptions }}
+      kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, appName: settings.app_name, startOptions, FX_OPTIONS }}
       theme=${theme} setTheme=${setTheme}
       onSave=${async (patch) => { await savePrefs(patch); setModal(null); setView(startValue({ ...PORTS_DEFAULTS, ...patch.ports_view }, canFb));
         toast("All set. Redo it any time from the menu: Set up my view"); }} />`}
@@ -1630,6 +1630,8 @@ function App() {
 }
 
 const BUILD = (document.querySelector('meta[name="vlanmgr-build"]') || {}).content || "";
+// how strongly lit ports glow ("pulse" is the default, Soft)
+export const FX_OPTIONS = [{ value: "faint", label: "Faint" }, { value: "pulse", label: "Soft" }, { value: "bright", label: "Bright" }, { value: "solid", label: "Solid" }];
 const TOUR_VERSION = "3.7";
 
 /** First sign-in (password or SSO) after an admin chose their password: pick your own. Nothing else until then. */

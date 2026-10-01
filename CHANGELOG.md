@@ -5,6 +5,14 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 4.0 — 2026-10-01
+
+### Changed
+- **Port glow has a strength now**: Display options (and setup) → *Ports with link* offers
+  **Faint**, **Soft**, **Bright** or **Solid**. Soft is the new default and noticeably dimmer than
+  before; everyone on the old "Pulse" moves to Soft. Bright is the old look, Faint barely
+  breathes, Solid is off.
+
 ## 3.9 — 2026-10-01
 
 ### Fixed
