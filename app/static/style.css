@@ -843,3 +843,22 @@ details.more summary { cursor: pointer; color: var(--accent); font-weight: 550; 
 .chassis.ap { border-radius: 26px; }
 .device.ap .device-body .chassis:not(.compact) { padding-left: 22px; }
 .chassis.gateway .chassis-name { color: #f1f3f7; }
+
+/* Protect, Access and other UniFi apps (2.0) */
+.app-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.app-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center; gap: 12px;
+  padding: 10px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); }
+.app-main { display: flex; flex-direction: column; min-width: 0; }
+.app-main b, .app-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-dot.unknown { background: var(--faint); }
+.p-flags .flag-app { color: #c4b5fd; filter: drop-shadow(0 0 2px rgba(0, 0, 0, .6)); }
+.port.up .p-flags .flag-app { color: var(--fg); filter: none; }
+.tag-sub { margin: 8px 2px 2px; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
+.tag-sub:first-child { margin-top: 0; }
+.client .badge { margin-left: 4px; }
+@media (max-width: 760px) {
+  .app-row { grid-template-columns: 10px minmax(0, 1fr) auto; }
+  .app-row > .link-btn, .app-row > span.muted { grid-column: 2; grid-row: 2; justify-self: start; }
+  .app-row > .btn { grid-column: 3; grid-row: 1 / span 2; }
+}
+.app-row .link-btn { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }

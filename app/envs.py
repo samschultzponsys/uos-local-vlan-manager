@@ -110,8 +110,15 @@ def accessible(user):
                  "devices": [m.lower() for m in _loads(r["a_devices"], [])]}) for r in rows]
 
 
-def device_allowed(acc, mac):
-    return acc["all_devices"] or (mac or "").lower() in acc["devices"]
+def app_token(app):
+    """Device-list entry meaning "every device of this UniFi app", e.g. app:protect."""
+    a = (app or "network").lower()
+    return f"app:{a if a in ('network', 'protect', 'access') else 'other'}"
+
+
+def device_allowed(acc, mac, app="network"):
+    devs = acc["devices"]
+    return acc["all_devices"] or (mac or "").lower() in devs or app_token(app) in devs
 
 
 def vlan_allowed(acc, network_id):
@@ -189,9 +196,10 @@ def remove_lock(env_id, mac, idx):
     return cur.rowcount > 0
 
 
-def limit_grant(manager, user_id, entries):
+def limit_grant(manager, user_id, entries, app_of=None):
     """A non-admin can only hand out environments, networks and devices they have themselves.
-    Environments they can't see are left as they were for that person."""
+    Environments they can't see are left as they were for that person.
+    app_of(env_id) -> {mac: app} tells which UniFi app a device belongs to."""
     mine = {row["id"]: acc for row, acc in accessible(manager)}
     out = [x for x in user_access_list(user_id) if x["env_id"] not in mine]   # untouched
     for x in entries:
@@ -208,7 +216,11 @@ def limit_grant(manager, user_id, entries):
         if not acc["all_devices"]:
             if x.get("all_devices", True):
                 x["all_devices"], x["devices"] = False, list(acc["devices"])
-            if any(str(m).lower() not in acc["devices"] for m in x.get("devices") or []):
-                raise ValueError("You can only give devices you can see yourself")
+            apps = app_of(eid) if app_of else {}
+            for m in x.get("devices") or []:
+                m = str(m).lower()
+                ok = m in acc["devices"] if m.startswith("app:") else device_allowed(acc, m, apps.get(m, "network"))
+                if not ok:
+                    raise ValueError("You can only give devices you can see yourself")
         out.append(x)
     return out

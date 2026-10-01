@@ -850,7 +850,9 @@ class Snapshot:
                         "portconfs": client.raw_portconfs(),
                         "clients": client.raw_clients(),
                     }
-                    data = normalize(raw["devices"], raw["networks"], raw["portconfs"], raw["clients"], protect_uplinks)
+                    raw["apps"] = client.raw_app_devices()
+                    data = normalize(raw["devices"], raw["networks"], raw["portconfs"], raw["clients"], protect_uplinks,
+                                     raw["apps"])
                     self.readonly = False
                 except UniFiError:
                     if client.mode != "cloud":

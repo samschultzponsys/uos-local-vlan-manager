@@ -26,7 +26,8 @@ const hideTip = () => setTipGlobal(null);
 // each part of a network bubble: "always" | "hover" | "off"
 export const LEGEND_DEFAULTS = { vlan: "always", ports: "always", clients: "hover", ip: "hover", ip_format: "subnet",
   layout: "wrap", sort: "vlan", hide_unused: false, open: true };
-export const PORTS_DEFAULTS = { phone: "tiles", desktop: "faceplate", hide_down: false, tag_marks: true, group: true };
+export const PORTS_DEFAULTS = { phone: "tiles", desktop: "faceplate", hide_down: false, tag_marks: true, group: true,
+  apps: true };
 
 const TAG_TEXT = { auto: "All VLANs tagged", block_all: "Untagged only", custom: "Some VLANs tagged" };
 const ROLE = {
@@ -64,6 +65,7 @@ function carries(port, netId) {
   return false;
 }
 
+const APP_ICON = { Protect: "camera", Access: "door", Talk: "phone" };
 const KIND = {
   gateway: { icon: "router", label: "Gateways" }, switch: { icon: "server", label: "Switches" },
   ap: { icon: "wifi", label: "Access points" }, other: { icon: "grid", label: "Other devices" },
@@ -87,7 +89,7 @@ function PortTip({ port, device, networks }) {
     ${port.role && html`<div class="tip-row"><${Icon} name=${ROLE[port.role].icon} size=${13} />${roleLine(port)}</div>`}
     ${!port.wan && html`<div class="tip-row"><${Icon} name="tag" size=${13} />${port.native_network_id === null ? "VLAN not available through UniFi's cloud" : `${n ? `${n.name} (${n.vlan})` : "Unknown network"} · ${tag}`}</div>`}
     ${port.poe_capable && html`<div class="tip-row"><${Icon} name="bolt" size=${13} />${port.poe_active ? (port.poe_power == null ? "PoE delivering" : `PoE delivering ${port.poe_power} W`) : port.poe_enabled ? "PoE on · idle" : "PoE off"}</div>`}
-    ${c && html`<div class="tip-row"><${Icon} name="plug" size=${13} />${c.name || c.hostname || c.mac}${port.client_count > 1 ? ` +${port.client_count - 1}` : ""}</div>`}
+    ${c && html`<div class="tip-row"><${Icon} name=${APP_ICON[c.app] || "plug"} size=${13} />${c.name || c.hostname || c.mac}${c.app ? ` · ${c.model || c.app}` : ""}${port.client_count > 1 ? ` +${port.client_count - 1}` : ""}</div>`}
     ${port.profile_name && html`<div class="tip-row"><${Icon} name="layers" size=${13} />Profile: ${port.profile_name}</div>`}
     ${port.lock && html`<div class="tip-row warn"><${Icon} name="lock" size=${13} />Locked by an admin${port.lock.note ? `: ${port.lock.note}` : ""}</div>`}
     ${port.lock && port.lock.drift && html`<div class="tip-row warn"><${Icon} name="alert" size=${13} />Changed in UniFi since it was locked</div>`}
@@ -102,6 +104,7 @@ function Flags({ port, device, pv, size = 10 }) {
     ${tagMark && port.tagged_mode === "auto" && html`<span title="All VLANs tagged"><${Icon} name="trunk" size=${size} /></span>`}
     ${tagMark && port.tagged_mode === "custom" && html`<span title="Some VLANs tagged"><${Icon} name="trunksome" size=${size} /></span>`}
     ${port.profile_name && html`<span title="Port profile"><${Icon} name="layers" size=${size} /></span>`}
+    ${(port.apps || []).map((a) => html`<span class="flag-app" title=${`UniFi ${a} device`}><${Icon} name=${APP_ICON[a] || "grid"} size=${size} /></span>`)}
     ${port.lock && html`<span class=${"flag-lock" + (port.lock.drift ? " drift" : "")} title=${port.lock.drift ? "Locked - but changed in UniFi" : "Locked by an admin"}><${Icon} name=${port.lock.drift ? "alert" : "lock"} size=${size} /></span>`}
   </span>`;
 }
@@ -145,7 +148,7 @@ function PortRow({ port, device, networks, colors, highlight, selected, onPick, 
     <span class="prow-num">${port.idx}</span>
     <span class="prow-main"><b>${port.wan ? "WAN" : n ? n.name : port.native_network_id === null ? (port.media_label || "Port") : "?"}</b>
       <span class="muted">${n && !port.wan ? `VLAN ${n.vlan}` : ""}${port.name !== `Port ${port.idx}` ? `${n && !port.wan ? " · " : ""}${port.name}` : ""}</span></span>
-    <span class="prow-who">${who && html`<${Icon} name=${port.peer ? ROLE[port.role] ? ROLE[port.role].icon : "link" : "plug"} size=${12} />${who}${port.client_count > 1 ? ` +${port.client_count - 1}` : ""}`}</span>
+    <span class="prow-who">${who && html`<${Icon} name=${port.peer ? ROLE[port.role] ? ROLE[port.role].icon : "link" : APP_ICON[c && c.app] || "plug"} size=${12} />${who}${port.client_count > 1 ? ` +${port.client_count - 1}` : ""}`}</span>
     <span class="prow-state">
       ${port.poe_capable && html`<span class=${"p-poe " + (port.poe_active ? "active" : port.poe_enabled ? "on" : "offpoe")}><${Icon} name="bolt" size=${12} fill=${port.poe_active} /></span>`}
       <span class=${"prow-speed" + (port.up ? " on" : "")}>${port.up ? speedLabel(port.speed) : "—"}</span>
@@ -230,6 +233,31 @@ function DeviceCard({ device, collapsed, onCollapse, onManage, pv, ...rest }) {
     ${!collapsed && device.ports.length > 0 && html`<div class="device-body"><${Faceplate} device=${device} pv=${pv} ...${rest} /></div>`}
     ${!collapsed && device.ports.length === 0 && html`<div class="device-body muted small">No wired ports reported${device.clients ? ` · ${plural(device.clients, "client")}` : ""}.</div>`}
   </section>`;
+}
+
+// --- devices of other UniFi apps (Protect, Access, Talk...) ------------------------
+
+function AppDevices({ apps, devices, me, env, onOpenPort, collapsed, onCollapse, onChanged }) {
+  const can = (c) => (me.caps || []).includes(c);
+  const byApp = {};
+  for (const a of apps) (byApp[a.app] = byApp[a.app] || []).push(a);
+  return Object.entries(byApp).map(([app, list]) => html`<section class="group" key=${app}>
+    <button class="group-head" onClick=${() => onCollapse(app)}>
+      <${Icon} name=${APP_ICON[app] || "grid"} size=${16} /><b>UniFi ${app}</b><span class="badge">${list.length}</span>
+      <span class="grow"></span><span class="chev" style=${collapsed[app] ? "transform:rotate(-90deg)" : ""}><${Icon} name="chevron" /></span></button>
+    ${!collapsed[app] && html`<div class="app-list">${list.map((a) => {
+      const sw = devices.find((d) => d.id === a.switch_id);
+      const port = sw && sw.ports.find((p) => p.idx === a.sw_port);
+      const cycle = port && port.poe_enabled && can("ports.poe") && !(port.lock && !can("ports.lock"));
+      return html`<div class="app-row" key=${a.mac}>
+        <span class=${"status-dot " + (a.online ? "on" : a.online === false ? "" : "unknown")} title=${a.online ? "Online" : a.online === false ? "Offline" : "Unknown"}></span>
+        <div class="app-main"><b>${a.name}</b><span class="muted small">${a.model}${a.ip ? ` · ${a.ip}` : ""}</span></div>
+        ${port ? html`<button class="link-btn small" onClick=${() => onOpenPort(sw.id, port.idx)}>${sw.name} · port ${port.idx}</button>`
+          : html`<span class="muted small">${a.switch_name ? `${a.switch_name} · port ${a.sw_port}` : "port unknown"}</span>`}
+        ${cycle && html`<button class="btn sm ghost" title="Turn PoE off and on to restart it" onClick=${() => powerCycle(env, sw, port, onChanged)}><${Icon} name="power" size=${14} />Restart</button>`}
+      </div>`;
+    })}</div>`}
+  </section>`);
 }
 
 // --- VLAN legend ---------------------------------------------------------------
@@ -344,6 +372,8 @@ function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, 
 
     <h4 class="section">Devices</h4>
     <${Toggle} checked=${pv.group} onChange=${(v) => setPv({ group: v })} label="Group by type" hint="Gateways, switches, access points." />
+    <${Toggle} checked=${pv.apps} onChange=${(v) => setPv({ apps: v })} label="Show Protect, Access and other UniFi devices"
+      hint="With the port each one is plugged into." />
 
   </${Modal}>`;
 }
@@ -456,7 +486,8 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
       ${(c0.length > 0 || port.device_link || port.lldp) && html`<div class="panel">
         <div class="panel-title">Connected</div>
         ${port.device_link && html`<div class="client"><${Icon} name="server" size=${14} /><b>${port.device_link}</b><span class="muted">UniFi device</span></div>`}
-        ${c0.map((c) => html`<div class="client"><${Icon} name="plug" size=${14} /><b>${c.name || c.hostname || c.mac}</b>
+        ${c0.map((c) => html`<div class="client"><${Icon} name=${APP_ICON[c.app] || "plug"} size=${14} /><b>${c.name || c.hostname || c.mac}</b>
+          ${c.app && html`<span class="badge">${c.model || c.app} · ${c.app}</span>`}
           <span class="muted mono">${c.mac}${c.ip ? ` · ${c.ip}` : ""}</span></div>`)}
         ${port.client_count > c0.length && html`<div class="muted">+${port.client_count - c0.length} more</div>`}
         ${port.lldp && !port.device_link && html`<div class="client"><${Icon} name="link" size=${14} /><b>${port.lldp.name || port.lldp.chassis_id}</b><span class="muted">LLDP ${port.lldp.port}</span></div>`}
@@ -904,6 +935,9 @@ function App() {
               highlight=${highlight} sel=${sel} onPick=${pick} collapsed=${!!collapsed[d.mac]} onManage=${(x) => setDevModal(x.id)}
               onCollapse=${() => { const c = { ...collapsed, [d.mac]: !collapsed[d.mac] }; setCollapsed(c); lsSet("vlanmgr.collapsed", c); }} />`)}</div>`}
           </section>`)}
+      ${pv.apps && (st.app_devices || []).length > 0 && html`<${AppDevices} apps=${st.app_devices} devices=${devices} me=${me} env=${env}
+        collapsed=${Object.fromEntries(Object.entries(closedGroups).filter(([k]) => k.startsWith("app:")).map(([k, v]) => [k.slice(4), v]))}
+        onCollapse=${(app) => toggleGroup("app:" + app)} onOpenPort=${(d, i) => setSel({ d, i })} onChanged=${() => load(true)} />`}
       <div class="key">
         <span><span class="k-tile up"></span>Link up</span><span><span class="k-tile"></span>No link</span><span><span class="k-off"></span>Disabled</span>
         <span><span class="k-poe active"><${Icon} name="bolt" size=${11} fill /></span>PoE delivering</span>
@@ -912,6 +946,7 @@ function App() {
         <span><${Icon} name="uplink" size=${12} />Uplink</span><span><${Icon} name="link" size=${12} />UniFi device</span>
         <span><${Icon} name="globe" size=${12} />WAN</span><span><${Icon} name="merge" size=${12} />LAG</span>
         <span><${Icon} name="layers" size=${12} />Port profile</span>
+        <span><${Icon} name="camera" size=${12} />Protect device</span><span><${Icon} name="door" size=${12} />Access device</span>
         ${sample && !st.readonly && html`<span class="key-bubble"><${NetChip} n=${sample} color=${colors[sample.id]} ports=${sampleCount} example
           lg=${{ ...lg, vlan: "always", ports: "always", clients: sample.clients == null ? "off" : "always", ip: "always" }} />
           <span>Network bubble: color, name, <b>VLAN ID</b>, <b>ports</b> on it, <b>connected clients</b> and <b>IP</b>.${" "}

@@ -5,6 +5,16 @@ import {
 } from "./ui.js";
 
 
+const APP_NAMES = { network: "Network", protect: "Protect", access: "Access", other: "other UniFi" };
+const APP_ICONS = { network: "server", protect: "camera", access: "door", other: "grid" };
+const appKey = (app) => { const a = (app || "network").toLowerCase(); return APP_NAMES[a] && a !== "other" ? a : "other"; };
+/** [[app, devices]] with Network devices first */
+function groupDevices(devices) {
+  const by = {};
+  for (const d of devices) (by[d.app || "Network"] = by[d.app || "Network"] || []).push(d);
+  return Object.entries(by).sort((x, y) => (x[0] === "Network" ? -1 : y[0] === "Network" ? 1 : x[0].localeCompare(y[0])));
+}
+
 const roleName = (roles, key) => ((roles || []).find((r) => r.key === key) || { name: key }).name;
 
 // ============================================================================
@@ -628,9 +638,18 @@ function AccessEditor({ user, roles, onDone }) {
             <${Segmented} value=${a.all_devices ? "all" : "some"} onChange=${(v) => put(env.id, { all_devices: v === "all" })}
               options=${[{ value: "all", label: "All" }, { value: "some", label: "Only these" }]} />
             ${!a.all_devices && (!cat ? html`<${Spinner} />` : cat.error ? html`<span class="err-text small">${cat.error}</span>` : html`<div class="tag-list">
-              ${cat.devices.map((d) => html`<label class="tag-row" key=${d.mac}><input type="checkbox" checked=${a.devices.includes(d.mac)}
-                onChange=${() => put(env.id, { devices: toggleIn(a.devices, d.mac) })} /><span class=${"status-dot " + (d.online ? "on" : "")}></span>
-                ${d.name}<span class="muted small">${d.model_name}</span></label>`)}</div>`)}
+              ${(cat.apps || []).length > 0 && html`<div class="tag-sub">Every device of an app (now and later)</div>`}
+              ${(cat.apps || []).map((ap) => html`<label class="tag-row" key=${"app:" + ap}><input type="checkbox" checked=${a.devices.includes("app:" + ap)}
+                onChange=${() => put(env.id, { devices: toggleIn(a.devices, "app:" + ap) })} /><${Icon} name=${APP_ICONS[ap]} size=${14} />
+                <b>All ${APP_NAMES[ap]} devices</b></label>`)}
+              ${groupDevices(cat.devices).map(([app, list]) => html`<div class="tag-sub">${app === "Network" ? "Network devices" : `UniFi ${app}`}</div>
+                ${list.map((d) => {
+                  const blanket = a.devices.includes("app:" + appKey(d.app));
+                  return html`<label class="tag-row" key=${d.mac}><input type="checkbox" checked=${blanket || a.devices.includes(d.mac)} disabled=${blanket}
+                    onChange=${() => put(env.id, { devices: toggleIn(a.devices, d.mac) })} /><span class=${"status-dot " + (d.online ? "on" : "")}></span>
+                    ${d.name}<span class="muted small">${d.model_name}</span></label>`;
+                })}`)}</div>`)}
+            ${!(user.caps || []).some((c) => c.startsWith("apps.")) && html`<small class="hint">Their role doesn't show any UniFi app's devices — see Roles &amp; abilities.</small>`}
           </div>
         </div>`}
       </div>`;

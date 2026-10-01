@@ -5,6 +5,34 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.0 — 2026-10-01
+
+### Added
+- **Protect, Access and other UniFi devices.** Cameras, doorbells, door hubs, readers,
+  intercoms, Talk phones... appear in their own sections (*UniFi Protect*, *UniFi Access*,
+  ...) with:
+  - online / offline, model and IP
+  - the **switch port** each is plugged into, a tap away
+  - **Restart**: power-cycles that port (with the *Power-cycle PoE* ability)
+
+  Ports with one show a **camera** or **door** mark, the port panel says what's connected
+  (e.g. *G4 Bullet · Protect*), and the List view shows it too. They're read from the Network
+  app, so no extra keys are needed. They can be hidden in Display options.
+- **UniFi app abilities** for each role and person: **Network devices**, **Protect devices**,
+  **Access devices** and **Other UniFi devices**.
+- **Blanket access per app**: under Users → Access, *Devices they can see* can include
+  **All Network / Protect / Access / other UniFi devices**, which covers devices added later
+  too, on top of single devices. A device shows only when the person's role allows its app
+  *and* their access covers it.
+- Managers can only hand out apps and devices they can see themselves.
+
+### Changed
+- Upgrading gives every existing role the **Network devices** ability, so everyone keeps
+  seeing exactly what they saw in 1.9. Protect, Access and other apps start admin-only, until
+  you tick them for a role or a person. A database backup is taken first, as with every
+  upgrade.
+- The access editor groups devices by app.
+
 ## 1.9 — 2026-10-01
 
 ### Added

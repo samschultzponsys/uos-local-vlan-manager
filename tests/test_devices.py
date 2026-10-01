@@ -1,5 +1,7 @@
 from conftest import configure_unifi, make_user
 
+import db
+
 
 def _state(c, eid, refresh=False):
     return c.get(f"/api/envs/{eid}/state" + ("?refresh=1" if refresh else "")).get_json()
@@ -170,4 +172,54 @@ def test_unifi_refusing_tagging_teaches_the_model(fake, admin):
     entry = next(o for o in _fake_dev(fake, "dev-mini")["port_overrides"] if o["port_idx"] == 3)
     assert entry["native_networkconf_id"] == "net-cam" and "tagged_vlan_mgmt" not in entry
     assert _dev(_state(admin, eid), "dev-mini")["caps"]["tagged_vlans"] is False
+
+
+def test_protect_and_access_devices_found_on_their_ports(fake, admin):
+    eid = configure_unifi(admin)
+    s = _state(admin, eid)
+    apps = {a["name"]: a for a in s["app_devices"]}
+    cam = apps["Rack cam 1"]
+    assert cam["app"] == "Protect" and cam["model"] == "G4 Bullet" and cam["online"]
+    assert cam["switch_name"] == "Rack 7 Switch" and cam["sw_port"] == 6 and cam["ip"] == "10.0.20.14"
+    assert apps["Rack cam 2"]["online"] is False
+    assert apps["Front door hub"]["app"] == "Access" and apps["Front door hub"]["sw_port"] == 11
+    assert _port(s, "dev-sw8", 6)["apps"] == ["Protect"]
+    assert _port(s, "dev-sw8", 6)["clients"][0]["model"] == "G4 Bullet"
+    nets = {n["id"]: n for n in s["networks"]}
+    assert nets["net-cam"]["clients"] == 3 and nets["net-voip"]["clients"] == 0
+
+
+def test_app_abilities_and_blanket_app_access(app, fake, admin):
+    eid = configure_unifi(admin)
+    uid, viewer = make_user(admin, app, "camguy")
+    admin.put(f"/api/users/{uid}/access", json={"envs": [{"env_id": eid}]})
+    s = _state(viewer, eid)
+    assert s["devices"] and s["app_devices"] == []          # viewers start with Network only
+    admin.put(f"/api/users/{uid}", json={"caps_grant": ["apps.protect"], "caps_deny": ["apps.network"]})
+    s = _state(viewer, eid)
+    assert s["devices"] == [] and {a["app"] for a in s["app_devices"]} == {"Protect"}
+    # access limited to "every Protect device": still no Access devices even with the ability
+    admin.put(f"/api/users/{uid}", json={"caps_grant": ["apps.protect", "apps.access", "apps.network"], "caps_deny": []})
+    admin.put(f"/api/users/{uid}/access", json={"envs": [
+        {"env_id": eid, "all_devices": False, "devices": ["app:protect", "aa:00:00:00:00:08"]}]})
+    s = _state(viewer, eid)
+    assert [d["id"] for d in s["devices"]] == ["dev-sw8"]
+    assert {a["app"] for a in s["app_devices"]} == {"Protect"}
+
+
+def test_existing_roles_keep_network_devices_after_upgrade(app):
+    with db.connect() as conn:
+        import perms
+        conn.execute("UPDATE roles SET caps='[\"ports.change\"]' WHERE key='supervisor'")
+        conn.execute("DELETE FROM settings WHERE key='migrated_apps_caps'")
+        perms.migrate(conn)
+        caps = conn.execute("SELECT caps FROM roles WHERE key='supervisor'").fetchone()["caps"]
+    assert "apps.network" in caps
+
+
+def test_app_helpers():
+    import perms
+    import unifi
+    assert unifi._mac("1CEEC950A6D1") == "1c:ee:c9:50:a6:d1"
+    assert perms.app_cap("Protect") == "apps.protect" and perms.app_cap("Talk") == "apps.other"
 

@@ -177,6 +177,23 @@ def public_settings():
     }
 
 
+def _sees(user, acc, mac, app="network"):
+    """May `user` see this device: their role allows its UniFi app, and their access covers it."""
+    return perms.has(user, perms.app_cap(app)) and envs.device_allowed(acc, mac, app)
+
+
+def _app_map(env_id):
+    """{mac: UniFi app} for an environment's devices, from the cached snapshot."""
+    env = envs.get(env_id)
+    try:
+        data, _ = envs.snapshot(env_id).get(envs.client(env), db.setting_bool("protect_uplinks"))
+    except (unifi.UniFiError, TypeError):
+        return {}
+    out = {d["mac"]: "network" for d in data["devices"]}
+    out.update({a["mac"]: a["app"].lower() for a in data.get("app_devices") or []})
+    return out
+
+
 def _env_or_404(env_id):
     acc = envs.access(auth.current(), env_id)
     if acc is None:
@@ -215,9 +232,10 @@ def api_env_state(env_id):
     out["networks"] = [{**n, "allowed": envs.vlan_allowed(acc, n["id"]),
                         # client counts are site-wide: only for people who see every device
                         "clients": n.get("clients") if acc["all_devices"] else None} for n in data["networks"]]
-    out["devices"] = unifi.apply_model_caps([d for d in data["devices"] if envs.device_allowed(acc, d["mac"])],
+    me = auth.current()
+    out["devices"] = unifi.apply_model_caps([d for d in data["devices"] if _sees(me, acc, d["mac"])],
                                             db.get_json("model_caps", {}))
-    out.pop("app_devices", None)
+    out["app_devices"] = [a for a in data.get("app_devices") or [] if _sees(me, acc, a["mac"], a["app"])]
     if not data.get("readonly"):
         envs.annotate_locks(env_id, out["devices"])
     return jsonify(out)
@@ -275,7 +293,7 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
         # always work from what UniFi has right now, not from a cache
         raw_devs = c.raw_devices()
         dev = next((d for d in raw_devs if d.get("_id") == device_id), None)
-        if dev is None or not envs.device_allowed(acc, dev.get("mac")):
+        if dev is None or not _sees(auth.current(), acc, dev.get("mac")):
             return _deny("That device is no longer on the controller", 404)
         norm = unifi.normalize(raw_devs, c.raw_networks(), c.raw_portconfs(), [], db.setting_bool("protect_uplinks"))
     except unifi.UniFiError as e:
@@ -475,7 +493,7 @@ def _device_ctx(env_id, device_id, idx=None):
     try:
         raw_devs = c.raw_devices()
         dev = next((d for d in raw_devs if d.get("_id") == device_id), None)
-        if dev is None or not envs.device_allowed(acc, dev.get("mac")):
+        if dev is None or not _sees(auth.current(), acc, dev.get("mac")):
             return None, _deny("That device is no longer on the controller", 404)
         norm = unifi.normalize(raw_devs, c.raw_networks(), c.raw_portconfs(), [], db.setting_bool("protect_uplinks"))
     except unifi.UniFiError as e:
@@ -911,10 +929,16 @@ def api_admin_env_catalog(env_id):
         data, _ = envs.snapshot(env_id).get(envs.client(env), db.setting_bool("protect_uplinks"))
     except unifi.UniFiError as e:
         return jsonify({"ok": False, "error": str(e), "networks": [], "devices": []})
-    return jsonify({"ok": True,
-                    "networks": [n for n in data["networks"] if envs.vlan_allowed(mine, n["id"])],
-                    "devices": [{k: d[k] for k in ("id", "mac", "name", "model_name", "type_label", "port_count", "online")}
-                                for d in data["devices"] if envs.device_allowed(mine, d["mac"])]})
+    keys = ("id", "mac", "name", "model_name", "type_label", "port_count", "online")
+    devices = [{**{k: d[k] for k in keys}, "app": "Network"} for d in data["devices"] if _sees(me, mine, d["mac"])]
+    devices += [{"id": a["mac"], "mac": a["mac"], "name": a["name"], "model_name": a["model"], "type_label": a["app"],
+                 "port_count": 0, "online": a["online"], "app": a["app"]}
+                for a in data.get("app_devices") or [] if _sees(me, mine, a["mac"], a["app"])]
+    # "every device of an app" choices this person can hand out
+    apps = [t for t in ("network", "protect", "access", "other")
+            if perms.has(me, f"apps.{t}") and (mine["all_devices"] or f"app:{t}" in mine["devices"])]
+    return jsonify({"ok": True, "networks": [n for n in data["networks"] if envs.vlan_allowed(mine, n["id"])],
+                    "devices": devices, "apps": apps})
 
 
 # ----------------------------------------------------------------------------
@@ -934,7 +958,7 @@ def api_user_access(uid):
             return _deny("envs must be a list")
         if not perms.has(me, "envs.manage"):
             try:
-                entries = envs.limit_grant(me, uid, entries)
+                entries = envs.limit_grant(me, uid, entries, _app_map)
             except ValueError as e:
                 return _deny(str(e), 403)
         envs.set_user_access(uid, entries)

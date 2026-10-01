@@ -52,6 +52,9 @@ manage only their own switches and only the VLANs you allow.
 - **Switches that can't filter tagged VLANs** (like the **USW Flex Mini**) only offer the
   native VLAN; the tagging setting, which the switch would ignore, is hidden. Admins can mark
   other models the same way, or undo it, from any port panel.
+- **Protect, Access and other UniFi devices** (cameras, door hubs, readers, intercoms...),
+  each with the switch port it's plugged into, a link to that port and a one-tap restart by
+  power-cycling it. Ports with one show a camera or door mark.
 - **All your UniFi network devices**, grouped into gateways, switches and access points, each
   with a details panel (model, firmware, uptime, uplink, clients...). With the right abilities:
   rename, blink the locate light, set the status LED, restart, update firmware, name ports,
@@ -164,7 +167,15 @@ environment they can also pick:
   - **Custom** tagging only ever includes networks from the list. The server enforces this,
     not just the UI.
 - **Devices they can see**: *All*, or only the ones ticked. Stored by MAC, so a switch that's
-  forgotten and re-adopted keeps its access.
+  forgotten and re-adopted keeps its access. You can also tick a whole app, **All Network /
+  Protect / Access / other UniFi devices**, which includes devices added later.
+
+On top of that, each role (and each person) has a **UniFi apps** ability per app: *Network
+devices*, *Protect devices*, *Access devices*, *Other UniFi devices*. Someone only sees an
+app's devices if their role allows that app **and** their device access covers the device.
+For example, a camera installer can be a Viewer with *Protect devices* and *Power-cycle PoE*,
+and access to *All Protect devices*: they see every camera, the port it's on, and can restart
+it, and nothing else.
 
 ### Roles & abilities
 

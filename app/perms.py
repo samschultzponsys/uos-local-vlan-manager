@@ -39,6 +39,10 @@ CAPS = [
      "Restart a camera, phone or access point by cycling its port's power."),
     ("devices.manage", "Devices", "Manage devices",
      "Rename devices and ports, blink the locate light, turn the LED on / off, restart and update firmware."),
+    ("apps.network", "UniFi apps", "Network devices", "Gateways, switches and access points."),
+    ("apps.protect", "UniFi apps", "Protect devices", "Cameras, doorbells, sensors... and the port each is on."),
+    ("apps.access", "UniFi apps", "Access devices", "Door hubs, readers and intercoms."),
+    ("apps.other", "UniFi apps", "Other UniFi devices", "Talk, Connect, LED and anything else."),
     ("env.info", "Environments", "See environment settings", "Connection, site and notes. Never the API key."),
     ("activity.view", "Environments", "See the activity log", "Changes made in their environments."),
     ("users.view", "People", "See the people below them", "Opens the Users page, showing only lower roles."),
@@ -59,9 +63,16 @@ ALL_CAPS = CAP_KEYS + ADMIN_CAPS
 
 DEFAULT_ROLES = [
     (ADMIN, "Admin", ADMIN_LEVEL, ALL_CAPS),
-    ("supervisor", "Supervisor", 50, ["ports.change", "env.info", "activity.view"]),
-    ("viewer", "Viewer", 10, []),
+    ("supervisor", "Supervisor", 50, ["ports.change", "env.info", "activity.view", "apps.network"]),
+    ("viewer", "Viewer", 10, ["apps.network"]),
 ]
+APPS = ("network", "protect", "access")
+
+
+def app_cap(app):
+    """The ability that lets someone see devices of a UniFi app ("Network", "Protect", "Talk"...)."""
+    a = (app or "network").lower()
+    return f"apps.{a}" if a in APPS else "apps.other"
 
 
 def _loads(v):
@@ -76,6 +87,17 @@ def seed(conn):
     for key, name, level, caps in DEFAULT_ROLES:
         conn.execute("INSERT OR IGNORE INTO roles (key, name, level, caps, builtin) VALUES (?,?,?,?,1)",
                      (key, name, level, json.dumps(caps)))
+
+
+def migrate(conn):
+    """1.7 split devices by UniFi app. Everyone kept seeing Network devices as before."""
+    if conn.execute("SELECT 1 FROM settings WHERE key='migrated_apps_caps'").fetchone():
+        return
+    for r in conn.execute("SELECT key, caps FROM roles").fetchall():
+        caps = _loads(r["caps"])
+        if "apps.network" not in caps:
+            conn.execute("UPDATE roles SET caps=? WHERE key=?", (json.dumps(caps + ["apps.network"]), r["key"]))
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('migrated_apps_caps', '1')")
 
 
 def roles():

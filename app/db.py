@@ -269,6 +269,7 @@ def init(version):
         _migrate_single_console(db)
         import perms
         perms.seed(db)
+        perms.migrate(db)
         db.execute("INSERT INTO settings (key, value) VALUES ('schema_version', ?) "
                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (version,))
         db.commit()
