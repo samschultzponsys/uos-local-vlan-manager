@@ -917,7 +917,7 @@ select option:checked { background-color: var(--accent); color: #fff; }
 /* on unless the person picks Solid (the OS "reduce motion" setting doesn't turn it off: nothing moves, it only glows) */
 .fx-pulse .port.up:not(.wan):not(.dim) {
   background: linear-gradient(180deg, color-mix(in srgb, color-mix(in srgb, var(--c) 78%, #fff) var(--pf), transparent), color-mix(in srgb, var(--c) var(--pf), transparent));
-  animation: portPulse 3.6s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -.3s); }
+  animation: portPulse 3.6s ease-in-out infinite; }
 .fx-pulse .prow.up .prow-num { animation: portPulse 3.6s ease-in-out infinite; }
 
 /* the key: its own collapsible section */

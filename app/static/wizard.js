@@ -46,7 +46,8 @@ function sampleDevice(networks) {
 
 function screenClass(SCREENS, w) { return SCREENS.find((x) => w <= x.max).key; }
 
-export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme, onlyNew }) {
+export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme, onlyNew, onCancel }) {
+  const [theme0] = useState(theme);   // put back if they cancel
   const { NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, startOptions } = kit;
   const caps = me.caps || [];
   const [data, setData] = useState(null);
@@ -194,10 +195,12 @@ export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme, onlyNew }
     if (s.key === "start") setPv({ overview: false, start: "env" });
     if (last) finish(); else setStep(step + 1);
   };
-  // no way around it: everyone goes through once (each step can keep the defaults)
-  return html`<${Modal} title=${onlyNew ? "A few new choices" : "Set up your view"} icon="sparkle" wide
+  // the first time (and new choices after an update) everyone goes through it; opened again from the menu it can be closed
+  const cancel = onCancel && (() => { if (theme !== theme0) setTheme(theme0); onCancel(); });
+  return html`<${Modal} title=${onlyNew ? "A few new choices" : "Set up your view"} icon="sparkle" wide onClose=${cancel}
     footer=${html`<div class="wz-dots">${shownSteps.map((x, i) => html`<span class=${i === step ? "on" : i < step ? "done" : ""} key=${x.key}></span>`)}</div>
       <span class="grow"></span>
+      ${cancel && html`<button class="btn ghost" onClick=${cancel}>Cancel</button>`}
       ${step > 0 && html`<button class="btn ghost" onClick=${() => setStep(step - 1)}>Back</button>`}
       <button class="btn ghost" onClick=${keepDefaults}>Keep the defaults</button>
       <button class="btn primary" onClick=${() => (last ? finish() : setStep(step + 1))}>${step === 0 && !onlyNew ? "Let's go" : last ? "Done" : "Next"}</button>`}>

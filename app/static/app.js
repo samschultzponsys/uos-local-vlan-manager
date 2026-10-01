@@ -1231,7 +1231,10 @@ function App() {
   const modalRef = useRef(null);
   modalRef.current = modal;
   // open the tour once nothing else is up (What's new, the setup wizard...) - never on top of them
-  const manualTour = useRef(false);   // "Take the tour" from the menu wins over an automatic one
+  const manualTour = useRef(false);
+  // every lit port breathes in step: pin each glow animation to the same clock (ports drawn later would drift)
+  useEffect(syncPulse);
+  useInterval(syncPulse, 2000);   // ports other parts of the page draw on their own (All devices, previews)   // "Take the tour" from the menu wins over an automatic one
   const startTour = (t) => setTimeout(() => {
     if (!modalRef.current && (!t.since || !manualTour.current)) setTour(t);
   }, 450);
@@ -1604,6 +1607,7 @@ function App() {
     ${(modal === "wizard" || modal === "wizard-new") && html`<${SetupWizard} me=${me} prefs=${prefs} onlyNew=${modal === "wizard-new"}
       kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, appName: settings.app_name, startOptions, FX_OPTIONS }}
       theme=${theme} setTheme=${setTheme}
+      onCancel=${modal === "wizard" && !wizardNeeded(prefs) ? () => setModal(null) : null}
       onSave=${async (patch) => { await savePrefs(patch); setModal(null); setView(startValue({ ...PORTS_DEFAULTS, ...patch.ports_view }, canFb));
         toast("All set. Redo it any time from the menu: Set up my view"); }} />`}
     ${modal === "display" && html`<${DisplayModal} lg=${lg} setLg=${setLg} pv=${pv} setPv=${setPv} sample=${sample} scales=${scales} setScale=${setScale}
@@ -1630,6 +1634,10 @@ function App() {
 }
 
 const BUILD = (document.querySelector('meta[name="vlanmgr-build"]') || {}).content || "";
+function syncPulse() {
+  if (!document.getAnimations) return;
+  for (const a of document.getAnimations()) if (a.animationName === "portPulse" && a.startTime !== 0) a.startTime = 0;
+}
 // how strongly lit ports glow ("pulse" is the default, Soft)
 export const FX_OPTIONS = [{ value: "faint", label: "Faint" }, { value: "pulse", label: "Soft" }, { value: "bright", label: "Bright" }, { value: "solid", label: "Solid" }];
 const TOUR_VERSION = "3.7";

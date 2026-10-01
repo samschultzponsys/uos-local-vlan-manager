@@ -5,6 +5,15 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 4.2 — 2026-10-01
+
+### Fixed
+- **Ports breathe in sync**: every lit port on every switch now glows up and fades down together,
+  instead of a ripple across the bank (ports drawn later, e.g. after a refresh, join the same beat).
+- **Set up my view** opened from the menu after you've done the setup now has a **×** and a
+  **Cancel** button (and Esc): nothing is saved and a theme you tried is put back. The first-time
+  setup and the "new choices" after an update still have to be finished.
+
 ## 4.1 — 2026-10-01
 
 ### Changed
