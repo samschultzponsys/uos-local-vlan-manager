@@ -161,7 +161,7 @@ h4.section:first-child { margin-top: 0; }
 .danger-banner a { color: #fff; text-decoration: underline; font-weight: 600; }
 .warn-banner { background: rgba(251, 191, 36, .12); color: var(--warn); border-bottom: 1px solid rgba(251, 191, 36, .25); }
 
-.topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+.topbar { position: sticky; top: 0; z-index: 35; display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 12px 24px; background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: blur(14px) saturate(1.4);
   border-bottom: 1px solid var(--border); }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -199,7 +199,7 @@ h4.section:first-child { margin-top: 0; }
 @keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
 
 /* ---------- main ---------- */
-.main { max-width: 1600px; margin: 0 auto; padding: 20px 24px 80px; transition: padding-right .2s; }
+.main { max-width: none; margin: 0 auto; padding: 20px 24px 80px; transition: padding-right .2s; }
 .main.with-drawer { padding-right: 444px; }
 .boot { height: 100vh; display: grid; place-items: center; align-content: center; gap: 20px; color: var(--muted); }
 
@@ -236,7 +236,9 @@ h4.section:first-child { margin-top: 0; }
 .empty-sm { padding: 30px; text-align: center; color: var(--muted); }
 
 /* ---------- device card ---------- */
-.devices { display: flex; flex-direction: column; gap: 18px; }
+/* cards flow side by side when there's room (wide and ultrawide screens), each as wide as its switch */
+.devices { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 18px; }
+.devices > .device { flex: 1 1 auto; min-width: min(100%, 420px); max-width: 100%; }
 .device { background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface) 70%, var(--bg)));
   border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .device.offline { opacity: .65; }
@@ -273,11 +275,11 @@ h4.section:first-child { margin-top: 0; }
 .chassis.uap, .chassis.udm, .chassis.ugw, .chassis.uxg { border-radius: 16px; }
 
 .faceplate { position: relative; display: flex; align-items: center; gap: 14px; }
-.pgroup { display: grid; grid-template-columns: repeat(var(--cols), 46px); gap: 6px; }
-.pgroup.two { grid-template-rows: repeat(2, 42px); grid-auto-flow: column; }
+.pgroup { display: grid; grid-template-columns: repeat(var(--cols), var(--pw)); gap: var(--pg); }
+.pgroup.two { grid-template-rows: repeat(2, var(--ph)); grid-auto-flow: column; }
 .sfp-sep { width: 1px; align-self: stretch; background: rgba(0, 0, 0, .1); }
 
-.port { position: relative; width: 46px; height: 42px; padding: 0; border-radius: 7px; cursor: pointer; font: inherit;
+.port { position: relative; width: var(--pw); height: var(--ph); padding: 0; border-radius: 7px; cursor: pointer; font: inherit;
   border: 2px solid color-mix(in srgb, var(--c) 75%, transparent);
   background: linear-gradient(180deg, #232833, var(--socket));
   color: var(--socket-text);
@@ -289,14 +291,14 @@ h4.section:first-child { margin-top: 0; }
 .port.up { border-color: rgba(0, 0, 0, .25); color: var(--fg);
   background: linear-gradient(180deg, color-mix(in srgb, var(--c) 78%, #fff), var(--c));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 4px 14px -4px var(--c), 0 1px 0 rgba(255, 255, 255, .7); }
-.port.sfp { width: 56px; border-radius: 4px; }
+.port.sfp { width: calc(var(--pw) + 10px); border-radius: 4px; }
 .port.sfp::after { width: 30px; height: 3px; }
 .port.off { background: repeating-linear-gradient(-45deg, #252a34 0 3px, #1d2129 3px 9px); }
 .port:hover { transform: translateY(-2px); z-index: 2; }
 .port.sel { outline: 3px solid var(--accent); outline-offset: 2px; z-index: 3; transform: translateY(-2px); }
 .port.dim { opacity: .2; filter: grayscale(.9); }
 .port:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-.p-num { position: absolute; top: 3px; left: 5px; font-size: 12px; font-weight: 750; line-height: 1; }
+.p-num { position: absolute; top: 3px; left: 5px; font-size: var(--pf, 12px); font-weight: 750; line-height: 1; }
 .p-vlan { position: absolute; bottom: 4px; left: 5px; font-size: 9.5px; font-weight: 600; font-family: ui-monospace, Menlo, monospace;
   line-height: 1; opacity: .9; }
 .p-poe { position: absolute; top: 3px; right: 3px; line-height: 0; }
@@ -721,7 +723,7 @@ details.more summary { cursor: pointer; color: var(--accent); font-weight: 550; 
 
 /* port roles and tagging marks (1.7) */
 .p-flags .flag-role { color: #93c5fd; filter: drop-shadow(0 0 2px rgba(0, 0, 0, .6)); }
-.p-flags .flag-role.wan { color: #fca5a5; }
+.p-flags .flag-role.r-wan { color: #fca5a5; }
 .port.up .p-flags .flag-role { color: var(--fg); filter: none; }
 .port.wan { --c: #475569; }
 .port.wan .p-vlan { letter-spacing: .04em; }
@@ -862,3 +864,77 @@ details.more summary { cursor: pointer; color: var(--accent); font-weight: 550; 
   .app-row > .btn { grid-column: 3; grid-row: 1 / span 2; }
 }
 .app-row .link-btn { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+/* ---------- 2.1 ---------- */
+/* port size grows with the screen */
+:root { --pw: 46px; --ph: 42px; --pg: 6px; --pf: 12px; }
+@media (min-width: 2200px) { :root { --pw: 56px; --ph: 51px; --pg: 7px; --pf: 14px; } body { font-size: 15.5px; } }
+@media (min-width: 3000px) { :root { --pw: 70px; --ph: 64px; --pg: 9px; --pf: 16px; } body { font-size: 18px; } }
+/* Display options -> Port size overrides the automatic size */
+.main.ps-s { --pw: 40px; --ph: 36px; --pg: 5px; --pf: 11px; }
+.main.ps-m { --pw: 46px; --ph: 42px; --pg: 6px; --pf: 12px; }
+.main.ps-l { --pw: 58px; --ph: 53px; --pg: 7px; --pf: 14px; }
+.main.ps-xl { --pw: 72px; --ph: 66px; --pg: 9px; --pf: 16px; }
+
+/* native dropdown lists stay readable in the dark theme (Chrome on Windows draws them white) */
+select option, select optgroup { background-color: var(--surface); color: var(--text); }
+select option:checked { background-color: var(--accent); color: #fff; }
+
+/* glyphs on a lit port: black or white for that VLAN color, with a halo */
+.port.up .p-poe, .port.up .p-flags > span, .port.up .p-flags .flag-lock, .port.up .p-flags .flag-role, .port.up .p-flags .flag-app {
+  color: var(--fg); filter: drop-shadow(0 0 1px var(--halo)) drop-shadow(0 0 2px var(--halo)); }
+.port.up .p-poe.active { color: var(--fg); filter: drop-shadow(0 0 1px var(--halo)) drop-shadow(0 0 3px rgba(250, 204, 21, .95)); }
+.port.up .p-poe.on { opacity: .6; }
+.port.up .p-flags { opacity: 1; }
+.port.up .p-num, .port.up .p-vlan { text-shadow: 0 0 2px var(--halo); }
+
+/* WAN: dark bronze socket, gold globe */
+.port.wan, .port.wan.up { background: linear-gradient(180deg, #4a3f27, #2a2418); border: 2px solid #d4a017; color: #fbbf24;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .4), 0 0 12px -3px rgba(251, 191, 36, .7); }
+.port.wan .p-wan { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -54%); line-height: 0; color: #fbbf24;
+  filter: drop-shadow(0 0 4px rgba(251, 191, 36, .8)); }
+.port.wan .p-vlan { color: #fbbf24; font-weight: 700; letter-spacing: .04em; }
+.port.wan:not(.mini) .p-vlan { display: none; }
+.port.wan .p-flags, .port.wan .p-poe { display: none; }
+.port.wan.mini .p-num { display: none; }
+.prow.wan .prow-num { background: linear-gradient(180deg, #4a3f27, #2a2418) !important; border-color: #d4a017 !important; color: #fbbf24 !important; }
+.k-wan { display: inline-grid; place-items: center; width: 18px; height: 14px; border-radius: 3px; border: 1.5px solid #d4a017;
+  background: #2a2418; color: #fbbf24; }
+
+/* lit ports breathe in their network's color (Display options -> Solid turns it off) */
+@keyframes portPulse {
+  0%, 100% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 3px 10px -4px var(--c), 0 1px 0 rgba(255, 255, 255, .7); filter: saturate(1); }
+  50% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 0 16px 1px color-mix(in srgb, var(--c) 85%, transparent), 0 1px 0 rgba(255, 255, 255, .7); filter: saturate(1.25) brightness(1.06); }
+}
+.fx-pulse .port.up:not(.wan):not(.dim) { animation: portPulse 3.2s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -.23s); }
+.fx-pulse .prow.up .prow-num { animation: portPulse 3.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .fx-pulse .port.up, .fx-pulse .prow.up .prow-num { animation: none !important; } }
+
+/* the key: its own collapsible section */
+.key-box { margin-top: 20px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.key-head { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 14px; border: 0; background: none; color: var(--text);
+  font: inherit; cursor: pointer; text-align: left; }
+.key-head .chev { display: inline-flex; color: var(--muted); transition: transform .15s; }
+.key-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 22px; padding: 2px 16px 16px; }
+.key-sec.example { grid-column: span 1; min-width: 300px; }
+.key-sec.example .chip { max-width: none; }
+.key-sec.example .chip-name { overflow: visible; }
+.key-sec { min-width: 0; }
+.key-title { margin-bottom: 8px; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+.key-sec .key { margin-top: 0; }
+.key-sec p.key-note { display: block; margin: 10px 0 0; font-size: 12px; color: var(--faint); }
+.key-sec p.key-note .icon { vertical-align: -2px; margin-right: 6px; }
+.key-sec p.key-note b { color: var(--muted); }
+.key-sec.example { padding: 12px 14px; border-radius: 12px; border: 1px dashed var(--border2); background: var(--bg2); }
+.kx-chip { margin-bottom: 10px; }
+.kx-parts { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.kx-parts li { display: grid; grid-template-columns: minmax(70px, auto) minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.kx-el { display: inline-flex; align-items: center; min-width: 0; overflow: hidden; color: var(--text); }
+.kx-sw { width: 14px; height: 14px; border-radius: 4px; background: var(--c); box-shadow: 0 0 8px -1px var(--c); }
+.kx-mode { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--surface3); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.kx-mode.off { opacity: .6; text-decoration: line-through; }
+.kx-mode.always { color: var(--good); }
+@media (max-width: 760px) {
+  .key-sec.example { min-width: 0; }
+  .key-sec.example .chip { flex-wrap: wrap; height: auto !important; padding: 6px 12px !important; row-gap: 4px; }
+}

@@ -43,8 +43,9 @@ manage only their own switches and only the VLANs you allow.
   their own. Tap a network in the legend to highlight every port that carries it.
 - **Display options, per person**: each part of a network bubble (VLAN number, ports on it,
   connected clients, IP subnet) shown always, on hover / tap, or never; bubbles wrapped, in one
-  row or a grid; and the ports drawn as tiles / faceplate, a compact grid or a list, chosen
-  separately for phones and larger screens.
+  row or a grid; and the ports drawn as tiles / faceplate, a compact grid or a list. Settings are saved to your account, so they follow you to
+  any browser; the port view is kept per screen size (phone, tablet / folding phone, laptop /
+  monitor, ultrawide / 4K) and picked live from the window width.
 - **Safety rails**: uplinks, links to other UniFi devices, LAG and mirror ports are
   **protected**: changing one could cut off the switch or what's behind it, so it takes the
   *Change protected ports* ability and a confirmation. WAN ports can't be changed here at

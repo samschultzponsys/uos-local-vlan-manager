@@ -139,11 +139,18 @@ export function vlanColors(networks, site = {}, mine = {}) {
   return out;
 }
 
-export function readable(hex) {
-  const h = hex.replace("#", "");
-  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.substr(i, 2), 16));
-  return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? "#0b0d12" : "#ffffff";
+/** Black or white text for a background color, whichever contrasts more (WCAG luminance).
+ *  Port tiles are drawn a little lighter at the top, so the color is lifted 10% toward white first. */
+export function readable(hex, lift = 0.1) {
+  const h = String(hex || "#64748b").replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const lin = (v) => { const c = (v + (255 - v) * lift) / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const [r, g, b] = [0, 2, 4].map((i) => lin(parseInt(full.substr(i, 2), 16) || 0));
+  const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return (L + 0.05) / 0.05 > 1.05 / (L + 0.05) ? "#0b0d12" : "#ffffff";
 }
+/** A soft halo behind glyphs drawn in readable(hex), so small icons stay legible on any color. */
+export const glyphHalo = (fg) => (fg === "#ffffff" ? "rgba(0,0,0,.55)" : "rgba(255,255,255,.55)");
 
 export function lsGet(k, d = null) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
 export function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ } }

@@ -5,6 +5,37 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.1 — 2026-10-01
+
+### Added
+- **Port view per screen size**, detected live from the window width, each remembered
+  separately on your account:
+  - **Phone** (under 600 px)
+  - **Tablet or folding phone** (600 – 1099 px)
+  - **Laptop or monitor** (1100 – 2199 px)
+  - **Ultrawide or 4K** (2200 px and wider)
+
+  Turning a phone sideways or opening a folding phone switches to the next size up. Display
+  options shows which one you're on. Your 2.0 phone / larger-screen choices carry over.
+- **Big screens are used properly**: device cards sit side by side when they fit, and ports
+  grow on ultrawide and 4K screens. **Port size** (Auto, S, M, L, XL) in Display options
+  overrides it.
+- **Lit ports pulse** gently in their network's color. Display options → *Ports with link*
+  → **Solid** turns it off. It's also off when your system asks for reduced motion.
+- **WAN ports** have a bronze socket, a gold border and a **large gold globe**.
+- **The key is its own section**, collapsible, split into *Ports*, *Marks* and an **example
+  network bubble** with each part labelled, and whether it shows always, on hover / tap or
+  not at all. It collapses when you close Display options.
+
+### Fixed
+- **Marks on ports now pick black or white for each VLAN color** (by contrast, with a soft
+  halo), so lock, PoE, uplink and tagging marks stay readable on yellow, white or dark
+  networks. Port numbers and VLAN labels get the same treatment.
+- The *UniFi device link* mark was drawn as a dark blob.
+- The **user menu opened behind the port panel**.
+- **Environment and other dropdown lists were unreadable** in the dark theme on some browsers
+  (white list, light text).
+
 ## 2.0 — 2026-10-01
 
 ### Added

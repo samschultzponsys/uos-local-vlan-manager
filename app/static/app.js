@@ -1,7 +1,7 @@
 import { render, useState, useEffect, useMemo, useCallback, useErrorBoundary } from "./vendor/preact-htm.module.js";
 import {
   html, api, Icon, Modal, Segmented, Toggle, Toasts, toast, Spinner, useInterval, Logo, markdown,
-  vlanColors, readable, speedLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
+  vlanColors, readable, glyphHalo, speedLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
 } from "./ui.js";
 import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
 
@@ -25,9 +25,9 @@ const hideTip = () => setTipGlobal(null);
 
 // each part of a network bubble: "always" | "hover" | "off"
 export const LEGEND_DEFAULTS = { vlan: "always", ports: "always", clients: "hover", ip: "hover", ip_format: "subnet",
-  layout: "wrap", sort: "vlan", hide_unused: false, open: true };
+  layout: "wrap", sort: "vlan", hide_unused: false, open: true, key_open: true };
 export const PORTS_DEFAULTS = { phone: "tiles", desktop: "faceplate", hide_down: false, tag_marks: true, group: true,
-  apps: true };
+  apps: true, fx: "pulse", size: "auto" };
 
 const TAG_TEXT = { auto: "All VLANs tagged", block_all: "Untagged only", custom: "Some VLANs tagged" };
 const ROLE = {
@@ -99,7 +99,7 @@ function PortTip({ port, device, networks }) {
 function Flags({ port, device, pv, size = 10 }) {
   const tagMark = pv.tag_marks && !port.role && !nativeOnly(device) && port.native_network_id !== null;
   return html`<span class="p-flags">
-    ${port.role && html`<span class=${"flag-role " + port.role} title=${roleLine(port)}><${Icon} name=${ROLE[port.role].icon} size=${size} /></span>`}
+    ${port.role && html`<span class=${"flag-role r-" + port.role} title=${roleLine(port)}><${Icon} name=${ROLE[port.role].icon} size=${size} /></span>`}
     ${!port.role && port.protected && html`<span title="Protected"><${Icon} name="shield" size=${size} /></span>`}
     ${tagMark && port.tagged_mode === "auto" && html`<span title="All VLANs tagged"><${Icon} name="trunk" size=${size} /></span>`}
     ${tagMark && port.tagged_mode === "custom" && html`<span title="Some VLANs tagged"><${Icon} name="trunksome" size=${size} /></span>`}
@@ -117,11 +117,12 @@ function tileLabel(port, n) {
 
 function PortTile({ port, device, networks, colors, highlight, selected, onPick, pv, mini }) {
   const n = netOf(networks, port.native_network_id);
-  const color = port.wan ? "#475569" : colors[port.native_network_id] || "#64748b";
+  const color = port.wan ? "#3b3426" : colors[port.native_network_id] || "#64748b";
   const dim = highlight && !carries(port, highlight);
   const cls = ["port", port.up ? "up" : "down", port.enabled ? "" : "off", dim ? "dim" : "", selected ? "sel" : "",
     port.sfp ? "sfp" : "", mini ? "mini" : "", port.wan ? "wan" : ""].join(" ");
-  return html`<button class=${cls} style=${`--c:${color};--fg:${readable(color)}`}
+  const fg = port.wan ? "#fbbf24" : readable(color);
+  return html`<button class=${cls} style=${`--c:${color};--fg:${fg};--halo:${glyphHalo(fg)};--i:${port.idx}`}
     onClick=${() => { hideTip(); onPick(device.id, port.idx); }}
     onMouseEnter=${canHover ? (e) => showTip(e, html`<${PortTip} port=${port} device=${device} networks=${networks} />`) : undefined}
     onMouseLeave=${canHover ? hideTip : undefined}
@@ -129,9 +130,10 @@ function PortTile({ port, device, networks, colors, highlight, selected, onPick,
     <span class="p-num">${port.idx}</span>
     ${!mini && port.poe_capable && html`<span class=${"p-poe " + (port.poe_active ? "active" : port.poe_enabled ? "on" : "offpoe")}>
       <${Icon} name="bolt" size=${11} fill=${port.poe_active} /></span>`}
+    ${port.wan && html`<span class="p-wan"><${Icon} name="globe" size=${mini ? 16 : 20} /></span>`}
     ${!mini && html`<span class="p-vlan">${tileLabel(port, n)}</span>`}
-    ${mini ? (port.lock || port.role) && html`<span class="p-flags">${port.lock ? html`<span class="flag-lock"><${Icon} name="lock" size=${9} /></span>`
-      : html`<span class=${"flag-role " + port.role}><${Icon} name=${ROLE[port.role].icon} size=${9} /></span>`}</span>`
+    ${mini ? (port.lock || (port.role && !port.wan)) && html`<span class="p-flags">${port.lock ? html`<span class="flag-lock"><${Icon} name="lock" size=${9} /></span>`
+      : html`<span class=${"flag-role r-" + port.role}><${Icon} name=${ROLE[port.role].icon} size=${9} /></span>`}</span>`
       : html`<${Flags} port=${port} device=${device} pv=${pv} />`}
     <span class="p-led"></span>
   </button>`;
@@ -139,13 +141,15 @@ function PortTile({ port, device, networks, colors, highlight, selected, onPick,
 
 function PortRow({ port, device, networks, colors, highlight, selected, onPick, pv }) {
   const n = netOf(networks, port.native_network_id);
-  const color = port.wan ? "#475569" : colors[port.native_network_id] || "#64748b";
+  const color = port.wan ? "#3b3426" : colors[port.native_network_id] || "#64748b";
   const dim = highlight && !carries(port, highlight);
   const c = port.clients[0];
+  const fg = port.wan ? "#fbbf24" : readable(color);
   const who = port.peer || (c ? c.name || c.hostname || c.mac : port.lldp ? port.lldp.name : "");
-  return html`<button class=${"prow" + (port.up ? " up" : "") + (dim ? " dim" : "") + (selected ? " sel" : "")} style=${`--c:${color};--fg:${readable(color)}`}
+  return html`<button class=${"prow" + (port.up ? " up" : "") + (dim ? " dim" : "") + (selected ? " sel" : "") + (port.wan ? " wan" : "")}
+    style=${`--c:${color};--fg:${fg};--halo:${glyphHalo(fg)}`}
     onClick=${() => onPick(device.id, port.idx)}>
-    <span class="prow-num">${port.idx}</span>
+    <span class="prow-num">${port.wan ? html`<${Icon} name="globe" size=${16} />` : port.idx}</span>
     <span class="prow-main"><b>${port.wan ? "WAN" : n ? n.name : port.native_network_id === null ? (port.media_label || "Port") : "?"}</b>
       <span class="muted">${n && !port.wan ? `VLAN ${n.vlan}` : ""}${port.name !== `Port ${port.idx}` ? `${n && !port.wan ? " · " : ""}${port.name}` : ""}</span></span>
     <span class="prow-who">${who && html`<${Icon} name=${port.peer ? ROLE[port.role] ? ROLE[port.role].icon : "link" : APP_ICON[c && c.app] || "plug"} size=${12} />${who}${port.client_count > 1 ? ` +${port.client_count - 1}` : ""}`}</span>
@@ -169,11 +173,35 @@ function useMobile() {
   return m;
 }
 
+// screen sizes, each with its own port view (detected from the window width, live)
+export const SCREENS = [
+  { key: "phone", label: "Phone", hint: "under 600 px wide", icon: "phone", max: 599 },
+  { key: "tablet", label: "Tablet or folding phone", hint: "600 – 1099 px", icon: "grid", max: 1099 },
+  { key: "desktop", label: "Laptop or monitor", hint: "1100 – 2199 px", icon: "server", max: 2199 },
+  { key: "large", label: "Ultrawide or 4K", hint: "2200 px and wider", icon: "sliders", max: Infinity },
+];
+const screenOf = (w) => SCREENS.find((x) => w <= x.max).key;
+export function useScreen() {
+  const [k, setK] = useState(screenOf(typeof innerWidth === "number" ? innerWidth : 1280));
+  useEffect(() => {
+    const f = () => setK(screenOf(innerWidth));
+    addEventListener("resize", f);
+    return () => removeEventListener("resize", f);
+  }, []);
+  return k;
+}
+/** The port view for a screen size; people from before 2.1 had one setting for phones and one for the rest. */
+export function viewFor(pv, screen) {
+  const v = (pv.views || {})[screen];
+  if (v) return v;
+  return screen === "phone" ? pv.phone || "tiles" : pv.desktop || "faceplate";
+}
+
 function chunk(list, n) { const out = []; for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n)); return out; }
 
 function Faceplate({ device, pv, ...rest }) {
   const mobile = useMobile();
-  const view = mobile ? pv.phone : pv.desktop;
+  const view = viewFor(pv, useScreen());
   const sel = (p) => rest.sel && rest.sel.d === device.id && rest.sel.i === p.idx;
   const tile = (p, mini) => html`<${PortTile} key=${p.idx} port=${p} device=${device} selected=${sel(p)} pv=${pv} mini=${mini} ...${rest} />`;
   const shown = (view === "compact" || view === "list") && pv.hide_down ? device.ports.filter((p) => p.up) : device.ports;
@@ -315,6 +343,44 @@ function Legend({ networks, colors, devices, highlight, setHighlight, lg, setLg,
   </div>`;
 }
 
+/** What the marks and colors mean, with an annotated example network bubble. Collapsible. */
+function KeyBox({ open, onToggle, sample, sampleColor, sampleCount, lg, onDisplay }) {
+  const parts = sample ? [
+    ["swatch", html`<span class="kx-sw" style=${`--c:${sampleColor}`}></span>`, "The network's color, used on its ports"],
+    ["name", html`<b>${sample.name}</b>`, "Network name"],
+    ["vlan", html`<span class="chip-vlan">${sample.vlan}</span>`, "VLAN ID"],
+    ["ports", html`<span class="chip-meta"><${Icon} name="grid" size=${11} />${sampleCount}</span>`, "Ports with it as native VLAN"],
+    ...(sample.clients == null ? [] : [["clients", html`<span class="chip-meta"><${Icon} name="plug" size=${11} />${sample.clients}</span>`, "Clients connected to it"]]),
+    ...(sample.subnet ? [["ip", html`<span class="chip-ip">${ipText(sample.subnet, lg.ip_format)}</span>`, "IP subnet"]] : []),
+  ] : [];
+  return html`<section class=${"key-box" + (open ? " open" : "")}>
+    <button class="key-head" onClick=${onToggle} aria-expanded=${open}>
+      <span class="chev" style=${open ? "" : "transform:rotate(-90deg)"}><${Icon} name="chevron" size=${14} /></span>
+      <b>Key</b><span class="muted small">What the colors and marks mean</span></button>
+    ${open && html`<div class="key-body">
+      <div class="key-sec"><div class="key-title">Ports</div><div class="key">
+        <span><span class="k-tile up"></span>Link up</span><span><span class="k-tile"></span>No link</span><span><span class="k-off"></span>Disabled</span>
+        <span><span class="k-wan"><${Icon} name="globe" size=${12} /></span>WAN</span>
+        <span><span class="k-poe active"><${Icon} name="bolt" size=${11} fill /></span>PoE delivering</span>
+        <span><span class="k-poe"><${Icon} name="bolt" size=${11} /></span>PoE on, idle</span>
+        <span class="k-lock"><${Icon} name="lock" size=${12} />Locked by an admin</span></div></div>
+      <div class="key-sec"><div class="key-title">Marks</div><div class="key">
+        <span><${Icon} name="trunk" size=${12} />All VLANs tagged</span><span><${Icon} name="trunksome" size=${12} />Some VLANs tagged</span>
+        <span><${Icon} name="uplink" size=${12} />Uplink</span><span><${Icon} name="link" size=${12} />UniFi device</span>
+        <span><${Icon} name="merge" size=${12} />LAG</span><span><${Icon} name="layers" size=${12} />Port profile</span>
+        <span><${Icon} name="camera" size=${12} />Protect device</span><span><${Icon} name="door" size=${12} />Access device</span></div>
+        <p class="key-note"><${Icon} name="shield" size=${12} />Uplinks, UniFi device links, WAN, LAG and mirror ports are <b>protected</b>:
+          changing them could cut something off, so it takes extra permission and a confirmation.</p></div>
+      ${sample && html`<div class="key-sec example"><div class="key-title">Example network bubble</div>
+        <div class="kx-chip"><${NetChip} n=${sample} color=${sampleColor} ports=${sampleCount} example
+          lg=${{ ...lg, vlan: "always", ports: "always", clients: sample.clients == null ? "off" : "always", ip: "always" }} /></div>
+        <ul class="kx-parts">${parts.map(([k, el, label]) => html`<li key=${k}><span class="kx-el">${el}</span><span>${label}</span>
+          ${["vlan", "ports", "clients", "ip"].includes(k) && html`<span class=${"kx-mode " + lg[k]}>${lg[k] === "hover" ? (canHover ? "on hover" : "on tap") : lg[k]}</span>`}</li>`)}</ul>
+        <button class="btn sm" onClick=${onDisplay}><${Icon} name="sliders" size=${14} />Display options</button></div>`}
+    </div>`}
+  </section>`;
+}
+
 function ColorsModal({ networks, colors, mine, onSave, onClose }) {
   const [val, setVal] = useState({ ...mine });
   return html`<${Modal} title="My VLAN colors" icon="palette" onClose=${onClose}
@@ -335,6 +401,7 @@ function ColorsModal({ networks, colors, mine, onSave, onClose }) {
 const SHOW_OPTS = [{ value: "off", label: "Off" }, { value: "always", label: "Always" }, { value: "hover", label: canHover ? "On hover" : "On tap" }];
 
 function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, onClose }) {
+  const screen = useScreen();
   const row = (label, hint, key) => html`<div class="opt-row"><div><b>${label}</b><div class="muted small">${hint}</div></div>
     <${Segmented} value=${lg[key]} options=${SHOW_OPTS} onChange=${(v) => setLg({ [key]: v })} /></div>`;
   return html`<${Modal} title="Display options" icon="sliders" onClose=${onClose} wide
@@ -360,12 +427,18 @@ function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, 
     <${Toggle} checked=${lg.hide_unused} onChange=${(v) => setLg({ hide_unused: v })} label="Hide networks with no ports" />
 
     <h4 class="section">Ports</h4>
-    <div class="opt-row"><div><b>On phones</b><div class="muted small">Portrait. Turn the phone sideways for the larger-screen view.</div></div>
-      <${Segmented} value=${pv.phone} onChange=${(v) => setPv({ phone: v })}
-        options=${[{ value: "tiles", label: "Tiles" }, { value: "compact", label: "Compact" }, { value: "list", label: "List" }]} /></div>
-    <div class="opt-row"><div><b>On larger screens</b></div>
-      <${Segmented} value=${pv.desktop} onChange=${(v) => setPv({ desktop: v })}
-        options=${[{ value: "faceplate", label: "Faceplate" }, { value: "compact", label: "Compact" }, { value: "list", label: "List" }]} /></div>
+    <p class="muted small">Each screen size keeps its own view. The app goes by the window's width, so turning a phone
+      sideways or opening a folding phone switches to the next size up.</p>
+    ${SCREENS.map((x) => html`<div class="opt-row" key=${x.key}><div><b>${x.label}</b>${x.key === screen && html` <span class="badge good">this screen</span>`}
+      <div class="muted small">${x.hint}</div></div>
+      <${Segmented} value=${viewFor(pv, x.key)} onChange=${(v) => setPv({ views: { ...SCREENS.reduce((a, y) => ({ ...a, [y.key]: viewFor(pv, y.key) }), {}), [x.key]: v } })}
+        options=${[{ value: x.key === "phone" ? "tiles" : "faceplate", label: x.key === "phone" ? "Tiles" : "Faceplate" },
+          { value: "compact", label: "Compact" }, { value: "list", label: "List" }]} /></div>`)}
+    <div class="opt-row"><div><b>Port size</b><div class="muted small">Auto grows the ports on big and 4K screens.</div></div>
+      <${Segmented} value=${pv.size || "auto"} onChange=${(v) => setPv({ size: v })}
+        options=${[{ value: "auto", label: "Auto" }, { value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }, { value: "xl", label: "XL" }]} /></div>
+    <div class="opt-row"><div><b>Ports with link</b><div class="muted small">Pulse gently in their network's color, or stay solid.</div></div>
+      <${Segmented} value=${pv.fx} onChange=${(v) => setPv({ fx: v })} options=${[{ value: "pulse", label: "Pulse" }, { value: "solid", label: "Solid" }]} /></div>
     <${Toggle} checked=${pv.hide_down} onChange=${(v) => setPv({ hide_down: v })} label="Hide ports without link" hint="In the Compact and List views." />
     <${Toggle} checked=${pv.tag_marks} onChange=${(v) => setPv({ tag_marks: v })} label="Mark ports that carry tagged VLANs"
       hint="Ordinary ports set to Allow All or Custom. Uplinks and links to UniFi devices always show their own mark." />
@@ -938,23 +1011,8 @@ function App() {
       ${pv.apps && (st.app_devices || []).length > 0 && html`<${AppDevices} apps=${st.app_devices} devices=${devices} me=${me} env=${env}
         collapsed=${Object.fromEntries(Object.entries(closedGroups).filter(([k]) => k.startsWith("app:")).map(([k, v]) => [k.slice(4), v]))}
         onCollapse=${(app) => toggleGroup("app:" + app)} onOpenPort=${(d, i) => setSel({ d, i })} onChanged=${() => load(true)} />`}
-      <div class="key">
-        <span><span class="k-tile up"></span>Link up</span><span><span class="k-tile"></span>No link</span><span><span class="k-off"></span>Disabled</span>
-        <span><span class="k-poe active"><${Icon} name="bolt" size=${11} fill /></span>PoE delivering</span>
-        <span><span class="k-poe"><${Icon} name="bolt" size=${11} /></span>PoE on, idle</span>
-        <span><${Icon} name="trunk" size=${12} />All VLANs tagged</span><span><${Icon} name="trunksome" size=${12} />Some VLANs tagged</span>
-        <span><${Icon} name="uplink" size=${12} />Uplink</span><span><${Icon} name="link" size=${12} />UniFi device</span>
-        <span><${Icon} name="globe" size=${12} />WAN</span><span><${Icon} name="merge" size=${12} />LAG</span>
-        <span><${Icon} name="layers" size=${12} />Port profile</span>
-        <span><${Icon} name="camera" size=${12} />Protect device</span><span><${Icon} name="door" size=${12} />Access device</span>
-        ${sample && !st.readonly && html`<span class="key-bubble"><${NetChip} n=${sample} color=${colors[sample.id]} ports=${sampleCount} example
-          lg=${{ ...lg, vlan: "always", ports: "always", clients: sample.clients == null ? "off" : "always", ip: "always" }} />
-          <span>Network bubble: color, name, <b>VLAN ID</b>, <b>ports</b> on it, <b>connected clients</b> and <b>IP</b>.${" "}
-          <button class="link-btn" onClick=${() => setModal("display")}>Choose what shows</button></span></span>`}
-        <span class="key-note"><${Icon} name="shield" size=${12} />Uplinks, UniFi device links, WAN, LAG and mirror ports are <b>protected</b>:
-          changing them could cut something off, so it takes extra permission and a confirmation.</span>
-        <span class="k-lock"><${Icon} name="lock" size=${12} />Locked by an admin</span>
-      </div>`;
+      <${KeyBox} open=${lg.key_open} onToggle=${() => setLg({ key_open: !lg.key_open })} sample=${!st.readonly && sample}
+        sampleColor=${sample ? colors[sample.id] : ""} sampleCount=${sampleCount} lg=${lg} onDisplay=${() => setModal("display")} />`;
   }
 
   return html`
@@ -1002,7 +1060,7 @@ function App() {
       </div>
     </header>
 
-    <main class=${"main" + (selPort ? " with-drawer" : "")}>
+    <main class=${"main" + (selPort ? " with-drawer" : "") + (pv.fx === "solid" ? "" : " fx-pulse") + (pv.size && pv.size !== "auto" ? ` ps-${pv.size}` : "")}>
       ${env && html`<div class="env-bar">
         ${envList.envs.length > 1 ? html`<label class="env-select"><${Icon} name="server" size=${16} />
           <select value=${envId || ""} onChange=${(e) => setEnvId(Number(e.target.value))} aria-label="Environment">
@@ -1026,7 +1084,8 @@ function App() {
     ${devOpen && html`<${DeviceModal} env=${env} device=${devOpen} me=${me} readonly=${!!st.readonly} onClose=${() => setDevModal(null)}
       onChanged=${() => load(true)} />`}
     ${modal === "display" && html`<${DisplayModal} lg=${lg} setLg=${setLg} pv=${pv} setPv=${setPv} sample=${sample}
-      sampleColor=${sample ? colors[sample.id] : ""} sampleCount=${sampleCount} onClose=${() => setModal(null)} />`}
+      sampleColor=${sample ? colors[sample.id] : ""} sampleCount=${sampleCount}
+      onClose=${() => { setModal(null); if (lg.key_open) setLg({ key_open: false }); }} />`}
     ${modal === "colors" && html`<${ColorsModal} networks=${networks} colors=${vlanColors(networks, env ? env.vlan_colors : {}, {})} mine=${prefs.vlan_colors || {}}
       onClose=${() => setModal(null)} onSave=${(v) => { savePrefs({ vlan_colors: v }); setModal(null); toast("Colors saved"); }} />`}
     ${modal === "settings" && html`<${SettingsModal} onClose=${() => setModal(null)} onSaved=${onEnvsChanged} />`}
