@@ -67,3 +67,20 @@ def test_wan_port_cannot_be_changed(fake, admin):
     r = admin.put(f"/api/envs/{eid}/devices/dev-gw/ports/5", json={"native_network_id": "net-cam", "tagged_mode": "block_all",
                                                                     "confirm_protected": True})
     assert r.status_code == 403 and "WAN" in r.get_json()["error"]
+
+
+def test_network_client_counts_only_for_people_who_see_everything(app, fake, admin):
+    from conftest import make_user
+    eid = configure_unifi(admin)
+    nets = {n["id"]: n for n in _state(admin, eid)["networks"]}
+    assert nets["net-cam"]["clients"] == 3 and nets["net-guest"]["clients"] == 1
+    uid, viewer = make_user(admin, app, "v18")
+    admin.put(f"/api/users/{uid}/access", json={"envs": [{"env_id": eid, "all_devices": False, "devices": ["aa:00:00:00:00:08"]}]})
+    assert all(n["clients"] is None for n in _state(viewer, eid)["networks"])
+
+
+def test_display_options_are_saved_per_person(admin):
+    r = admin.put("/api/me/prefs", json={"legend": {"ip": "always", "layout": "grid"}, "ports_view": {"phone": "list"}})
+    assert r.status_code == 200
+    prefs = admin.get("/api/me").get_json()["prefs"]
+    assert prefs["legend"]["ip"] == "always" and prefs["ports_view"]["phone"] == "list"

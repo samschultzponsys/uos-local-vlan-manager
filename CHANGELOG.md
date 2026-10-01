@@ -5,6 +5,40 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 1.8 — 2026-10-01
+
+### Added
+- **Display options** (the sliders button on the Networks box, or the menu): your own choices,
+  saved to your account, shown right away.
+  - **Network bubbles**: each part can be **Off**, **Always** or **On hover** (on a phone:
+    when you tap the bubble):
+    - VLAN number
+    - **ports on the network**: how many ports have it as their native VLAN, on the devices
+      shown
+    - **connected clients** on the network (wired and wireless; only for people who see every
+      device)
+    - **IP subnet**, shown as the subnet (10.0.20.0/24), the gateway IP or gateway/mask
+  - Bubble layout: **Wrap**, **One row** (scrolls sideways) or **Grid**. Order by VLAN, name or
+    most ports. Optionally hide networks with no ports.
+  - **Port views**, chosen separately for phones and for larger screens:
+    - **Tiles** / **Faceplate**: as before
+    - **Compact**: small squares with the port number in the network's color; tap for details
+    - **List**: one row per port with its network, VLAN, link speed, PoE, and what's plugged
+      in (or the UniFi device / uplink on the other end)
+
+    Compact and List can hide ports without link. The marks for tagged VLANs on ordinary
+    ports can be turned off.
+- Hovering a network bubble shows everything about it: VLAN, ports, clients and subnet.
+- The key at the bottom shows an **example bubble** with every part labelled, and links to
+  Display options.
+
+### Changed
+- The networks legend is a tidy box titled **Networks** that can be collapsed. A highlighted
+  network stays visible when it's collapsed, and *Clear highlight* is one tap.
+- On phones the bubbles wrap onto lines and are smaller, instead of running off the side of
+  the screen.
+- Turn a phone sideways and big switches are drawn as the real two-row faceplate.
+
 ## 1.7 — 2026-10-01
 
 ### Added

@@ -41,6 +41,10 @@ manage only their own switches and only the VLANs you allow.
   The change is read back from the controller to confirm it stuck.
 - **VLAN colors**: every network has a color. Admins set the defaults and each user can pick
   their own. Tap a network in the legend to highlight every port that carries it.
+- **Display options, per person**: each part of a network bubble (VLAN number, ports on it,
+  connected clients, IP subnet) shown always, on hover / tap, or never; bubbles wrapped, in one
+  row or a grid; and the ports drawn as tiles / faceplate, a compact grid or a list, chosen
+  separately for phones and larger screens.
 - **Safety rails**: uplinks, links to other UniFi devices, LAG and mirror ports are
   **protected**: changing one could cut off the switch or what's behind it, so it takes the
   *Change protected ports* ability and a confirmation. WAN ports can't be changed here at
