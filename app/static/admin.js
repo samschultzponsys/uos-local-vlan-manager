@@ -1,7 +1,7 @@
 import { useState, useEffect } from "./vendor/preact-htm.module.js";
 import {
   html, api, Icon, Modal, Toggle, Segmented, Field, Copy, toast, Spinner, SsoButton, ask, Avatar, pickImage,
-  Logo, setBrand, vlanColors, ROLE_LABEL, MODE_LABEL, ago, when, rank,
+  Logo, setBrand, vlanColors, ROLE_LABEL, MODE_LABEL, ago, when, rank, bytes,
 } from "./ui.js";
 
 
@@ -1241,7 +1241,7 @@ export function AuditModal({ onClose, me }) {
     try {
       const r = await api("/api/audit/retention", { method: "PUT", body: { days } });
       toast(days ? `Keeping ${opt[1]}${r.removed ? ` · ${r.removed} older entries deleted` : ""}` : "Keeping everything");
-      setMeta({ ...meta, retention_days: days }); load(false);
+      setMeta({ ...meta, retention_days: days, log_count: r.log_count, log_size: r.log_size, db_size: r.db_size }); load(false);
     } catch (e) { toast(e.message, "err"); }
   };
 
@@ -1312,7 +1312,9 @@ export function AuditModal({ onClose, me }) {
       })}
       ${more && html`<div class="audit-more"><button class="btn" onClick=${() => load(true)}>Load more</button></div>`}`}
     ${meta && meta.can_retention && html`<div class="audit-keep">
-      <${Icon} name="clock" size=${15} /><span><b>Keep activity for</b>${meta.oldest ? html`<span class="muted small"> · oldest entry ${when(meta.oldest)}</span>` : ""}</span>
+      <${Icon} name="clock" size=${15} /><span><b>Keep activity for</b>${meta.oldest ? html`<span class="muted small"> · oldest entry ${when(meta.oldest)}</span>` : ""}
+        ${meta.log_size != null && html`<div class="muted small audit-size" title="The whole database (people, settings, environments and activity) is ${bytes(meta.db_size)} on disk">
+          Now ${meta.log_count.toLocaleString()} ${meta.log_count === 1 ? "entry" : "entries"}, about <b>${bytes(meta.log_size)}</b> · database ${bytes(meta.db_size)}</div>`}</span>
       <span class="grow"></span>
       <select value=${meta.retention_days} onChange=${(e) => setRetention(Number(e.target.value))} aria-label="Keep activity for">
         ${RETENTION.some(([d]) => d === meta.retention_days) ? null : html`<option value=${meta.retention_days}>${meta.retention_days} days</option>`}

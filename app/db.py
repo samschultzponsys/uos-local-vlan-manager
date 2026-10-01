@@ -319,6 +319,23 @@ def init(version):
         db.commit()
 
 
+def audit_size():
+    """(entries, bytes) the activity log takes: SQLite's own page count when it can tell, else the data itself."""
+    conn = get()
+    n = conn.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
+    try:
+        size = conn.execute("SELECT SUM(pgsize) FROM dbstat WHERE name IN ('audit', 'audit_ts')").fetchone()[0] or 0
+    except sqlite3.Error:   # built without the dbstat table: count the stored text plus a little per row
+        size = conn.execute("SELECT COALESCE(SUM(LENGTH(username) + LENGTH(role) + LENGTH(action) + LENGTH(target) "
+                            "+ LENGTH(detail) + LENGTH(ip) + 40), 0) FROM audit").fetchone()[0]
+    return n, size
+
+
+def db_size():
+    """The database file on disk, with its write-ahead log."""
+    return sum(os.path.getsize(p) for p in (DB_PATH, DB_PATH + "-wal") if os.path.isfile(p))
+
+
 def prune_audit(days):
     """Drop activity older than `days` (0 keeps everything). Returns how many rows went."""
     if not days:

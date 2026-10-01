@@ -73,3 +73,12 @@ def test_retention(app, admin):
     assert admin.get("/api/audit?meta=1").get_json()["retention_days"] == 90
     assert not admin.get("/api/audit?user=old").get_json()["entries"]
     assert admin.put("/api/audit/retention", json={"days": 0}).get_json()["removed"] == 0
+
+
+def test_retention_shows_the_log_size(app, admin):
+    admin.put("/api/settings", json={"poll_seconds": 15})   # something in the log
+    meta = admin.get("/api/audit?meta=1").get_json()
+    assert isinstance(meta["entries"], list)   # the rows themselves stay as they were
+    assert meta["log_count"] >= 1 and meta["log_size"] > 0 and meta["db_size"] >= meta["log_size"]
+    r = admin.put("/api/audit/retention", json={"days": 365}).get_json()
+    assert r["log_count"] >= 1 and r["log_size"] > 0

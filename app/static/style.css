@@ -1315,3 +1315,4 @@ button.fb-status.on { box-shadow: 0 0 0 2px color-mix(in srgb, var(--st) 45%, tr
 .icon.rot90 { transform: rotate(90deg); }
 .role-badge.superadmin { color: #fde68a; background: rgba(251, 191, 36, .16); }
 [data-theme="light"] .role-badge.superadmin { color: #92400e; }
+.audit-size { margin-top: 2px; }

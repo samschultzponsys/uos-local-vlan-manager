@@ -5,6 +5,13 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 4.3 — 2026-10-01
+
+### Added
+- **Activity size**: next to *Keep activity for* (super admins), how many entries the activity log
+  holds and roughly how much space they take, plus the size of the whole database. It updates
+  when you change the retention; shortening it gives the freed space back to the disk right away.
+
 ## 4.2 — 2026-10-01
 
 ### Fixed

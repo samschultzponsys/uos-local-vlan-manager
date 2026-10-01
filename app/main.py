@@ -1153,6 +1153,9 @@ def api_audit():
         out["oldest"] = conn.execute(f"SELECT MIN(a.ts) FROM audit a{sw}", scope_args).fetchone()[0]
         out["retention_days"] = int(db.get_setting("audit_retention_days") or 0)
         out["can_retention"] = perms.has(me, "system.manage")
+        if out["can_retention"]:
+            out["log_count"], out["log_size"] = db.audit_size()   # ("entries" is the list itself)
+            out["db_size"] = db.db_size()
     return jsonify(out)
 
 
@@ -1165,8 +1168,14 @@ def api_audit_retention():
         return _deny("Days is a number (0 keeps everything)")
     db.set_setting("audit_retention_days", str(days))
     removed = db.prune_audit(days)
+    if removed:   # give the space back to the disk now (the daily pruning just reuses it)
+        try:
+            db.get().execute("VACUUM")
+        except Exception as e:   # busy: the space is reused anyway
+            print(f"[audit] vacuum skipped: {e}", flush=True)
     auth.audit("settings.audit_retention", "", {"days": days or "forever", "removed": removed})
-    return jsonify({"ok": True, "removed": removed})
+    count, size = db.audit_size()
+    return jsonify({"ok": True, "removed": removed, "log_count": count, "log_size": size, "db_size": db.db_size()})
 
 
 @app.route("/api/audit/<int:aid>/undo", methods=["POST"])
