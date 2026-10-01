@@ -39,6 +39,9 @@ manage only their own switches and only the VLANs you allow.
     (tick the networks to tag).
 
   The change is read back from the controller to confirm it stuck.
+- **Many ports at once, across switches**: Ctrl / ⌘ click to pick ports, Shift click for a
+  range (by port number), or **Select ports** on a phone. One native VLAN and tagging for all
+  of them, with one confirmation for protected / locked / profile ports.
 - **VLAN colors**: every network has a color. Admins set the defaults and each user can pick
   their own. Tap a network in the legend to highlight every port that carries it.
 - **Display options, per person**: each part of a network bubble (VLAN number, ports on it,

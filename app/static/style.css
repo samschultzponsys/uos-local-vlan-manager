@@ -938,3 +938,34 @@ select option:checked { background-color: var(--accent); color: #fff; }
   .key-sec.example { min-width: 0; }
   .key-sec.example .chip { flex-wrap: wrap; height: auto !important; padding: 6px 12px !important; row-gap: 4px; }
 }
+
+/* ---------- 2.2: picking several ports ---------- */
+.port.marked::before { content: ""; position: absolute; inset: -5px; border-radius: 10px; border: 2px dashed var(--accent); pointer-events: none; }
+.port.marked { outline: 3px solid var(--accent); outline-offset: 2px; }
+.prow.marked { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.select-mode .port, .select-mode .prow { cursor: copy; }
+.env-bar .select-btn { margin-left: auto; }
+.env-bar .select-btn + * { margin-left: 0; }
+.bulk-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.bulk-dev-name { font-weight: 600; margin-bottom: 6px; }
+.bulk-ports { display: flex; flex-wrap: wrap; gap: 6px; }
+.bulk-port { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px 0 9px; border-radius: 8px;
+  border: 1px solid var(--border2); background: var(--surface2); font-weight: 600; font-variant-numeric: tabular-nums; }
+.bulk-port .sw { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
+.bulk-port .x { display: inline-grid; place-items: center; width: 20px; height: 20px; border: 0; border-radius: 6px; background: none;
+  color: var(--muted); cursor: pointer; }
+.bulk-port .x:hover { background: var(--surface3); color: var(--text); }
+@media (max-width: 760px) {
+  .env-bar { flex-wrap: wrap; }
+  .env-bar .env-updated { display: none; }
+  .env-bar .env-select { flex: 1 1 auto; min-width: 0; }
+  .env-bar .env-select select { min-width: 0; width: 100%; }
+  .env-bar .select-btn { height: 42px; }
+}
+.bulk-bar { position: fixed; left: 12px; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 44; display: flex; align-items: center;
+  gap: 8px; padding: 10px 10px 10px 16px; border-radius: 16px; background: var(--surface); border: 1px solid var(--accent);
+  box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .8), 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); animation: sheet .2s ease-out; }
+.bulk-bar > div { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer.bulk .drawer-head { gap: 8px; }
+.drawer.bulk .drawer-head > div { flex: 1; }
+@media (max-width: 420px) { .bulk-bar .muted { display: none; } }

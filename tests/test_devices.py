@@ -223,3 +223,46 @@ def test_app_helpers():
     assert unifi._mac("1CEEC950A6D1") == "1c:ee:c9:50:a6:d1"
     assert perms.app_cap("Protect") == "apps.protect" and perms.app_cap("Talk") == "apps.other"
 
+
+
+def _bulk(c, eid, ports, **body):
+    return c.put(f"/api/envs/{eid}/ports/bulk", json={"ports": [{"device_id": d, "idx": i} for d, i in ports], **body})
+
+
+def test_bulk_change_across_switches(fake, admin):
+    eid = configure_unifi(admin)
+    r = _bulk(admin, eid, [("dev-sw8", 3), ("dev-sw8", 4), ("dev-sw24", 15), ("dev-mini", 3), ("dev-gw", 5)],
+              native_network_id="net-iot", tagged_mode="block_all")
+    body = r.get_json()
+    assert r.status_code == 200 and len(body["changed"]) == 4
+    assert body["skipped"] == [{"port": "Gateway port 5", "reason": "WAN port"}]
+    s = _state(admin, eid, True)
+    for d, i in [("dev-sw8", 3), ("dev-sw8", 4), ("dev-sw24", 15), ("dev-mini", 3)]:
+        assert _port(s, d, i)["native_network_id"] == "net-iot"
+    assert _port(s, "dev-sw24", 15)["tagged_mode"] == "block_all"
+    assert _port(s, "dev-mini", 3)["tagged_mode"] == "auto"           # the Flex Mini only gets its native VLAN
+    puts = [e for e in admin.get("/api/audit").get_json()["entries"] if e["action"] == "port.set"]
+    assert len(puts) == 4 and all(e["detail"]["bulk"] for e in puts)
+
+
+def test_bulk_asks_once_for_protected_and_profile(fake, admin):
+    eid = configure_unifi(admin)
+    ports = [("dev-sw8", 7), ("dev-sw8", 8), ("dev-sw8", 2)]   # profile, uplink, plain
+    r = _bulk(admin, eid, ports, native_network_id="net-cam", tagged_mode="block_all")
+    body = r.get_json()
+    assert r.status_code == 409 and body["confirm"] == "bulk" and body["count"] == 3
+    assert body["needs"] == {"protected": ["Rack 7 Switch port 8"], "profile": ["Rack 7 Switch port 7"]}
+    r = _bulk(admin, eid, ports, native_network_id="net-cam", tagged_mode="block_all", confirm_protected=True, detach_profile=True)
+    assert r.status_code == 200 and len(r.get_json()["changed"]) == 3
+
+
+def test_bulk_skips_what_a_supervisor_may_not_change(app, fake, admin):
+    eid = configure_unifi(admin)
+    uid, sup = make_user(admin, app, "bulksup", "supervisor")
+    admin.put(f"/api/users/{uid}/access", json={"envs": [{"env_id": eid}]})
+    r = _bulk(sup, eid, [("dev-sw8", 8), ("dev-sw8", 3)], native_network_id="net-cam", tagged_mode="block_all")
+    body = r.get_json()
+    assert r.status_code == 200 and body["changed"] == ["Rack 7 Switch port 3"]
+    assert "protected" in body["skipped"][0]["reason"]
+    r = _bulk(sup, eid, [("dev-sw8", 8)], native_network_id="net-cam", tagged_mode="block_all")
+    assert r.status_code == 403

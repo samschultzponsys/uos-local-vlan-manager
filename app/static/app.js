@@ -115,15 +115,15 @@ function tileLabel(port, n) {
   return port.native_network_id === null ? (port.sfp ? "SFP" : "") : "?";
 }
 
-function PortTile({ port, device, networks, colors, highlight, selected, onPick, pv, mini }) {
+function PortTile({ port, device, networks, colors, highlight, selected, marked, onPick, pv, mini }) {
   const n = netOf(networks, port.native_network_id);
   const color = port.wan ? "#3b3426" : colors[port.native_network_id] || "#64748b";
   const dim = highlight && !carries(port, highlight);
   const cls = ["port", port.up ? "up" : "down", port.enabled ? "" : "off", dim ? "dim" : "", selected ? "sel" : "",
-    port.sfp ? "sfp" : "", mini ? "mini" : "", port.wan ? "wan" : ""].join(" ");
+    port.sfp ? "sfp" : "", mini ? "mini" : "", port.wan ? "wan" : "", marked ? "marked" : ""].join(" ");
   const fg = port.wan ? "#fbbf24" : readable(color);
   return html`<button class=${cls} style=${`--c:${color};--fg:${fg};--halo:${glyphHalo(fg)};--i:${port.idx}`}
-    onClick=${() => { hideTip(); onPick(device.id, port.idx); }}
+    onClick=${(e) => { hideTip(); onPick(device.id, port.idx, e); }} onMouseDown=${(e) => { if (e.shiftKey) e.preventDefault(); }}
     onMouseEnter=${canHover ? (e) => showTip(e, html`<${PortTip} port=${port} device=${device} networks=${networks} />`) : undefined}
     onMouseLeave=${canHover ? hideTip : undefined}
     aria-label=${`Port ${port.idx}, ${n ? n.name : ""}`}>
@@ -139,16 +139,16 @@ function PortTile({ port, device, networks, colors, highlight, selected, onPick,
   </button>`;
 }
 
-function PortRow({ port, device, networks, colors, highlight, selected, onPick, pv }) {
+function PortRow({ port, device, networks, colors, highlight, selected, marked, onPick, pv }) {
   const n = netOf(networks, port.native_network_id);
   const color = port.wan ? "#3b3426" : colors[port.native_network_id] || "#64748b";
   const dim = highlight && !carries(port, highlight);
   const c = port.clients[0];
   const fg = port.wan ? "#fbbf24" : readable(color);
   const who = port.peer || (c ? c.name || c.hostname || c.mac : port.lldp ? port.lldp.name : "");
-  return html`<button class=${"prow" + (port.up ? " up" : "") + (dim ? " dim" : "") + (selected ? " sel" : "") + (port.wan ? " wan" : "")}
+  return html`<button class=${"prow" + (port.up ? " up" : "") + (dim ? " dim" : "") + (selected ? " sel" : "") + (port.wan ? " wan" : "") + (marked ? " marked" : "")}
     style=${`--c:${color};--fg:${fg};--halo:${glyphHalo(fg)}`}
-    onClick=${() => onPick(device.id, port.idx)}>
+    onClick=${(e) => onPick(device.id, port.idx, e)} onMouseDown=${(e) => { if (e.shiftKey) e.preventDefault(); }}>
     <span class="prow-num">${port.wan ? html`<${Icon} name="globe" size=${16} />` : port.idx}</span>
     <span class="prow-main"><b>${port.wan ? "WAN" : n ? n.name : port.native_network_id === null ? (port.media_label || "Port") : "?"}</b>
       <span class="muted">${n && !port.wan ? `VLAN ${n.vlan}` : ""}${port.name !== `Port ${port.idx}` ? `${n && !port.wan ? " · " : ""}${port.name}` : ""}</span></span>
@@ -202,13 +202,14 @@ function chunk(list, n) { const out = []; for (let i = 0; i < list.length; i += 
 function Faceplate({ device, pv, ...rest }) {
   const mobile = useMobile();
   const view = viewFor(pv, useScreen());
-  const sel = (p) => rest.sel && rest.sel.d === device.id && rest.sel.i === p.idx;
-  const tile = (p, mini) => html`<${PortTile} key=${p.idx} port=${p} device=${device} selected=${sel(p)} pv=${pv} mini=${mini} ...${rest} />`;
+  const marked = (p) => !!(rest.multi && rest.multi.has(`${device.id}|${p.idx}`));
+  const sel = (p) => (rest.sel && rest.sel.d === device.id && rest.sel.i === p.idx) || marked(p);
+  const tile = (p, mini) => html`<${PortTile} key=${p.idx} port=${p} device=${device} selected=${sel(p)} marked=${marked(p)} pv=${pv} mini=${mini} ...${rest} />`;
   const shown = (view === "compact" || view === "list") && pv.hide_down ? device.ports.filter((p) => p.up) : device.ports;
   const hidden = device.ports.length - shown.length;
   const more = hidden > 0 && html`<div class="muted small hidden-note">${plural(hidden, "port")} without link hidden</div>`;
   if (view === "list") {
-    return html`<div class="plist">${shown.map((p) => html`<${PortRow} key=${p.idx} port=${p} device=${device} selected=${sel(p)} pv=${pv} ...${rest} />`)}</div>${more}`;
+    return html`<div class="plist">${shown.map((p) => html`<${PortRow} key=${p.idx} port=${p} device=${device} selected=${sel(p)} marked=${marked(p)} pv=${pv} ...${rest} />`)}</div>${more}`;
   }
   if (view === "compact") {
     return html`<div class=${"chassis compact mini " + (device.kind || "")}><div class="pgrid mini">${shown.map((p) => tile(p, true))}</div></div>${more}`;
@@ -781,6 +782,123 @@ function PortTools({ env, device, port, me, onApplied }) {
   </div>`;
 }
 
+// --- many ports at once --------------------------------------------------------------
+
+function BulkDrawer({ env, access, items, networks, colors, me, settings, onRemove, onClose, onApplied }) {
+  const can = (c) => (me.caps || []).includes(c);
+  const restricted = !access.all_vlans;
+  const allowed = networks.filter((n) => n.allowed);
+  const defMode = restricted && settings.default_tagged_mode === "auto" ? "block_all" : (settings.default_tagged_mode || "block_all");
+  const [native, setNative] = useState("");
+  const [mode, setMode] = useState(defMode);
+  const [excluded, setExcluded] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const byDev = [];
+  for (const it of items) {
+    let g = byDev.find((x) => x.dev.id === it.dev.id);
+    if (!g) { g = { dev: it.dev, ports: [] }; byDev.push(g); }
+    g.ports.push(it.port);
+  }
+  for (const g of byDev) g.ports.sort((a, b) => a.idx - b.idx);
+  const count = (f) => items.filter(f).length;
+  const nWan = count((x) => x.port.wan);
+  const nProt = count((x) => x.port.protected && !x.port.wan);
+  const nLock = count((x) => x.port.lock);
+  const nProfile = count((x) => x.port.profile_name);
+  const nFixed = count((x) => nativeOnly(x.dev));
+  const anyTagging = items.some((x) => !nativeOnly(x.dev) && !x.port.wan);
+  const next = netOf(networks, native);
+  const canEdit = can("ports.change");
+  // phones: a slim bar while picking ports (the full sheet would cover them), the sheet on "Change…"
+  const mobile = useMobile();
+  const [open, setOpen] = useState(false);
+
+  async function apply(extra = {}) {
+    setBusy(true);
+    try {
+      const r = await api(`/api/envs/${env.id}/ports/bulk`, { method: "PUT", body: {
+        ports: items.map((x) => ({ device_id: x.dev.id, idx: x.port.idx })), native_network_id: native, tagged_mode: mode,
+        excluded_network_ids: mode === "custom" ? excluded : [], ...extra } });
+      toast(`${plural(r.changed.length, "port")} → ${next.name} (${next.vlan})`);
+      if (r.skipped.length) toast(`Skipped ${r.skipped.map((x) => `${x.port} (${x.reason})`).join(", ")}`, "warn");
+      for (const n of r.notes || []) toast(n, "warn");
+      for (const f of r.failed || []) toast(`${f.device}: ${f.error}`, "err");
+      onApplied();
+    } catch (e) {
+      if (e.status === 409 && e.data.confirm === "bulk") {
+        const nd = e.data.needs;
+        const ok = await ask({ title: `Change ${plural(e.data.count, "port")}?`, danger: !!nd.protected, confirm: "Change them",
+          body: html`${nd.protected && html`<p><b>Protected</b> (uplinks, UniFi device links, LAG / mirror): changing them can cut off what's behind them.</p>
+              <p class="mono small">${nd.protected.join(", ")}</p>`}
+            ${nd.locked && html`<p><b>Locked</b> by an admin. They stay locked, to the new settings.</p><p class="mono small">${nd.locked.join(", ")}</p>`}
+            ${nd.profile && html`<p><b>Port profile</b> attached: setting the VLAN here detaches it.</p><p class="mono small">${nd.profile.join(", ")}</p>`}
+            ${e.data.skipped.length > 0 && html`<p class="muted small">Skipped: ${e.data.skipped.map((x) => `${x.port} (${x.reason})`).join(", ")}</p>`}` });
+        if (ok) { setBusy(false); return apply({ ...extra, confirm_protected: true, confirm_locked: true, detach_profile: true }); }
+      } else toast(e.message, "err");
+    }
+    setBusy(false);
+    return null;
+  }
+
+  if (mobile && !open) {
+    return html`<div class="bulk-bar" role="region" aria-label="Selected ports">
+      <div><b>${plural(items.length, "port")}</b><span class="muted small">${byDev.length > 1 ? ` on ${byDev.length} devices` : ` on ${byDev[0].dev.name}`}</span></div>
+      <button class="btn ghost" onClick=${onClose}>Clear</button>
+      <button class="btn primary" onClick=${() => setOpen(true)}>Change…</button>
+    </div>`;
+  }
+  return html`<aside class="drawer bulk" role="dialog" aria-label="Change several ports">
+    <header class="drawer-head">
+      <div><div class="drawer-kicker">${byDev.length > 1 ? `${byDev.length} devices` : byDev[0].dev.name}</div>
+        <h2>${plural(items.length, "port")} selected</h2></div>
+      ${mobile && html`<button class="btn sm ghost" onClick=${() => setOpen(false)}>Pick more</button>`}
+      <button class="icon-btn" onClick=${onClose} aria-label="Close"><${Icon} name="x" /></button>
+    </header>
+    <div class="drawer-body">
+      <div class="bulk-list">${byDev.map((g) => html`<div class="bulk-dev" key=${g.dev.id}>
+        <div class="bulk-dev-name">${g.dev.name}<span class="muted small"> · ${g.dev.model_name}</span></div>
+        <div class="bulk-ports">${g.ports.map((p) => html`<span class="bulk-port" key=${p.idx}
+          style=${`--c:${p.wan ? "#3b3426" : colors[p.native_network_id] || "#64748b"}`}>
+          <span class="sw"></span>${p.idx}${p.wan ? " WAN" : ""}
+          <button class="x" title="Remove" onClick=${() => onRemove(g.dev.id, p.idx)}><${Icon} name="x" size=${11} /></button></span>`)}</div>
+      </div>`)}</div>
+      <p class="muted small">${canHover ? "Ctrl / ⌘ click to add or remove ports, Shift click for a range (by port number), on any switch. Esc lets go."
+        : "Tap more ports to add them, on any switch."}</p>
+      ${(nWan || nProt || nLock || nProfile || nFixed) > 0 && html`<div class="notice"><${Icon} name="info" /><div>
+        ${nWan > 0 && html`<div>${plural(nWan, "WAN port")} will be skipped.</div>`}
+        ${nProt > 0 && html`<div>${plural(nProt, "protected port")} — ${can("ports.protected") || env.supervisors_protected ? "you'll be asked to confirm" : "will be skipped (no permission)"}.</div>`}
+        ${nLock > 0 && html`<div>${plural(nLock, "locked port")} — ${can("ports.lock") ? "stay locked, to the new settings" : "will be skipped"}.</div>`}
+        ${nProfile > 0 && html`<div>${plural(nProfile, "port")} with a port profile — it gets detached.</div>`}
+        ${nFixed > 0 && html`<div>${plural(nFixed, "port")} on switches that can't filter tagged VLANs only get the native VLAN.</div>`}
+      </div></div>`}
+      ${canEdit ? html`<div class="panel">
+        <div class="panel-title">Set on all of them</div>
+        <label class="field"><span class="field-label">Native VLAN / Network</span>
+          <div class="select-wrap"><span class="dot" style=${`background:${native ? colors[native] : "transparent"}`}></span>
+            <select value=${native} onChange=${(e) => setNative(e.target.value)}>
+              <option value="" disabled>Pick a network…</option>
+              ${allowed.map((n) => html`<option value=${n.id}>${n.name} (${n.vlan})</option>`)}
+            </select><${Icon} name="chevron" cls="select-chev" /></div></label>
+        ${anyTagging && html`<div class="field"><span class="field-label">Tagged VLAN Management</span>
+          <${Segmented} value=${mode} onChange=${setMode}
+            options=${[{ value: "auto", label: "Allow All", disabled: restricted, title: restricted ? "Would tag networks you don't have" : "" },
+              { value: "block_all", label: "Block All" }, { value: "custom", label: "Custom" }]} />
+          <small class="hint">${mode === "block_all" ? "Access ports: only the native VLAN, nothing tagged." : mode === "auto" ? "Trunks: every network is tagged." : "Trunks: only the networks ticked below are tagged."}</small></div>`}
+        ${anyTagging && mode === "custom" && html`<div class="tag-list">
+          ${allowed.filter((n) => n.id !== native).map((n) => html`<label class="tag-row" key=${n.id}>
+            <input type="checkbox" checked=${!excluded.includes(n.id)}
+              onChange=${(e) => setExcluded(e.target.checked ? excluded.filter((x) => x !== n.id) : [...excluded, n.id])} />
+            <span class="dot" style=${`background:${colors[n.id]}`}></span>${n.name}<span class="chip-vlan">${n.vlan}</span></label>`)}</div>`}
+      </div>` : html`<div class="notice"><${Icon} name="info" /><div>You can look, but changing ports isn't one of your abilities.</div></div>`}
+    </div>
+    ${canEdit && html`<footer class="drawer-foot">
+      <button class="btn ghost" disabled=${busy} onClick=${onClose}>Clear</button>
+      <button class="btn primary" disabled=${busy || !next} onClick=${() => apply()}>${busy ? html`<${Spinner} /> Applying…`
+        : next ? `Apply to ${plural(items.length, "port")}` : "Pick a network"}</button>
+    </footer>`}
+  </aside>`;
+}
+
 // --- device picker ---------------------------------------------------------------
 
 function PickerModal({ devices, selected, onSave, onClose }) {
@@ -850,6 +968,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [modal, setModal] = useState(null);
   const [sel, setSel] = useState(null);
+  const [multi, setMulti] = useState([]);          // ["deviceId|idx"] chosen with ctrl / shift / select mode
+  const [anchor, setAnchor] = useState(null);      // last port clicked, for shift ranges
+  const [selectMode, setSelectMode] = useState(false);
   const [highlight, setHighlight] = useState(null);
   const [collapsed, setCollapsed] = useState(lsGet("vlanmgr.collapsed", {}));
   const [closedGroups, setClosedGroups] = useState(lsGet("vlanmgr.groups", {}));
@@ -924,6 +1045,12 @@ function App() {
     addEventListener("focus", back);
     return () => { document.removeEventListener("visibilitychange", back); removeEventListener("focus", back); };
   }, [load]);
+  // Escape lets go of selected ports
+  useEffect(() => {
+    const k = (e) => { if (e.key === "Escape" && !modal) { setMulti([]); setSel(null); setSelectMode(false); } };
+    addEventListener("keydown", k);
+    return () => removeEventListener("keydown", k);
+  }, [modal]);
   const poll = ((envList && envList.settings.poll_seconds) || 10) * 1000;
   useInterval(() => { if (!document.hidden && !modal) load(); }, poll);
   useInterval(() => { if (!document.hidden) loadVersion(); }, 30 * 60 * 1000);
@@ -970,7 +1097,30 @@ function App() {
   const sampleCount = sample ? shown.reduce((a, d) => a + d.ports.filter((p) => p.native_network_id === sample.id).length, 0) : 0;
   const selPort = selDev && selDev.ports.find((p) => p.idx === sel.i);
   const upd = version && version.update && version.update.update_available;
-  const pick = (d, i) => setSel(sel && sel.d === d && sel.i === i ? null : { d, i });
+  const keyOf = (d, i) => `${d}|${i}`;
+  // plain click: one port. Ctrl / Cmd click (or Select mode): add / remove. Shift click: every port between
+  // the last one clicked and this one on the same device, by port number.
+  const pick = (d, i, e) => {
+    const k = keyOf(d, i);
+    if (e && e.shiftKey && anchor && anchor.d === d) {
+      const dev = devices.find((x) => x.id === d);
+      const lo = Math.min(anchor.i, i), hi = Math.max(anchor.i, i);
+      const range = dev.ports.filter((p) => p.idx >= lo && p.idx <= hi).map((p) => keyOf(d, p.idx));
+      const base = multi.length ? multi : sel ? [keyOf(sel.d, sel.i)] : [];
+      setMulti([...new Set([...base, ...range])]); setSel(null);
+    } else if ((e && (e.ctrlKey || e.metaKey)) || selectMode) {
+      const base = multi.length ? multi : sel ? [keyOf(sel.d, sel.i)] : [];
+      setMulti(base.includes(k) ? base.filter((x) => x !== k) : [...base, k]); setSel(null);
+    } else {
+      setMulti([]);
+      setSel(sel && sel.d === d && sel.i === i ? null : { d, i });
+    }
+    setAnchor({ d, i });
+  };
+  const multiSet = new Set(multi);
+  const multiPorts = multi.map((k) => { const [d, i] = k.split("|"); const dev = devices.find((x) => x.id === d);
+    const port = dev && dev.ports.find((p) => p.idx === Number(i)); return port ? { dev, port } : null; }).filter(Boolean);
+  const clearMulti = () => { setMulti([]); setAnchor(null); };
   const onEnvsChanged = () => { loadEnvs(); load(true); };
 
   let body;
@@ -1005,7 +1155,7 @@ function App() {
               <${Icon} name=${KIND[g.kind].icon} size=${16} /><b>${KIND[g.kind].label}</b><span class="badge">${g.list.length}</span>
               <span class="grow"></span><span class="chev" style=${closedGroups[g.kind] ? "transform:rotate(-90deg)" : ""}><${Icon} name="chevron" /></span></button>`}
             ${!(g.kind && closedGroups[g.kind]) && html`<div class="devices">${g.list.map((d) => html`<${DeviceCard} key=${d.id} device=${d} networks=${networks} colors=${colors} pv=${pv}
-              highlight=${highlight} sel=${sel} onPick=${pick} collapsed=${!!collapsed[d.mac]} onManage=${(x) => setDevModal(x.id)}
+              highlight=${highlight} sel=${sel} multi=${multiSet} onPick=${pick} collapsed=${!!collapsed[d.mac]} onManage=${(x) => setDevModal(x.id)}
               onCollapse=${() => { const c = { ...collapsed, [d.mac]: !collapsed[d.mac] }; setCollapsed(c); lsSet("vlanmgr.collapsed", c); }} />`)}</div>`}
           </section>`)}
       ${pv.apps && (st.app_devices || []).length > 0 && html`<${AppDevices} apps=${st.app_devices} devices=${devices} me=${me} env=${env}
@@ -1060,18 +1210,25 @@ function App() {
       </div>
     </header>
 
-    <main class=${"main" + (selPort ? " with-drawer" : "") + (pv.fx === "solid" ? "" : " fx-pulse") + (pv.size && pv.size !== "auto" ? ` ps-${pv.size}` : "")}>
+    <main class=${"main" + (selPort || multiPorts.length ? " with-drawer" : "") + (selectMode ? " select-mode" : "") + (pv.fx === "solid" ? "" : " fx-pulse") + (pv.size && pv.size !== "auto" ? ` ps-${pv.size}` : "")}>
       ${env && html`<div class="env-bar">
         ${envList.envs.length > 1 ? html`<label class="env-select"><${Icon} name="server" size=${16} />
           <select value=${envId || ""} onChange=${(e) => setEnvId(Number(e.target.value))} aria-label="Environment">
             ${envList.envs.map((e) => html`<option value=${e.id}>${e.name}</option>`)}</select></label>`
           : html`<span class="env-select single"><${Icon} name="server" size=${16} /><b>${env.name}</b></span>`}
         ${ready && st.fetched_at ? html`<span class="muted small env-updated">Updated ${ago(st.fetched_at)}</span>` : null}
+        ${ready && !st.readonly && can("ports.change") && devices.length > 0 && html`<button class=${"btn sm select-btn" + (selectMode ? " primary" : " ghost")}
+          title=${canHover ? "Or Ctrl / ⌘ click ports to pick several, and Shift click for a range" : "Tap ports to pick several"}
+          onClick=${() => { setSelectMode(!selectMode); if (selectMode) clearMulti(); }}>
+          <${Icon} name="check" size=${14} />${selectMode ? `Selecting${multi.length ? ` · ${multi.length}` : ""}` : "Select ports"}</button>`}
       </div>`}
       ${body}
     </main>
 
-    ${selPort && html`<${PortDrawer} readonly=${!!(st && st.readonly)} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
+    ${multiPorts.length > 0 && html`<${BulkDrawer} env=${env} access=${env.access} items=${multiPorts} networks=${networks} colors=${colors}
+      me=${me} settings=${settings} onRemove=${(d, i) => setMulti(multi.filter((x) => x !== keyOf(d, i)))}
+      onClose=${() => { clearMulti(); setSelectMode(false); }} onApplied=${() => { clearMulti(); setSelectMode(false); load(true); }} />`}
+    ${selPort && !multiPorts.length && html`<${PortDrawer} readonly=${!!(st && st.readonly)} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
       settings=${settings} onClose=${() => setSel(null)} onApplied=${() => load(true)} />`}
 
     <button class=${"version" + (upd ? " has-update" : "")} onClick=${() => setModal("changelog")} title=${upd ? `Version ${version.update.latest} is available` : "Changelog"}>

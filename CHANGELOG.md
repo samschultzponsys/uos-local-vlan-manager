@@ -5,6 +5,31 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.2 — 2026-10-01
+
+### Added
+- **Change many ports at once, across switches** (something UniFi's own UI can't do):
+  - **Ctrl / ⌘ click** ports to add or remove them, on any switch in the environment.
+  - **Shift click** selects a range, by port number (3 to 9 is 3, 4, 5... 9, whichever row
+    they're on).
+  - On phones and tablets, **Select ports** (next to the environment) turns taps into picking.
+    A bar at the bottom counts them; **Change…** opens the editor and **Pick more** goes back.
+  - The panel lists the picked ports by switch (remove any with ×). Set one native VLAN and the
+    tagging, and **Apply**.
+- Bulk changes follow the same rules as one port at a time, and ask **once** for all of them:
+  - protected ports need the ability and a confirmation
+  - locked ports need the lock ability and stay locked, to the new settings
+  - port profiles get detached
+  - WAN ports, and ports you may not change, are skipped and listed
+  - switches that can't filter tagged VLANs only get the native VLAN
+- Each switch is written once, however many of its ports changed. Every port gets its own
+  entry in the activity log, marked as a bulk change.
+- **Esc** lets go of picked ports.
+
+### Fixed
+- On phones, the environment bar no longer squeezes its buttons; the update time is already
+  in the top bar.
+
 ## 2.1 — 2026-10-01
 
 ### Added

@@ -5,6 +5,7 @@ VLAN Manager for UniFi - pick switches, click a port, set its native VLAN.
 Flask + SQLite, single container. See README.md.
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -399,6 +400,157 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
     return jsonify({"ok": True, "verified": verified, "native_only": native_only,
                     "warning": learned or (None if verified else
                                            "UniFi accepted the change but didn't report it back yet. Refresh in a moment to check.")})
+
+
+# ----------------------------------------------------------------------------
+# Change many ports at once (across switches in one environment)
+# ----------------------------------------------------------------------------
+
+@app.route("/api/envs/<int:env_id>/ports/bulk", methods=["PUT"])
+@auth.require("ports.change")
+def api_bulk_ports(env_id):
+    """Set the same native VLAN (and tagging) on many ports. Ports that can't be changed are skipped with
+    a reason; protected / locked / profile ports need the same confirmations as one at a time, asked once.
+    One write per switch."""
+    me = auth.current()
+    env, acc, err = _env_or_404(env_id)
+    if err:
+        return err
+    if _readonly(env):
+        return _deny(READONLY_MSG, 409)
+    body = request.get_json(silent=True) or {}
+    picks = body.get("ports") or []
+    if not isinstance(picks, list) or not picks:
+        return _deny("Pick some ports")
+    if len(picks) > 500:
+        return _deny("That's too many ports at once")
+    native = body.get("native_network_id")
+    mode = body.get("tagged_mode") or db.get_setting("default_tagged_mode")
+    excluded_in = body.get("excluded_network_ids") or []
+    if mode not in unifi.MODES or not isinstance(excluded_in, list):
+        return _deny("Pick Allow All, Block All or Custom")
+    c = envs.client(env)
+    try:
+        raw_devs = c.raw_devices()
+        norm = unifi.normalize(raw_devs, c.raw_networks(), c.raw_portconfs(), [], db.setting_bool("protect_uplinks"))
+    except unifi.UniFiError as e:
+        return _deny(str(e), 502)
+    nets = norm["networks"]
+    net_ids = [n["id"] for n in nets]
+    if native not in net_ids:
+        return _deny("Pick a network from the list")
+    if not envs.vlan_allowed(acc, native):
+        return _deny("You can't put ports on that network", 403)
+    if not acc["all_vlans"] and mode == "auto":
+        return _deny("Allow All would tag networks you can't use - pick Block All or Custom", 403)
+    unifi.apply_model_caps(norm["devices"], db.get_json("model_caps", {}))
+    ndevs = {d["id"]: d for d in norm["devices"]}
+    raws = {d.get("_id"): d for d in raw_devs}
+    locks = envs.locks(env_id)
+    may_protected = perms.has(me, "ports.protected") or bool(env["supervisors_protected"])
+    may_lock = perms.has(me, "ports.lock")
+    todo, skipped = [], []
+    needs = {"protected": [], "locked": [], "profile": []}
+    seen = set()
+    for pick in picks:
+        did, idx = str((pick or {}).get("device_id") or ""), int((pick or {}).get("idx") or 0)
+        if (did, idx) in seen:
+            continue
+        seen.add((did, idx))
+        nd = ndevs.get(did)
+        label = f"{nd['name']} port {idx}" if nd else f"port {idx}"
+        if nd is None or not _sees(me, acc, nd["mac"]):
+            skipped.append({"port": label, "reason": "no longer on the controller"})
+            continue
+        port = next((p for p in nd["ports"] if p["idx"] == idx), None)
+        if port is None:
+            skipped.append({"port": label, "reason": "no such port"})
+            continue
+        if port["wan"]:
+            skipped.append({"port": label, "reason": "WAN port"})
+            continue
+        lock = locks.get((nd["mac"], idx))
+        if lock and not may_lock:
+            skipped.append({"port": label, "reason": "locked by an admin"})
+            continue
+        if port["protected"] and not may_protected:
+            skipped.append({"port": label, "reason": "protected (" + "; ".join(port["protect_reasons"]) + ")"})
+            continue
+        if lock:
+            needs["locked"].append(label)
+        if port["protected"]:
+            needs["protected"].append(label)
+        if port["profile_id"]:
+            needs["profile"].append(label)
+        todo.append((nd, port, lock, label))
+    if not todo:
+        return _deny("None of those ports can be changed", 403, skipped=skipped)
+    missing = {k: v for k, v in needs.items() if v and not body.get({"protected": "confirm_protected", "locked": "confirm_locked",
+                                                                      "profile": "detach_profile"}[k])}
+    if missing:
+        return _deny("Some ports need a confirmation", 409, confirm="bulk", needs=missing, skipped=skipped, count=len(todo))
+
+    by_dev = {}
+    for nd, port, lock, label in todo:
+        by_dev.setdefault(nd["id"], []).append((nd, port, lock, label))
+    changed, failed, notes = [], [], []
+    learned = db.get_json("model_caps", {})
+    for did, items in by_dev.items():
+        nd = items[0][0]
+        native_only = not nd["caps"]["tagged_vlans"]
+
+        def build(native_only):
+            dev = copy.deepcopy(raws[did])
+            afters = []
+            for _, port, _, _ in items:
+                if native_only:
+                    m, ex = port["tagged_mode"], list(port["excluded_network_ids"])
+                else:
+                    m = mode
+                    ex = list(excluded_in)
+                    if not acc["all_vlans"] and m == "custom":   # networks they can't use are never tagged
+                        ex = list(set(ex) | {i for i in net_ids if not envs.vlan_allowed(acc, i)})
+                overrides, _, after = unifi.build_override(dev, port["idx"], native, m, ex, net_ids, True, native_only)
+                dev["port_overrides"] = overrides
+                afters.append((m, after))
+            return dev["port_overrides"], afters
+
+        overrides, afters = build(native_only)
+        try:
+            try:
+                c.put_port_overrides(did, overrides)
+            except unifi.UniFiError as e:
+                if native_only or unifi.UNSUPPORTED_TAGGING not in str(e):
+                    raise
+                learned[nd["model"]] = {"tagged_vlans": False, "learned": True}
+                db.set_json("model_caps", learned)
+                native_only = True
+                notes.append(f"{nd['model_name']} doesn't support tagged VLAN management, so only the native VLAN was set "
+                             f"on {nd['name']}. The app remembers this for every {nd['model_name']}.")
+                overrides, afters = build(True)
+                c.put_port_overrides(did, overrides)
+        except unifi.UniFiError as e:
+            failed.append({"device": nd["name"], "error": str(e)})
+            for _, port, _, label in items:
+                auth.audit("port.set", f"{env['name']} / {nd['name']} / port {port['idx']}",
+                           {"env": env["name"], "device": nd["name"], "port": port["idx"], "bulk": True, "error": str(e)},
+                           ok=False, env_id=env_id)
+            continue
+        for (_, port, lock, label), (m, after) in zip(items, afters):
+            if lock:
+                envs.set_lock(env_id, nd["mac"], port["idx"], native, m, after.get("excluded_networkconf_ids", []),
+                              lock["note"], me["username"])
+            auth.audit("port.set", f"{env['name']} / {nd['name']} / port {port['idx']}", {
+                "env": env["name"], "device": nd["name"], "device_id": did, "port": port["idx"], "port_name": port["name"],
+                "bulk": True,
+                "before": {"native": _net_label(nets, port["native_network_id"]), "tagged": unifi.MODE_LABEL[port["tagged_mode"]],
+                           "profile": port["profile_name"]},
+                "after": {"native": _net_label(nets, native),
+                          "tagged": f"not supported by {nd['model_name']}" if native_only else unifi.MODE_LABEL[m]},
+                **({"lock": "kept, updated to the new settings"} if lock else {})}, env_id=env_id)
+            changed.append(label)
+    envs.invalidate(env_id)
+    return jsonify({"ok": not failed, "changed": changed, "skipped": skipped, "failed": failed, "notes": notes})
 
 
 # ----------------------------------------------------------------------------
