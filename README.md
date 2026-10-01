@@ -23,11 +23,16 @@ manage only their own switches and only the VLANs you allow.
 
 ## What it does
 
-- **Your switches, drawn like the hardware**: name and model on the chassis, odd ports on
-  top, even below, SFP cages on the right. On a phone the ports wrap into large tap targets.
+- **Your switches, drawn like the hardware**: your name for it and UniFi's official model name
+  (e.g. *USW Flex Mini* rather than `USMINI`) on the chassis, odd ports on top, even below,
+  SFP cages on the right. On a phone the ports wrap into large tap targets.
 - **Port status at a glance**: link up/down and speed, PoE enabled / delivering power (with
-  watts), the native VLAN as the port's color and number, and markers for tagged VLANs, port
-  profiles and protected ports.
+  watts), the native VLAN as the port's color and number, and a mark for what the port is:
+  - **uplink**, **link to a UniFi device**, **WAN**, **LAG** or **mirror** port
+  - otherwise **all VLANs tagged** or **some VLANs tagged** (Allow All / Custom)
+  - port profile, admin lock
+
+  The panel shows the port type as it is on the box, e.g. *RJ45 · 2.5 GbE* or *SFP+ · empty*.
 - **Tap a port** to set:
   - **Native VLAN / Network**: a dropdown of the networks already configured in UniFi.
   - **Tagged VLAN Management**: Allow All, **Block All** (pre-selected by default) or Custom
@@ -36,8 +41,13 @@ manage only their own switches and only the VLANs you allow.
   The change is read back from the controller to confirm it stuck.
 - **VLAN colors**: every network has a color. Admins set the defaults and each user can pick
   their own. Tap a network in the legend to highlight every port that carries it.
-- **Safety rails**: uplinks, links to other UniFi devices, LAG and mirror ports can only be
-  changed by an admin, after a warning. Ports with a port profile ask before detaching it.
+- **Safety rails**: uplinks, links to other UniFi devices, LAG and mirror ports are
+  **protected**: changing one could cut off the switch or what's behind it, so it takes the
+  *Change protected ports* ability and a confirmation. WAN ports can't be changed here at
+  all. Ports with a port profile ask before detaching it.
+- **Switches that can't filter tagged VLANs** (like the **USW Flex Mini**) only offer the
+  native VLAN; the tagging setting, which the switch would ignore, is hidden. Admins can mark
+  other models the same way, or undo it, from any port panel.
 - **Activity log**: who changed which port, from what to what, and whether UniFi confirmed it.
 - **Many environments, scoped per user**: see [Environments & access](#environments--access).
 - **Always current**: nothing about your switches is stored here. Every view is read live

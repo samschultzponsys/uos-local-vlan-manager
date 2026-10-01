@@ -4,8 +4,10 @@ A small fake UniFi Network controller for tests and UI development.
     python tests/fake_unifi.py            # serves http://127.0.0.1:18443, API key "test-key"
 
 Implements the handful of classic-API endpoints VLAN Manager uses, with a
-gateway, an 8-port PoE switch, a 24-port PoE switch and an access point.
-PUT rest/device/<id> stores port_overrides like the real controller does.
+gateway, an 8-port PoE switch, a 24-port PoE switch, a USW Flex Mini and an
+access point, plus Protect / Access devices in the v2 device list.
+PUT rest/device/<id> stores port_overrides, name and LED like the real
+controller does; cmd/devmgr commands are recorded in state["cmds"].
 """
 
 import copy
@@ -39,8 +41,8 @@ PORTCONFS = [
 ]
 
 
-def _port(idx, up=False, speed=0, poe=False, poe_power=0.0, media="GE", uplink=False, poe_mode="auto", name=None):
-    p = {"port_idx": idx, "name": name or f"Port {idx}", "up": up, "speed": speed if up else 0,
+def _port(idx, up=False, speed=0, poe=False, poe_power=0.0, media="GE", uplink=False, poe_mode="auto", name=None, **extra):
+    p = {**extra, "port_idx": idx, "name": name or f"Port {idx}", "up": up, "speed": speed if up else 0,
          "full_duplex": up, "media": media, "is_uplink": uplink, "enable": True,
          "rx_bytes": random.randint(0, 10**10) if up else 0, "tx_bytes": random.randint(0, 10**10) if up else 0}
     if poe:
@@ -51,14 +53,12 @@ def _port(idx, up=False, speed=0, poe=False, poe_power=0.0, media="GE", uplink=F
 
 def make_devices():
     random.seed(7)
-    gw = {"_id": "dev-gw", "mac": "aa:00:00:00:00:01", "name": "Gateway", "model": "UCGMAX",
-          "model_name": "Cloud Gateway Max", "type": "udm", "ip": "192.168.1.1", "state": 1,
+    gw = {"_id": "dev-gw", "mac": "aa:00:00:00:00:01", "name": "Gateway", "model": "UCGMAX", "type": "udm", "ip": "192.168.1.1", "state": 1,
           "version": "4.3.6", "uptime": 864000,
           "port_table": [_port(1, True, 1000, name="LAN 1"), _port(2, True, 1000, name="LAN 2"),
-                         _port(3), _port(4), _port(5, True, 2500, media="2P5GE", name="WAN", uplink=True)],
+                         _port(3), _port(4), _port(5, True, 2500, media="2P5GE", name="WAN", uplink=True, network_name="wan")],
           "port_overrides": []}
-    sw8 = {"_id": "dev-sw8", "mac": "aa:00:00:00:00:08", "name": "Rack 7 Switch", "model": "USL8LPB",
-           "model_name": "USW Lite 8 PoE", "type": "usw", "ip": "192.168.1.20", "state": 1,
+    sw8 = {"_id": "dev-sw8", "mac": "aa:00:00:00:00:08", "name": "Rack 7 Switch", "model": "USL8LPB", "type": "usw", "ip": "192.168.1.20", "state": 1,
            "version": "7.1.26", "uptime": 432000,
            "uplink": {"uplink_mac": "aa:00:00:00:00:01", "uplink_remote_port": 1, "port_idx": 8},
            "port_table": [
@@ -82,9 +82,9 @@ def make_devices():
                                 round(random.uniform(2, 12), 1) if up and random.random() < 0.6 else 0.0))
     sw24_ports += [_port(25, True, 10000, media="SFP+", uplink=True, name="SFP+ 1"),
                    _port(26, False, media="SFP+", name="SFP+ 2")]
-    sw24 = {"_id": "dev-sw24", "mac": "aa:00:00:00:00:24", "name": "Office Core", "model": "US24PRO",
-            "model_name": "USW Pro 24 PoE", "type": "usw", "ip": "192.168.1.21", "state": 1,
-            "version": "7.1.26", "uptime": 1728000,
+    sw24 = {"_id": "dev-sw24", "mac": "aa:00:00:00:00:24", "name": "Office Core", "model": "US24PRO", "type": "usw", "ip": "192.168.1.21", "state": 1,
+            "version": "7.1.26", "uptime": 1728000, "upgradable": True, "upgrade_to_firmware": "7.2.123",
+            "num_sta": 9, "system-stats": {"cpu": "14.2", "mem": "38.0"}, "serial": "F4E2C6000024",
             "uplink": {"uplink_mac": "aa:00:00:00:00:01", "uplink_remote_port": 2, "port_idx": 25},
             "port_table": sw24_ports,
             "port_overrides": [{"port_idx": i, "native_networkconf_id": n, "tagged_vlan_mgmt": "block_all"}
@@ -92,29 +92,46 @@ def make_devices():
                                             (9, "net-guest"), (10, "net-cam"), (11, "net-cam")]]
                               + [{"port_idx": 12, "native_networkconf_id": "net-lan", "tagged_vlan_mgmt": "custom",
                                   "excluded_networkconf_ids": ["net-guest"]}]}
-    ap = {"_id": "dev-ap", "mac": "aa:00:00:00:00:a1", "name": "Lobby AP", "model": "U7PRO",
-          "model_name": "U7 Pro", "type": "uap", "ip": "192.168.1.30", "state": 1, "version": "8.0.1",
+    ap = {"_id": "dev-ap", "mac": "aa:00:00:00:00:a1", "name": "Lobby AP", "model": "U7PRO", "type": "uap", "ip": "192.168.1.30", "state": 1, "version": "8.0.1",
           "uplink": {"uplink_mac": "aa:00:00:00:00:24", "uplink_remote_port": 1},
           "port_table": [_port(1, True, 2500, media="2P5GE", uplink=True, name="Uplink")]}
-    return [gw, sw8, sw24, ap]
+    mini = {"_id": "dev-mini", "mac": "aa:00:00:00:00:0f", "name": "Desk Flex Mini", "model": "USMINI",
+            "type": "usw", "ip": "192.168.1.22", "state": 1, "version": "2.1.6", "uptime": 86400,
+            "uplink": {"uplink_mac": "aa:00:00:00:00:24", "uplink_remote_port": 14, "port_idx": 1},
+            "port_table": [_port(1, True, 1000, name="Port 1", uplink=True), _port(2, True, 1000), _port(3),
+                           _port(4, True, 100), _port(5)],
+            "port_overrides": [{"port_idx": 2, "native_networkconf_id": "net-iot", "tagged_vlan_mgmt": "auto"}]}
+    return [gw, sw8, sw24, mini, ap]
 
 
 CLIENTS = [
     {"mac": "80:d7:33:4e:28:c4", "hostname": "wallboard", "ip": "10.7.170.21", "is_wired": True,
-     "sw_mac": "aa:00:00:00:00:08", "sw_port": 1},
+     "sw_mac": "aa:00:00:00:00:08", "sw_port": 1, "network_id": "net-rack7"},
     {"mac": "1c:ee:c9:50:a6:d1", "name": "Rack cam 1", "ip": "10.0.20.14", "is_wired": True,
-     "sw_mac": "aa:00:00:00:00:08", "sw_port": 6},
+     "sw_mac": "aa:00:00:00:00:08", "sw_port": 6, "network_id": "net-cam", "oui": "Ubiquiti Inc"},
     {"mac": "50:af:73:3c:e6:9c", "name": "Rack cam 2", "ip": "10.0.20.15", "is_wired": True,
-     "sw_mac": "aa:00:00:00:00:08", "sw_port": 7},
+     "sw_mac": "aa:00:00:00:00:08", "sw_port": 7, "network_id": "net-cam", "oui": "Ubiquiti Inc"},
+    {"mac": "f4:e2:c6:11:22:33", "hostname": "UA-Hub", "ip": "192.168.1.60", "is_wired": True,
+     "sw_mac": "aa:00:00:00:00:24", "sw_port": 11, "network_id": "net-cam", "oui": "Ubiquiti Inc"},
     {"mac": "00:11:22:33:44:55", "hostname": "printer", "ip": "192.168.1.50", "is_wired": True,
-     "sw_mac": "aa:00:00:00:00:24", "sw_port": 2},
-    {"mac": "66:11:22:33:44:55", "hostname": "phone", "ip": "10.0.40.9", "is_wired": False},
+     "sw_mac": "aa:00:00:00:00:24", "sw_port": 2, "network_id": "net-lan"},
+    {"mac": "66:11:22:33:44:55", "hostname": "phone", "ip": "10.0.40.9", "is_wired": False, "network_id": "net-guest"},
 ]
+# what the Network app's v2 device list reports for other UniFi apps (Protect spells MACs without colons)
+APP_DEVICES = {
+    "protect_devices": [
+        {"mac": "1CEEC950A6D1", "name": "Rack cam 1", "model": "G4 Bullet", "state": "CONNECTED", "version": "4.69.55"},
+        {"mac": "50AF733CE69C", "name": "Rack cam 2", "model": "G5 Dome", "state": "DISCONNECTED"},
+    ],
+    "access_devices": [
+        {"mac": "f4:e2:c6:11:22:33", "name": "Front door hub", "model": "UA Hub", "state": "ONLINE", "ip": "192.168.1.60"},
+    ],
+}
 
 
 def create_app():
     app = Flask(__name__)
-    state = {"devices": make_devices()}
+    state = {"devices": make_devices(), "cmds": []}
     app.config["STATE"] = state
 
     @app.before_request
@@ -157,7 +174,25 @@ def create_app():
         body = request.get_json()
         if "port_overrides" in body:
             dev["port_overrides"] = copy.deepcopy(body["port_overrides"])
+        for k in ("name", "led_override"):
+            if k in body:
+                dev[k] = body[k]
         return ok([dev])
+
+    @app.route("/proxy/network/api/s/<site>/cmd/devmgr", methods=["POST"])
+    def devmgr(site):
+        body = request.get_json()
+        state["cmds"].append(body)
+        dev = next((d for d in state["devices"] if d["mac"] == body.get("mac")), None)
+        if dev is None:
+            return jsonify({"meta": {"rc": "error", "msg": "api.err.UnknownDevice"}}), 400
+        if body["cmd"] in ("set-locate", "unset-locate"):
+            dev["locating"] = body["cmd"] == "set-locate"
+        return ok([])
+
+    @app.route("/proxy/network/v2/api/site/<site>/device")
+    def v2_devices(site):
+        return jsonify({"network_devices": state["devices"], **APP_DEVICES})
 
     # --- UniFi cloud stand-in: Site Manager hosts + the connector, which (like the real one)
     # carries the official Integration API but refuses the switch-port API

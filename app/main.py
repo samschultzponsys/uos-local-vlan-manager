@@ -212,8 +212,12 @@ def api_env_state(env_id):
         out["error"] = str(e)
         return jsonify(out)
     out.update(data)
-    out["networks"] = [{**n, "allowed": envs.vlan_allowed(acc, n["id"])} for n in data["networks"]]
-    out["devices"] = [d for d in data["devices"] if envs.device_allowed(acc, d["mac"])]
+    out["networks"] = [{**n, "allowed": envs.vlan_allowed(acc, n["id"]),
+                        # client counts are site-wide: only for people who see every device
+                        "clients": n.get("clients") if acc["all_devices"] else None} for n in data["networks"]]
+    out["devices"] = unifi.apply_model_caps([d for d in data["devices"] if envs.device_allowed(acc, d["mac"])],
+                                            db.get_json("model_caps", {}))
+    out.pop("app_devices", None)
     if not data.get("readonly"):
         envs.annotate_locks(env_id, out["devices"])
     return jsonify(out)
@@ -278,15 +282,22 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
         return _deny(str(e), 502)
     nets = norm["networks"]
     net_ids = [n["id"] for n in nets]
+    unifi.apply_model_caps(norm["devices"], db.get_json("model_caps", {}))
     ndev = next((d for d in norm["devices"] if d["id"] == device_id), None)
     port = next((p for p in (ndev or {}).get("ports", []) if p["idx"] == idx), None)
     if port is None:
         return _deny("No such port", 404)
+    if port["wan"]:
+        return _deny("This is a WAN port - set it up in UniFi's Internet settings", 403)
     if native not in net_ids:
         return _deny("Pick a network from the list")
     if not envs.vlan_allowed(acc, native):
         return _deny("You can't put ports on that network", 403)
-    if not acc["all_vlans"]:
+    # a switch that can't filter tagged VLANs (e.g. USW Flex Mini): only the native network changes
+    native_only = not ndev["caps"]["tagged_vlans"]
+    if native_only:
+        mode, excluded = port["tagged_mode"], list(port["excluded_network_ids"])
+    elif not acc["all_vlans"]:
         if mode == "auto":
             return _deny("Allow All would tag networks you can't use - pick Block All or Custom", 403)
         if mode == "custom":   # networks you can't use are never tagged
@@ -310,12 +321,12 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
     if isinstance(exp, dict) and not body.get("confirm_changed"):
         seen = (exp.get("native_network_id"), exp.get("tagged_mode"), sorted(exp.get("excluded_network_ids") or []))
         now_ = (port["native_network_id"], port["tagged_mode"], sorted(port["excluded_network_ids"]))
-        if seen != now_:
+        if (seen[0] != now_[0]) if native_only else (seen != now_):
             return _deny("Changed elsewhere", 409, confirm="changed",
                          current={"native": _net_label(nets, port["native_network_id"]),
                                   "tagged": unifi.MODE_LABEL[port["tagged_mode"]]})
 
-    overrides, before, after = unifi.build_override(dev, idx, native, mode, excluded, net_ids, True)
+    overrides, before, after = unifi.build_override(dev, idx, native, mode, excluded, net_ids, True, native_only)
     target = f"{env['name']} / {ndev['name']} / port {idx}"
     detail = {
         "env": env["name"], "device": ndev["name"], "device_id": device_id, "port": idx, "port_name": port["name"],
@@ -326,6 +337,8 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
         "after": {"native": _net_label(nets, native), "tagged": unifi.MODE_LABEL[mode],
                   "excluded": [_net_label(nets, i) for i in after.get("excluded_networkconf_ids", [])]},
     }
+    if native_only:
+        detail["after"].update({"tagged": f"not supported by {ndev['model_name']}", "excluded": []})
     try:
         c.put_port_overrides(device_id, overrides)
     except unifi.UniFiError as e:
@@ -339,7 +352,7 @@ def _set_port(env_id, device_id, idx, body, action="port.set"):
     try:
         for _ in range(3):
             time.sleep(0.6)
-            if unifi.verify_override(c.raw_device(dev.get("mac")), idx, native, mode):
+            if unifi.verify_override(c.raw_device(dev.get("mac")), idx, native, mode, native_only):
                 verified = True
                 break
     except unifi.UniFiError:
@@ -414,6 +427,38 @@ def api_port_lock_reapply(env_id, device_id, idx):
         "native_network_id": lock["native_network_id"], "tagged_mode": lock["tagged_mode"],
         "excluded_network_ids": lock["excluded_network_ids"], "confirm_locked": True,
         "confirm_protected": True, "detach_profile": True}, action="port.lock_reapplied")
+
+
+# ----------------------------------------------------------------------------
+# Switch models that can't filter tagged VLANs (admin)
+# ----------------------------------------------------------------------------
+
+@app.route("/api/admin/model-caps", methods=["PUT"])
+@auth.require("settings.manage")
+def api_model_caps():
+    """Tell the app whether a switch model can filter tagged VLANs (null = back to the built-in list)."""
+    body = request.get_json(silent=True) or {}
+    model = str(body.get("model") or "").strip()[:40]
+    if not model:
+        return _deny("Which model?")
+    val = body.get("tagged_vlans")
+    if val is not None and not isinstance(val, bool):
+        return _deny("tagged_vlans must be true, false or null")
+    caps = db.get_json("model_caps", {})
+    if val is None:
+        caps.pop(model, None)
+    else:
+        caps[model] = {"tagged_vlans": val}
+    db.set_json("model_caps", caps)
+    auth.audit("settings.model_caps", model, {"tagged_vlans": "built-in" if val is None else val})
+    return jsonify({"ok": True, "model_caps": caps})
+
+
+@app.route("/api/admin/model-caps")
+@auth.require("settings.manage")
+def api_model_caps_get():
+    return jsonify({"model_caps": db.get_json("model_caps", {}), "builtin_native_only": sorted(unifi.NATIVE_ONLY_MODELS),
+                    "model_names": unifi.MODEL_NAMES})
 
 
 # ----------------------------------------------------------------------------

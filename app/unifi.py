@@ -48,7 +48,46 @@ MODE_LABEL = {"auto": "Allow All", "block_all": "Block All", "custom": "Custom"}
 LEGACY_FORWARD = {"auto": "all", "block_all": "native", "custom": "customize"}
 FORWARD_MODE = {"all": "auto", "native": "block_all", "customize": "custom"}
 DEVICE_TYPES = {"usw": "Switch", "udm": "Gateway", "ugw": "Gateway", "uxg": "Gateway",
-                "uap": "Access Point", "ubb": "Building Bridge", "uck": "Cloud Key"}
+                "uap": "Access Point", "ubb": "Building Bridge", "uck": "Cloud Key", "usp": "SmartPower"}
+DEVICE_KIND = {"usw": "switch", "udm": "gateway", "ugw": "gateway", "uxg": "gateway", "uap": "ap"}
+
+# UniFi's device list only has the model code; these are the names UniFi shows for them.
+# Anything missing here is shown by its code.
+MODEL_NAMES = {
+    # switches
+    "USMINI": "USW Flex Mini", "USF5P": "USW Flex", "USFXG": "USW Flex XG",
+    "USM8P": "USW Ultra", "USM8P60": "USW Ultra 60W", "USM8P210": "USW Ultra 210W",
+    "USL8LP": "USW Lite 8 PoE", "USL8LPB": "USW Lite 8 PoE", "USL16LP": "USW Lite 16 PoE", "USL16LPB": "USW Lite 16 PoE",
+    "USL16P": "USW 16 PoE", "USL24": "USW 24", "USL24P": "USW 24 PoE", "USL48": "USW 48", "USL48P": "USW 48 PoE",
+    "US24PRO": "USW Pro 24 PoE", "US24PRO2": "USW Pro 24", "US48PRO": "USW Pro 48 PoE", "US48PRO2": "USW Pro 48",
+    "USPM16": "USW Pro Max 16", "USPM16P": "USW Pro Max 16 PoE", "USPM24": "USW Pro Max 24",
+    "USPM24P": "USW Pro Max 24 PoE", "USPM48": "USW Pro Max 48", "USPM48P": "USW Pro Max 48 PoE",
+    "USAGGPRO": "USW Pro Aggregation", "USL8A": "USW Aggregation", "US6XG150": "US XG 6 PoE", "USXG": "US 16 XG",
+    "US8": "US 8", "USC8": "US 8", "US8P60": "US 8 60W", "USC8P60": "US 8 60W", "US8P150": "US 8 150W",
+    "USC8P150": "US 8 150W", "US16P150": "US 16 150W", "US24": "US 24", "US24P250": "US 24 250W",
+    "US24P500": "US 24 500W", "US48": "US 48", "US48P500": "US 48 500W", "US48P750": "US 48 750W",
+    # gateways
+    "UDM": "Dream Machine", "UDMPRO": "Dream Machine Pro", "UDMPROSE": "Dream Machine SE",
+    "UDMPROMAX": "Dream Machine Pro Max", "UDR": "Dream Router", "UDR7": "Dream Router 7", "UDW": "Dream Wall",
+    "UDRULT": "Cloud Gateway Ultra", "UCGMAX": "Cloud Gateway Max", "UXGPRO": "Gateway Pro",
+    "UX": "UniFi Express", "UX7": "UniFi Express 7",
+    "UGW3": "Security Gateway", "UGW4": "Security Gateway Pro", "UGWXG": "Security Gateway XG",
+    # access points
+    "U7PG2": "AC Pro", "U7LT": "AC Lite", "U7LR": "AC LR", "U7MSH": "AC Mesh", "U7MP": "AC Mesh Pro",
+    "U7NHD": "nanoHD", "UFLHD": "FlexHD", "U7HD": "AC HD", "U7SHD": "AC SHD", "U7IW": "AC In-Wall",
+    "U7IWP": "AC In-Wall Pro", "UHDIW": "In-Wall HD", "UAL6": "U6 Lite", "UALR6": "U6 LR", "UALR6v2": "U6 LR",
+    "UAP6MP": "U6 Pro", "UAM6": "U6 Mesh", "UAIW6": "U6 In-Wall", "UAE6": "U6 Extender", "UAPL6": "U6+",
+    "U7PRO": "U7 Pro", "U7PROMAX": "U7 Pro Max",
+}
+
+# Switches that can't filter tagged VLANs per port: only the native VLAN can be set.
+# Admins can add or remove models in the app (Settings -> General -> Switch models).
+NATIVE_ONLY_MODELS = {"USMINI"}
+
+# what the port type looks like on the box, from UniFi's `media` code
+MEDIA_LABEL = {"FE": "RJ45 · 100 Mb", "GE": "RJ45 · 1 GbE", "2P5GE": "RJ45 · 2.5 GbE", "5GE": "RJ45 · 5 GbE",
+               "10GE": "RJ45 · 10 GbE", "SFP": "SFP · 1 Gb", "SFP+": "SFP+ · 10 Gb", "SFP28": "SFP28 · 25 Gb",
+               "QSFP28": "QSFP28 · 100 Gb"}
 
 
 class UniFiError(Exception):
@@ -331,16 +370,16 @@ def integration_snapshot(client):
     for n in _integration_list(client, f"/sites/{sid}/networks"):
         nets.append({"id": n.get("id"), "name": n.get("name") or "?", "vlan": _int(n.get("vlanId"), 1),
                      "purpose": (n.get("management") or "").lower(), "subnet": "", "is_default": bool(n.get("default")),
-                     "enabled": n.get("enabled", True) is not False})
+                     "enabled": n.get("enabled", True) is not False, "clients": None})
     nets.sort(key=lambda x: (x["vlan"], x["name"].lower()))
     devices = []
     for d in _integration_list(client, f"/sites/{sid}/devices"):
-        if "ports" not in (d.get("interfaces") or []):
-            continue
-        try:
-            det = _integration_get(client, f"/sites/{sid}/devices/{d['id']}")
-        except UniFiError:
-            continue
+        det = {}
+        if "ports" in (d.get("interfaces") or []):
+            try:
+                det = _integration_get(client, f"/sites/{sid}/devices/{d['id']}")
+            except UniFiError:
+                det = {}
         ports = []
         for p in sorted((det.get("interfaces") or {}).get("ports") or [], key=lambda x: _int(x.get("idx"))):
             idx = _int(p.get("idx"))
@@ -349,7 +388,9 @@ def integration_snapshot(client):
             ports.append({
                 "idx": idx, "name": f"Port {idx}", "up": p.get("state") == "UP", "enabled": True,
                 "speed": _int(p.get("speedMbps")), "full_duplex": False, "media": conn,
-                "sfp": conn not in ("", "RJ45"), "is_uplink": False,
+                "media_label": {"RJ45": "RJ45"}.get(conn, conn.replace("PLUS", "+")),
+                "sfp": conn not in ("", "RJ45"), "sfp_found": None, "is_uplink": False,
+                "wan": False, "role": None, "peer": None, "apps": [],
                 "poe_capable": poe is not None, "poe_enabled": bool(poe and poe.get("enabled")),
                 "poe_active": bool(poe and poe.get("state") == "UP"), "poe_power": None,
                 "poe_mode": (poe or {}).get("standard") or "", "op_mode": "switch",
@@ -360,17 +401,22 @@ def integration_snapshot(client):
             })
         feats = d.get("features") or []
         dtype = next((FEATURE_TYPE[f] for f in ("switching", "gateway", "accessPoint") if f in feats), "")
+        model = d.get("model") or ""
         devices.append({
-            "id": d.get("id"), "mac": (d.get("macAddress") or "").lower(), "name": d.get("name") or d.get("model") or "?",
-            "model": d.get("model") or "", "model_name": d.get("model") or "", "type": dtype,
+            "id": d.get("id"), "mac": (d.get("macAddress") or "").lower(), "name": d.get("name") or model or "?",
+            "model": model, "model_name": MODEL_NAMES.get(model, model), "type": dtype,
+            "kind": DEVICE_KIND.get(dtype, "other"),
             "type_label": DEVICE_TYPES.get(dtype, "Device"), "ip": d.get("ipAddress") or "",
-            "version": d.get("firmwareVersion") or "", "online": d.get("state") == "ONLINE",
+            "version": d.get("firmwareVersion") or "", "serial": "", "online": d.get("state") == "ONLINE",
             "state": 1 if d.get("state") == "ONLINE" else 0, "uptime": 0, "legacy": False,
+            "upgradable": False, "upgrade_to": "", "locating": False, "led_override": "default", "clients": 0,
+            "cpu": None, "mem": None, "uplink_to": None, "caps": {"tagged_vlans": False, "readonly": True},
             "port_count": len(ports), "ports": ports,
         })
-    devices.sort(key=lambda x: (x["type"] != "usw", x["name"].lower()))
+    order = {"gateway": 0, "switch": 1, "ap": 2, "other": 3}
+    devices.sort(key=lambda x: (order.get(x["kind"], 3), x["name"].lower()))
     default = next((n["id"] for n in nets if n["is_default"]), None)
-    return {"networks": nets, "default_network_id": default, "devices": devices,
+    return {"networks": nets, "default_network_id": default, "devices": devices, "app_devices": [],
             "readonly": True, "readonly_reason": READONLY_REASON}
 
 
@@ -439,7 +485,60 @@ def _effective(pt, ov, profiles, nets, default_net):
     }
 
 
-def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_uplinks=True):
+APP_NAMES = {"protect_devices": "Protect", "access_devices": "Access", "talk_devices": "Talk",
+             "connect_devices": "Connect", "led_devices": "LED"}
+
+
+def _mac(v):
+    """aa:bb:cc:dd:ee:ff from any common spelling (Protect uses AABBCCDDEEFF)."""
+    h = "".join(ch for ch in str(v or "").lower() if ch in "0123456789abcdef")
+    return ":".join(h[i:i + 2] for i in range(0, 12, 2)) if len(h) == 12 else str(v or "").lower()
+
+
+def _online(r):
+    st = r.get("state")
+    if isinstance(st, str):
+        return st.upper() in ("CONNECTED", "ONLINE", "ADOPTED", "1")
+    if isinstance(st, (int, float)) and not isinstance(st, bool):
+        return int(st) == 1
+    for k in ("is_connected", "isConnected", "connected", "online"):
+        if k in r:
+            return bool(r[k])
+    return None
+
+
+def normalize_app_devices(raw_apps):
+    """Protect cameras, Access readers, Talk phones... from the v2 device list."""
+    out = []
+    for key, rows in (raw_apps or {}).items():
+        if not key.endswith("_devices") or key == "network_devices" or not isinstance(rows, list):
+            continue
+        app = APP_NAMES.get(key, key[:-len("_devices")].replace("_", " ").title())
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            mac = _mac(r.get("mac") or r.get("macAddress"))
+            if not mac:
+                continue
+            out.append({
+                "mac": mac, "app": app,
+                "name": r.get("name") or r.get("displayName") or r.get("alias") or r.get("model") or mac,
+                "model": r.get("model_name") or r.get("modelName") or r.get("marketName") or r.get("model") or r.get("type") or "",
+                "ip": r.get("ip") or r.get("host") or r.get("ipAddress") or "",
+                "online": _online(r),
+                "version": r.get("version") or r.get("firmware_version") or r.get("firmwareVersion") or "",
+            })
+    return out
+
+
+def _is_wan(dtype, pt):
+    if DEVICE_KIND.get(dtype) != "gateway":
+        return False
+    return (str(pt.get("network_name") or "").lower().startswith("wan")
+            or str(pt.get("name") or "").strip().upper().startswith("WAN"))
+
+
+def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_uplinks=True, raw_apps=None):
     nets = normalize_networks(raw_networks)
     default_net = _default_network_id(nets)
     profiles = {p.get("_id"): p for p in raw_portconfs}
@@ -459,20 +558,36 @@ def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_upl
                 dev_links.setdefault(((d.get("mac") or "").lower(), _int(dl["port_idx"])),
                                      peer.get("name") or peer.get("model") or pmac)
 
+    apps = normalize_app_devices(raw_apps)
+    app_by_mac = {a["mac"]: a for a in apps}
+    per_net = {}   # connected clients (wired and wireless) per network
+    for c in raw_clients:
+        nid = c.get("network_id")
+        if nid:
+            per_net[nid] = per_net.get(nid, 0) + 1
+    for n in nets:
+        n["clients"] = per_net.get(n["id"], 0)
     clients = {}
     for c in raw_clients:
         if c.get("is_wired") is False or not c.get("sw_mac") or not c.get("sw_port"):
             continue
         key = ((c.get("sw_mac") or "").lower(), _int(c.get("sw_port")))
+        cmac = _mac(c.get("mac"))
+        a = app_by_mac.get(cmac)
+        if a:   # a Protect camera, Access reader... : remember which port it's on
+            a.update({"sw_mac": key[0], "sw_port": key[1], "ip": a["ip"] or c.get("ip") or ""})
         clients.setdefault(key, []).append({
-            "mac": c.get("mac") or "", "name": c.get("name") or c.get("hostname") or "",
-            "ip": c.get("ip") or "", "hostname": c.get("hostname") or ""})
+            "mac": c.get("mac") or "", "name": (a or {}).get("name") or c.get("name") or c.get("hostname") or "",
+            "ip": c.get("ip") or "", "hostname": c.get("hostname") or "",
+            "app": a["app"] if a else None, "model": a["model"] if a else "",
+            "vendor": c.get("oui") or ""})
 
     devices = []
     for d in raw_devices:
         table = d.get("port_table") or []
         if not table:
             continue
+        dtype = d.get("type") or ""
         mac = (d.get("mac") or "").lower()
         overrides = {_int(o.get("port_idx")): o for o in d.get("port_overrides") or []}
         uplink_idx = _int((d.get("uplink") or {}).get("port_idx"), 0)
@@ -493,6 +608,9 @@ def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_upl
                 pass
             op_mode = ov.get("op_mode") or pt.get("op_mode") or "switch"
             reasons = []
+            wan = _is_wan(dtype, pt)
+            if wan:
+                reasons.append("WAN port")
             if pt.get("is_uplink") or idx == uplink_idx:
                 reasons.append("Uplink port")
             if (mac, idx) in dev_links:
@@ -503,6 +621,17 @@ def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_upl
                 reasons.append("Port mirroring")
             if op_mode not in ("switch", "aggregate", "mirror"):
                 reasons.append(f"Operation mode is {op_mode}")
+            # what the port is for, most important first: decides its icon and why it's protected
+            is_up = bool(pt.get("is_uplink") or idx == uplink_idx)
+            role = ("wan" if wan else "uplink" if is_up else "device" if (mac, idx) in dev_links
+                    else "lag" if (pt.get("aggregated_by") or pt.get("lag_member") or op_mode == "aggregate")
+                    else "mirror" if (op_mode == "mirror" or pt.get("mirror_port_idx")) else None)
+            peer_name = None
+            if role == "uplink":
+                upd = by_mac.get(((d.get("uplink") or {}).get("uplink_mac") or "").lower())
+                peer_name = (upd.get("name") or upd.get("model")) if upd else None
+            elif role == "device":
+                peer_name = dev_links.get((mac, idx))
             lldp = None
             for l in d.get("lldp_table") or []:
                 if _int(l.get("local_port_idx")) == idx:
@@ -516,7 +645,10 @@ def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_upl
                 "speed": _int(pt.get("speed")),
                 "full_duplex": bool(pt.get("full_duplex")),
                 "media": media,
+                "media_label": MEDIA_LABEL.get(media.upper(), media),
                 "sfp": "SFP" in media.upper() or bool(pt.get("sfp_found")),
+                "sfp_found": bool(pt.get("sfp_found")) if "SFP" in media.upper() else None,
+                "wan": wan, "role": role, "peer": peer_name,
                 "is_uplink": bool(pt.get("is_uplink") or idx == uplink_idx),
                 "poe_capable": poe_capable,
                 "poe_enabled": poe_capable and poe_mode != "off",
@@ -530,34 +662,63 @@ def normalize(raw_devices, raw_networks, raw_portconfs, raw_clients, protect_upl
                 "profile_id": eff["profile_id"],
                 "profile_name": eff["profile_name"],
                 "clients": clients.get((mac, idx), [])[:20],
+                "apps": sorted({c["app"] for c in clients.get((mac, idx), []) if c.get("app")}),
                 "client_count": len(clients.get((mac, idx), [])),
                 "device_link": dev_links.get((mac, idx)),
                 "lldp": lldp,
                 "rx_bytes": _int(pt.get("rx_bytes")), "tx_bytes": _int(pt.get("tx_bytes")),
-                "protected": bool(protect_uplinks and reasons),
+                "protected": bool(wan or (protect_uplinks and reasons)),
                 "protect_reasons": reasons,
             })
-        dtype = d.get("type") or ""
+        model = d.get("model") or ""
+        up = d.get("uplink") or {}
+        peer = by_mac.get((up.get("uplink_mac") or "").lower())
+        stats = d.get("system-stats") or {}
         devices.append({
-            "id": d.get("_id"), "mac": mac, "name": d.get("name") or d.get("model") or mac,
-            "model": d.get("model") or "", "model_name": d.get("model_name") or d.get("shortname") or d.get("model") or "",
-            "type": dtype, "type_label": DEVICE_TYPES.get(dtype, dtype.upper() or "Device"),
-            "ip": d.get("ip") or "", "version": d.get("version") or "",
+            "id": d.get("_id"), "mac": mac, "name": d.get("name") or MODEL_NAMES.get(model) or model or mac,
+            "model": model, "model_name": d.get("model_name") or MODEL_NAMES.get(model) or d.get("shortname") or model,
+            "type": dtype, "kind": DEVICE_KIND.get(dtype, "other"),
+            "type_label": DEVICE_TYPES.get(dtype, dtype.upper() or "Device"),
+            "ip": d.get("ip") or "", "version": d.get("version") or "", "serial": d.get("serial") or "",
             "online": _int(d.get("state")) == 1, "state": _int(d.get("state")),
             "uptime": _int(d.get("uptime")), "legacy": uses_legacy_forward(d),
+            "upgradable": bool(d.get("upgradable")), "upgrade_to": d.get("upgrade_to_firmware") or "",
+            "locating": bool(d.get("locating")), "led_override": d.get("led_override") or "default",
+            "clients": _int(d.get("num_sta")),
+            "cpu": stats.get("cpu"), "mem": stats.get("mem"),
+            "uplink_to": ({"name": peer.get("name") or peer.get("model") or "", "port": _int(up.get("uplink_remote_port"))}
+                          if peer else None),
+            "caps": {"tagged_vlans": model not in NATIVE_ONLY_MODELS},
             "port_count": len(ports), "ports": ports,
         })
-    devices.sort(key=lambda x: (x["type"] != "usw", x["name"].lower()))
-    return {"networks": nets, "default_network_id": default_net, "devices": devices}
+    order = {"gateway": 0, "switch": 1, "ap": 2, "other": 3}
+    devices.sort(key=lambda x: (order.get(x["kind"], 3), x["name"].lower()))
+    for a in apps:   # where each Protect / Access / Talk device is plugged in
+        sw = by_mac.get(a.get("sw_mac") or "")
+        a["switch_id"] = sw.get("_id") if sw else None
+        a["switch_name"] = (sw.get("name") or sw.get("model")) if sw else None
+    apps.sort(key=lambda a: (a["app"], a["name"].lower()))
+    return {"networks": nets, "default_network_id": default_net, "devices": devices, "app_devices": apps}
+
+
+def apply_model_caps(devices, overrides):
+    """An admin's per-model overrides ({model: {"tagged_vlans": bool}}) on top of the built-in list."""
+    for d in devices:
+        builtin = d["model"] not in NATIVE_ONLY_MODELS and not (d.get("caps") or {}).get("readonly")
+        o = (overrides or {}).get(d["model"])
+        tagged = o["tagged_vlans"] if isinstance(o, dict) and isinstance(o.get("tagged_vlans"), bool) else builtin
+        d["caps"] = {"tagged_vlans": tagged, "tagged_vlans_builtin": builtin}   # a new dict: the cache stays as UniFi said
+    return devices
 
 
 # ----------------------------------------------------------------------------
 # Changing a port
 # ----------------------------------------------------------------------------
 
-def build_override(dev, port_idx, native_id, mode, excluded_ids, network_ids, detach_profile=True):
-    """Return (new port_overrides list, before entry, after entry) for one port."""
-    if mode not in MODES:
+def build_override(dev, port_idx, native_id, mode, excluded_ids, network_ids, detach_profile=True, native_only=False):
+    """Return (new port_overrides list, before entry, after entry) for one port.
+    native_only: the switch can't filter tagged VLANs - only the native network is set."""
+    if mode not in MODES and not native_only:
         raise UniFiError("Tagged VLAN management must be Allow All, Block All or Custom")
     overrides = copy.deepcopy(dev.get("port_overrides") or [])
     entry = next((o for o in overrides if _int(o.get("port_idx")) == port_idx), None)
@@ -568,6 +729,9 @@ def build_override(dev, port_idx, native_id, mode, excluded_ids, network_ids, de
     if entry.get("portconf_id") and detach_profile:
         entry.pop("portconf_id", None)
     entry["native_networkconf_id"] = native_id
+    if native_only:
+        overrides.sort(key=lambda o: _int(o.get("port_idx")))
+        return overrides, before, copy.deepcopy(entry)
     entry["tagged_vlan_mgmt"] = mode
     excluded = [i for i in excluded_ids if i in network_ids and i != native_id] if mode == "custom" else []
     entry["excluded_networkconf_ids"] = excluded
@@ -581,8 +745,10 @@ def build_override(dev, port_idx, native_id, mode, excluded_ids, network_ids, de
     return overrides, before, copy.deepcopy(entry)
 
 
-def verify_override(dev, port_idx, native_id, mode):
+def verify_override(dev, port_idx, native_id, mode, native_only=False):
     entry = next((o for o in dev.get("port_overrides") or [] if _int(o.get("port_idx")) == port_idx), {})
+    if native_only:
+        return entry.get("native_networkconf_id") == native_id and not entry.get("portconf_id")
     got_mode = entry.get("tagged_vlan_mgmt") or FORWARD_MODE.get(entry.get("forward"))
     return entry.get("native_networkconf_id") == native_id and got_mode == mode and not entry.get("portconf_id")
 

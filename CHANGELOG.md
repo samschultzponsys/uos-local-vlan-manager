@@ -5,6 +5,37 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 1.7 — 2026-10-01
+
+### Added
+- **Every port says what it is.** Instead of one "tagged VLANs allowed" mark and a shield,
+  ports show:
+  - **Uplink**, **link to a UniFi device** (with its name), **WAN**, **LAG** or **mirror**
+  - on ordinary ports: **all VLANs tagged** (Allow All) or **some VLANs tagged** (Custom)
+
+  So an incoming trunk no longer looks like a normal port that happens to allow tags.
+- **"Protected" is explained**: the tooltip, the port panel and the key say it's an uplink /
+  device link / WAN / LAG / mirror port, that changing it could cut off what's behind it, and
+  who may change it.
+- **Switches that can't filter tagged VLANs**, starting with the **USW Flex Mini**: the port
+  panel only offers the native VLAN and says why, and only the native VLAN is written to
+  UniFi. Admins can mark another model as native-only (or undo it for the Flex Mini) from any
+  port panel; it applies to every switch of that model.
+- **WAN ports** on gateways are labelled WAN and can't be changed here; their settings live in
+  UniFi's Internet settings.
+
+### Changed
+- **Official model names**: *USW Flex Mini*, *USW Pro 24 PoE*, *Cloud Gateway Max*,
+  *U7 Pro*… instead of UniFi's model codes. Unknown models still show their code.
+- **Port type** instead of "Media": *RJ45 · 1 GbE*, *RJ45 · 2.5 GbE*, *SFP+ · 10 Gb*, and
+  *· empty* for an SFP cage with no module. It used to show UniFi's raw code ("GE") even
+  with nothing plugged in.
+- Disabled ports have lighter striping, so big switches look less busy. The key explains it.
+- Gateways come first in the device list, then switches, then access points.
+
+### Fixed
+- **The sign-in page was cut off on phones.**
+
 ## 1.6 — 2026-09-30
 
 ### Added

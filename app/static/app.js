@@ -32,42 +32,69 @@ function carries(port, netId) {
   return false;
 }
 
-function PortTip({ port, networks }) {
+const TAG_TEXT = { auto: "All VLANs tagged", block_all: "Untagged only", custom: "Some VLANs tagged" };
+// what a port is for: decides its mark, and why it's protected
+const ROLE = {
+  uplink: { icon: "uplink", long: "Uplink" },
+  device: { icon: "link", long: "Link to a UniFi device" },
+  wan: { icon: "globe", long: "WAN (internet)" },
+  lag: { icon: "merge", long: "Link aggregation" },
+  mirror: { icon: "mirror", long: "Port mirroring" },
+};
+const nativeOnly = (device) => !!(device && device.caps && device.caps.tagged_vlans === false);
+const roleLine = (port) => (ROLE[port.role] ? `${ROLE[port.role].long}${port.peer ? ` · ${port.peer}` : ""}` : null);
+
+function PortTip({ port, device, networks }) {
   const n = netOf(networks, port.native_network_id);
   const c = port.clients[0];
+  const tag = nativeOnly(device) ? "tagging not supported" : TAG_TEXT[port.tagged_mode];
   return html`<div class="tip-title">Port ${port.idx}${port.name !== `Port ${port.idx}` ? ` · ${port.name}` : ""}</div>
-    <div class="tip-row"><span class=${"led " + (port.up ? "on" : "")}></span>${port.up ? `Up · ${speedLabel(port.speed)}${port.full_duplex ? " FD" : ""}` : port.enabled ? "Disconnected" : "Disabled"}</div>
-    <div class="tip-row"><${Icon} name="tag" size=${13} />${port.native_network_id === null ? "VLAN not available through UniFi's cloud" : `${n ? `${n.name} (${n.vlan})` : "Unknown network"} · ${MODE_LABEL[port.tagged_mode]}`}</div>
+    <div class="tip-row"><span class=${"led " + (port.up ? "on" : "")}></span>${port.up ? `Up · ${speedLabel(port.speed)}${port.full_duplex ? " FD" : ""}` : port.enabled ? "No link" : "Disabled"}</div>
+    ${port.role && html`<div class="tip-row"><${Icon} name=${ROLE[port.role].icon} size=${13} />${roleLine(port)}</div>`}
+    ${!port.wan && html`<div class="tip-row"><${Icon} name="tag" size=${13} />${port.native_network_id === null ? "VLAN not available through UniFi's cloud" : `${n ? `${n.name} (${n.vlan})` : "Unknown network"} · ${tag}`}</div>`}
     ${port.poe_capable && html`<div class="tip-row"><${Icon} name="bolt" size=${13} />${port.poe_active ? (port.poe_power == null ? "PoE delivering" : `PoE delivering ${port.poe_power} W`) : port.poe_enabled ? "PoE on · idle" : "PoE off"}</div>`}
     ${c && html`<div class="tip-row"><${Icon} name="plug" size=${13} />${c.name || c.hostname || c.mac}${port.client_count > 1 ? ` +${port.client_count - 1}` : ""}</div>`}
-    ${port.device_link && html`<div class="tip-row"><${Icon} name="link" size=${13} />${port.device_link}</div>`}
     ${port.profile_name && html`<div class="tip-row"><${Icon} name="layers" size=${13} />Profile: ${port.profile_name}</div>`}
     ${port.lock && html`<div class="tip-row warn"><${Icon} name="lock" size=${13} />Locked by an admin${port.lock.note ? `: ${port.lock.note}` : ""}</div>`}
     ${port.lock && port.lock.drift && html`<div class="tip-row warn"><${Icon} name="alert" size=${13} />Changed in UniFi since it was locked</div>`}
-    ${port.protected && html`<div class="tip-row warn"><${Icon} name="shield" size=${13} />${port.protect_reasons.join(" · ")}</div>`}`;
+    ${port.protected && html`<div class="tip-row warn"><${Icon} name="shield" size=${13} />Protected: changing it could cut something off</div>`}`;
+}
+
+function Flags({ port, device, size = 10 }) {
+  // ordinary ports show whether they carry tagged VLANs; uplinks and device links show their role instead
+  const tagMark = !port.role && !nativeOnly(device) && port.native_network_id !== null;
+  return html`<span class="p-flags">
+    ${port.role && html`<span class=${"flag-role " + port.role} title=${roleLine(port)}><${Icon} name=${ROLE[port.role].icon} size=${size} /></span>`}
+    ${!port.role && port.protected && html`<span title="Protected"><${Icon} name="shield" size=${size} /></span>`}
+    ${tagMark && port.tagged_mode === "auto" && html`<span title="All VLANs tagged"><${Icon} name="trunk" size=${size} /></span>`}
+    ${tagMark && port.tagged_mode === "custom" && html`<span title="Some VLANs tagged"><${Icon} name="trunksome" size=${size} /></span>`}
+    ${port.profile_name && html`<span title="Port profile"><${Icon} name="layers" size=${size} /></span>`}
+    ${port.lock && html`<span class=${"flag-lock" + (port.lock.drift ? " drift" : "")} title=${port.lock.drift ? "Locked - but changed in UniFi" : "Locked by an admin"}><${Icon} name=${port.lock.drift ? "alert" : "lock"} size=${size} /></span>`}
+  </span>`;
+}
+
+function tileLabel(port, n) {
+  if (port.wan) return "WAN";
+  if (n) return n.vlan;
+  return port.native_network_id === null ? (port.sfp ? "SFP" : "") : "?";
 }
 
 function PortTile({ port, device, networks, colors, highlight, selected, onPick }) {
   const n = netOf(networks, port.native_network_id);
-  const color = colors[port.native_network_id] || "#64748b";
+  const color = port.wan ? "#475569" : colors[port.native_network_id] || "#64748b";
   const dim = highlight && !carries(port, highlight);
   const cls = ["port", port.up ? "up" : "down", port.enabled ? "" : "off", dim ? "dim" : "", selected ? "sel" : "",
-    port.sfp ? "sfp" : ""].join(" ");
+    port.sfp ? "sfp" : "", port.wan ? "wan" : ""].join(" ");
   return html`<button class=${cls} style=${`--c:${color};--fg:${readable(color)}`}
     onClick=${() => { hideTip(); onPick(device.id, port.idx); }}
-    onMouseEnter=${canHover ? (e) => showTip(e, html`<${PortTip} port=${port} networks=${networks} />`) : undefined}
+    onMouseEnter=${canHover ? (e) => showTip(e, html`<${PortTip} port=${port} device=${device} networks=${networks} />`) : undefined}
     onMouseLeave=${canHover ? hideTip : undefined}
     aria-label=${`Port ${port.idx}, ${n ? n.name : ""}`}>
     <span class="p-num">${port.idx}</span>
     ${port.poe_capable && html`<span class=${"p-poe " + (port.poe_active ? "active" : port.poe_enabled ? "on" : "offpoe")}>
       <${Icon} name="bolt" size=${11} fill=${port.poe_active} /></span>`}
-    <span class="p-vlan">${n ? n.vlan : port.native_network_id === null ? (port.sfp ? "SFP" : "") : "?"}</span>
-    <span class="p-flags">
-      ${port.tagged_mode && port.tagged_mode !== "block_all" && html`<span title="Tagged VLANs allowed"><${Icon} name="trunk" size=${10} /></span>`}
-      ${port.profile_name && html`<span title="Port profile"><${Icon} name="layers" size=${10} /></span>`}
-      ${port.protected && !port.lock && html`<span title="Protected"><${Icon} name="shield" size=${10} /></span>`}
-      ${port.lock && html`<span class=${"flag-lock" + (port.lock.drift ? " drift" : "")} title=${port.lock.drift ? "Locked - but changed in UniFi" : "Locked by an admin"}><${Icon} name=${port.lock.drift ? "alert" : "lock"} size=${10} /></span>`}
-    </span>
+    <span class="p-vlan">${tileLabel(port, n)}</span>
+    <${Flags} port=${port} device=${device} />
     <span class="p-led"></span>
   </button>`;
 }
@@ -181,7 +208,8 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
   const mayProtected = can("ports.protected") || env.supervisors_protected;
   const isAdmin = can("ports.lock");   // lock controls
   const lock = port.lock;
-  const canEdit = !readonly && can("ports.change") && (!port.protected || mayProtected) && (!lock || isAdmin);
+  const fixedTags = nativeOnly(device);   // e.g. USW Flex Mini: only the native VLAN can be set
+  const canEdit = !readonly && !port.wan && can("ports.change") && (!port.protected || mayProtected) && (!lock || isAdmin);
   const [lockNote, setLockNote] = useState("");
   const [lockBusy, setLockBusy] = useState(false);
   const portUrl = `/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}`;
@@ -196,7 +224,8 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
     } catch (e) { toast(e.message, "err"); }
     setLockBusy(false);
   }
-  const defMode = restricted && settings.default_tagged_mode === "auto" ? "block_all" : (settings.default_tagged_mode || "block_all");
+  const defMode = fixedTags ? port.tagged_mode
+    : restricted && settings.default_tagged_mode === "auto" ? "block_all" : (settings.default_tagged_mode || "block_all");
   const allowed = networks.filter((n) => n.allowed);
   const [native, setNative] = useState(port.native_network_id);
   const [mode, setMode] = useState(defMode);
@@ -218,7 +247,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
   const cur = netOf(networks, port.native_network_id);
   const next = netOf(networks, native);
   const sameEx = [...excluded].sort().join() === [...port.excluded_network_ids].sort().join();
-  const dirty = native !== port.native_network_id || mode !== port.tagged_mode || (mode === "custom" && !sameEx);
+  const dirty = native !== port.native_network_id || (!fixedTags && (mode !== port.tagged_mode || (mode === "custom" && !sameEx)));
 
   async function apply(extra = {}) {
     setBusy(true);
@@ -226,7 +255,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
       const r = await api(`/api/envs/${env.id}/devices/${device.id}/ports/${port.idx}`, { method: "PUT",
         body: { native_network_id: native, tagged_mode: mode, excluded_network_ids: mode === "custom" ? excluded : [],
           expected: base, ...extra } });
-      toast(`Port ${port.idx} → ${next.name} (${next.vlan}), ${MODE_LABEL[mode]}`);
+      toast(`Port ${port.idx} → ${next.name} (${next.vlan})${fixedTags ? "" : `, ${MODE_LABEL[mode]}`}`);
       if (r.warning) toast(r.warning, "warn");
       setTouched(false);
       onApplied();
@@ -267,10 +296,10 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
           ${port.up ? `${speedLabel(port.speed)}${port.full_duplex ? " · Full duplex" : ""}` : port.enabled ? "Down" : "Disabled"}</span></div>
         <div class="sg"><span class="sg-l">PoE</span><span class=${"sg-v " + (port.poe_active ? "poe" : "")}>
           ${!port.poe_capable ? "Not supported" : port.poe_active ? html`<${Icon} name="bolt" size=${14} fill />${port.poe_power == null ? "Delivering" : `${port.poe_power} W`}` : port.poe_enabled ? `On · idle (${port.poe_mode})` : "Off"}</span></div>
-        ${readonly ? html`<div class="sg"><span class="sg-l">Max speed</span><span class="sg-v">${speedLabel(port.max_speed) || "—"}</span></div>` : html`
+        ${port.wan ? null : readonly ? html`<div class="sg"><span class="sg-l">Max speed</span><span class="sg-v">${speedLabel(port.max_speed) || "—"}</span></div>` : html`
         <div class="sg"><span class="sg-l">Native VLAN</span><span class="sg-v"><span class="dot" style=${`background:${colors[port.native_network_id]}`}></span>${cur ? `${cur.name} (${cur.vlan})` : "?"}</span></div>
-        <div class="sg"><span class="sg-l">Tagged</span><span class="sg-v">${MODE_LABEL[port.tagged_mode]}</span></div>`}
-        ${port.media && html`<div class="sg"><span class="sg-l">Media</span><span class="sg-v">${port.media}</span></div>`}
+        <div class="sg"><span class="sg-l">Tagged</span><span class="sg-v">${fixedTags ? "Not supported" : TAG_TEXT[port.tagged_mode]}</span></div>`}
+        ${port.media && html`<div class="sg"><span class="sg-l">Port type</span><span class="sg-v">${port.media_label || port.media}${port.sfp_found === false ? " · empty" : ""}</span></div>`}
         ${port.up && port.rx_bytes != null && html`<div class="sg"><span class="sg-l">Traffic</span><span class="sg-v">↓ ${bytes(port.rx_bytes)} · ↑ ${bytes(port.tx_bytes)}</span></div>`}
       </div>
       ${(c0.length > 0 || port.device_link || port.lldp) && html`<div class="panel">
@@ -296,12 +325,15 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
           ${lock.drift && html`<button class="btn sm primary" disabled=${lockBusy} onClick=${() => lockAction("POST", "/lock/reapply", {}, "Locked settings re-applied")}><${Icon} name="refresh" size=${14} />Re-apply locked settings</button>`}
           <button class="btn sm" disabled=${lockBusy} onClick=${() => lockAction("DELETE", "/lock", {}, `Port ${port.idx} unlocked`)}>Unlock</button>
         </div>`}</div></div>`}
-      ${port.protected && html`<div class="notice warn"><${Icon} name="shield" /><div><b>Protected port.</b> ${port.protect_reasons.join(" · ")}.
+      ${port.wan ? html`<div class="notice"><${Icon} name="globe" /><div><b>WAN port.</b> It connects to the internet, so its settings live in
+        UniFi's Internet settings, not here.</div></div>`
+        : port.protected && html`<div class="notice warn"><${Icon} name="shield" /><div><b>Protected port</b> — ${port.protect_reasons.join(" · ")}.
+        Changing it could cut off ${port.peer ? html`<b>${port.peer}</b> and what's behind it` : "the switch or what's behind it"}, so the app guards it.
         ${mayProtected ? " You can change it after confirming." : " You don't have permission to change protected ports."}</div></div>`}
       ${port.profile_name && html`<div class="notice"><${Icon} name="layers" /><div>Uses port profile <b>${port.profile_name}</b>. Applying a VLAN here detaches it.</div></div>`}
       ${canEdit && allowed.length === 0 && html`<div class="notice warn"><${Icon} name="info" /><div>You haven't been given any networks in this environment. Ask an admin.</div></div>`}
 
-      ${!readonly && html`<div class="panel">
+      ${!readonly && !port.wan && html`<div class="panel">
         <div class="panel-title">Core settings ${!canEdit && html`<span class="badge">View only</span>`}</div>
         <label class="field"><span class="field-label">Native VLAN / Network</span>
           <div class="select-wrap"><span class="dot" style=${`background:${colors[native]}`}></span>
@@ -309,13 +341,20 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
               ${networks.filter((n) => n.allowed || n.id === native || n.id === port.native_network_id).map((n) =>
                 html`<option value=${n.id} disabled=${!n.allowed}>${n.name} (${n.vlan})${n.allowed ? "" : " — not yours"}</option>`)}
             </select><${Icon} name="chevron" cls="select-chev" /></div></label>
-        <div class="field"><span class="field-label">Tagged VLAN Management</span>
+        ${fixedTags ? html`<div class="field"><span class="field-label">Tagged VLAN Management</span>
+          <div class="notice"><${Icon} name="info" /><div><b>${device.model_name}</b> can't filter tagged VLANs per port, so only the native VLAN
+            is set here. Tagging settings would be ignored by the switch.
+            ${can("settings.manage") && html`<div><button class="link-btn small" onClick=${() => setModelCaps(device, true, onApplied)}>
+              This model can filter tagged VLANs</button></div>`}</div></div></div>`
+        : html`<div class="field"><span class="field-label">Tagged VLAN Management</span>
           <${Segmented} value=${mode} disabled=${!canEdit} onChange=${edit(setMode)}
             options=${[{ value: "auto", label: "Allow All", disabled: restricted, title: restricted ? "Would tag networks you don't have" : "" },
               { value: "block_all", label: "Block All" }, { value: "custom", label: "Custom" }]} />
           <small class="hint">${mode === "block_all" ? "Access port: only the native VLAN, nothing tagged." : mode === "auto" ? "Trunk: every network is tagged on this port." : "Trunk: only the networks ticked below are tagged."}</small>
-        </div>
-        ${mode === "custom" && html`<div class="tag-list">
+          ${can("settings.manage") && device.type === "usw" && html`<small class="hint"><button class="link-btn small" onClick=${() => setModelCaps(device, false, onApplied)}>
+            ${device.model_name} ignores tagged VLAN settings?</button></small>`}
+        </div>`}
+        ${!fixedTags && mode === "custom" && html`<div class="tag-list">
           ${allowed.filter((n) => n.id !== native).map((n) => html`<label class="tag-row" key=${n.id}>
             <input type="checkbox" disabled=${!canEdit} checked=${!excluded.includes(n.id)}
               onChange=${(e) => edit(setExcluded)(e.target.checked ? excluded.filter((x) => x !== n.id) : [...excluded, n.id])} />
@@ -324,7 +363,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
         </div>`}
       </div>`}
 
-      ${isAdmin && !lock && !readonly && html`<div class="panel lock-panel">
+      ${isAdmin && !lock && !readonly && !port.wan && html`<div class="panel lock-panel">
         <div class="panel-title"><span><${Icon} name="lock" size=${15} /> Lock this port</span></div>
         <p class="muted small">Only admins can change a locked port. Good for upstream trunks and dedicated ports. It's locked to the settings UniFi has right now.</p>
         <div class="row"><input placeholder="Why? e.g. Upstream trunk from core port 17" value=${lockNote} maxlength="300" onInput=${(e) => setLockNote(e.target.value)} />
@@ -334,7 +373,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
       </div>`}
       ${canEdit && dirty && next && html`<div class="diff">
         ${native !== port.native_network_id && html`<div><span class="muted">Native</span> ${cur ? cur.name : "?"} <span class="arrow">→</span> <b>${next.name} (${next.vlan})</b></div>`}
-        ${(mode !== port.tagged_mode || (mode === "custom" && !sameEx)) && html`<div><span class="muted">Tagged</span> ${MODE_LABEL[port.tagged_mode]} <span class="arrow">→</span> <b>${MODE_LABEL[mode]}</b></div>`}
+        ${!fixedTags && (mode !== port.tagged_mode || (mode === "custom" && !sameEx)) && html`<div><span class="muted">Tagged</span> ${MODE_LABEL[port.tagged_mode]} <span class="arrow">→</span> <b>${MODE_LABEL[mode]}</b></div>`}
       </div>`}
     </div>
     ${canEdit && html`<footer class="drawer-foot">
@@ -342,6 +381,22 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
       <button class="btn primary" disabled=${busy || !dirty || !(next && next.allowed)} onClick=${() => apply()}>${busy ? html`<${Spinner} /> Applying…` : "Apply changes"}</button>
     </footer>`}
   </aside>`;
+}
+
+/** Admins: tell the app whether a switch model can filter tagged VLANs (applies to every switch of that model). */
+async function setModelCaps(device, tagged, onDone) {
+  const builtin = device.caps.tagged_vlans_builtin;
+  const ok = await ask({ title: tagged ? `${device.model_name} can filter tagged VLANs?` : `${device.model_name} ignores tagged VLANs?`,
+    confirm: tagged ? "Yes, show tagging" : "Yes, native VLAN only",
+    body: tagged ? html`<p>Tagged VLAN Management will be offered again on every <b>${device.model_name}</b> (${device.model}).</p>`
+      : html`<p>On every <b>${device.model_name}</b> (${device.model}), only the native VLAN will be set and tagging is hidden,
+        because the switch would ignore it.</p>` });
+  if (!ok) return;
+  try {
+    await api("/api/admin/model-caps", { method: "PUT", body: { model: device.model, tagged_vlans: tagged === builtin ? null : tagged } });
+    toast("Saved for every " + device.model_name);
+    onDone();
+  } catch (e) { toast(e.message, "err"); }
 }
 
 // --- device picker ---------------------------------------------------------------
@@ -551,11 +606,15 @@ function App() {
             highlight=${highlight} sel=${sel} onPick=${pick} collapsed=${!!collapsed[d.mac]}
             onCollapse=${() => { const c = { ...collapsed, [d.mac]: !collapsed[d.mac] }; setCollapsed(c); lsSet("vlanmgr.collapsed", c); }} />`)}</div>`}
       <div class="key">
-        <span><span class="k-tile up"></span>Link up</span><span><span class="k-tile"></span>No link</span>
+        <span><span class="k-tile up"></span>Link up</span><span><span class="k-tile"></span>No link</span><span><span class="k-off"></span>Disabled</span>
         <span><span class="k-poe active"><${Icon} name="bolt" size=${11} fill /></span>PoE delivering</span>
         <span><span class="k-poe"><${Icon} name="bolt" size=${11} /></span>PoE on, idle</span>
-        <span><${Icon} name="trunk" size=${12} />Tagged VLANs allowed</span>
-        <span><${Icon} name="layers" size=${12} />Port profile</span><span><${Icon} name="shield" size=${12} />Protected</span>
+        <span><${Icon} name="trunk" size=${12} />All VLANs tagged</span><span><${Icon} name="trunksome" size=${12} />Some VLANs tagged</span>
+        <span><${Icon} name="uplink" size=${12} />Uplink</span><span><${Icon} name="link" size=${12} />UniFi device</span>
+        <span><${Icon} name="globe" size=${12} />WAN</span><span><${Icon} name="merge" size=${12} />LAG</span>
+        <span><${Icon} name="layers" size=${12} />Port profile</span>
+        <span class="key-note"><${Icon} name="shield" size=${12} />Uplinks, UniFi device links, WAN, LAG and mirror ports are <b>protected</b>:
+          changing them could cut something off, so it takes extra permission and a confirmation.</span>
         <span class="k-lock"><${Icon} name="lock" size=${12} />Locked by an admin</span>
       </div>`;
   }
