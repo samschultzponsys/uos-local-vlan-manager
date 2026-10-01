@@ -300,6 +300,7 @@ def public_user(row):
         "seeded": bool(row["seeded"]), "sso": bool(row["oidc_sub"]),
         "has_password": bool(row["password_hash"]), "created_at": row["created_at"],
         "last_login": row["last_login"], "pending": bool(row["pending"]),
+        "sso_allowed": bool(row["sso_allowed"]) or bool(row["oidc_sub"]), "must_change_password": bool(row["must_change_pw"]),
     }
 
 
@@ -335,7 +336,7 @@ def free_username(wanted):
 
 
 def create_user(username, password="", role="viewer", display_name="", email="",
-                oidc_sub=None, seeded=False, pending=False):
+                oidc_sub=None, seeded=False, pending=False, sso_allowed=False, must_change=False):
     if not USERNAME_RE.match(username or ""):
         raise ValueError("Username: 1-64 letters, digits, . _ @ -")
     if find_user(username):
@@ -346,19 +347,22 @@ def create_user(username, password="", role="viewer", display_name="", email="",
         raise ValueError(f"Password must be at least {MIN_PASSWORD} characters")
     d = db.get()
     cur = d.execute(
-        "INSERT INTO users (username, display_name, email, role, password_hash, oidc_sub, seeded, pending, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO users (username, display_name, email, role, password_hash, oidc_sub, seeded, pending, created_at, "
+        "sso_allowed, must_change_pw) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (username, display_name or "", email or "", role,
-         generate_password_hash(password) if password else "", oidc_sub, 1 if seeded else 0, 1 if pending else 0, db.now()))
+         generate_password_hash(password) if password else "", oidc_sub, 1 if seeded else 0, 1 if pending else 0, db.now(),
+         1 if sso_allowed else 0, 1 if (must_change and password) else 0))
     d.commit()
     return get_user(cur.lastrowid)
 
 
-def set_password(user_id, password):
+def set_password(user_id, password, must_change=False):
+    """Set a password. `must_change`: someone else (an admin) chose it, so the person picks their own at next sign-in."""
     if len(password or "") < MIN_PASSWORD:
         raise ValueError(f"Password must be at least {MIN_PASSWORD} characters")
     d = db.get()
-    d.execute("UPDATE users SET password_hash=? WHERE id=?", (generate_password_hash(password), user_id))
+    d.execute("UPDATE users SET password_hash=?, must_change_pw=? WHERE id=?",
+              (generate_password_hash(password), 1 if must_change else 0, user_id))
     d.commit()
     u = get_user(user_id)
     if u and u["seeded"]:
@@ -576,6 +580,18 @@ def current():
     return getattr(g, "user", None)
 
 
+# what someone who must change their password may still use
+MUST_CHANGE_OK = {"/api/me", "/api/me/password", "/api/auth/logout", "/api/auth/config", "/api/version"}
+
+
+def _must_change(u):
+    """An admin set this person's password and they haven't chosen their own yet (password or SSO sessions)."""
+    if not u.get("id") or u.get("impersonator") or u.get("method") not in ("local", "oidc"):
+        return False
+    r = db.get().execute("SELECT must_change_pw FROM users WHERE id=?", (u["id"],)).fetchone()
+    return bool(r and r["must_change_pw"])
+
+
 # functions (user, out) that add to /api/me; other modules register here
 ME_EXTRAS = []
 
@@ -679,12 +695,16 @@ def _oidc_user(claims):
     # an email the provider says isn't verified can't be used to claim an account an admin added
     email_ok = bool(email) and claims.get("email_verified") is not False
     if row is None:
-        # an admin can pre-create an SSO user (no password) with the same username or email
+        # an admin can pre-create an SSO user with the same username or email: one with no password, or one
+        # they marked "can also sign in with SSO" (then only the verified email links it, never just a username)
         for key in [claims.get("preferred_username"), email if email_ok else None]:
             if not key:
                 continue
             cand = d.execute("SELECT * FROM users WHERE (username=? COLLATE NOCASE OR (email!='' AND email=? COLLATE NOCASE)) "
                              "AND oidc_sub IS NULL AND password_hash='' AND seeded=0", (key, key)).fetchone()
+            if cand is None and key == email:
+                cand = d.execute("SELECT * FROM users WHERE email!='' AND email=? COLLATE NOCASE AND oidc_sub IS NULL "
+                                 "AND sso_allowed=1", (key,)).fetchone()
             if cand:
                 d.execute("UPDATE users SET oidc_sub=? WHERE id=?", (sub, cand["id"]))
                 d.commit()
@@ -759,6 +779,8 @@ def init_app(app):
             g.user = {"id": 0, "username": "anonymous", "display_name": "Anonymous",
                       "role": cfg["anonymous_role"] if cfg["anonymous_role"] in perms.roles() else perms.lowest_role(),
                       "method": "none"}
+        if g.user is not None and _must_change(g.user) and path.startswith("/api/") and path not in MUST_CHANGE_OK:
+            return jsonify({"ok": False, "error": "Choose your own password first", "password_change_required": True}), 403
         if g.user is not None or path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
             return
         if path.startswith("/api/"):
@@ -905,6 +927,8 @@ def init_app(app):
             pw = db.get_setting("initial_admin_password", "")
             out["initial_password"] = bool(row["seeded"] and pw)
             out["pending"] = bool(row["pending"])
+            out["must_change_password"] = bool(row["must_change_pw"]) and u["method"] in ("local", "oidc")
+            out["sso_linked"] = bool(row["oidc_sub"]) or bool(row["sso_allowed"])
         for fn in ME_EXTRAS:   # e.g. feedback news and requests waiting (feedback.py)
             fn(u, out)
         if perms.has(u, "users.access"):   # people waiting for someone to set them up
@@ -1049,8 +1073,21 @@ def init_app(app):
             return _deny("Sign in with a password or SSO to change your password")
         data = request.get_json(silent=True) or {}
         row = get_user(u["id"])
-        if row["password_hash"] and not check_password_hash(row["password_hash"], data.get("current") or ""):
+        forced = bool(row["must_change_pw"])
+        # a password an admin chose is temporary: having just signed in is proof enough to replace it
+        if row["password_hash"] and not forced and not check_password_hash(row["password_hash"], data.get("current") or ""):
             return _deny("Current password is wrong", 400)
+        if data.get("remove"):
+            # SSO people can drop the password and only use SSO
+            if not row["oidc_sub"] and not (row["sso_allowed"] and config()["oidc_enabled"]):
+                return _deny("Keep a password: you have no other way to sign in", 400)
+            d = db.get()
+            d.execute("UPDATE users SET password_hash='', must_change_pw=0 WHERE id=?", (u["id"],))
+            d.commit()
+            audit("user.password_removed", row["username"])
+            return jsonify({"ok": True})
+        if forced and row["password_hash"] and check_password_hash(row["password_hash"], data.get("password") or ""):
+            return _deny("Choose a new password, not the one you were given", 400)
         try:
             set_password(u["id"], data.get("password") or "")
         except ValueError as e:
@@ -1155,13 +1192,15 @@ def init_app(app):
             exists = db.get().execute("SELECT 1 FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
             if exists:
                 return _deny("Someone with that email is already here", 400)
-            password = ""
             username = username or free_username(email.split("@")[0])
         try:
-            row = create_user(username, password, role, (data.get("display_name") or "").strip(), email)
+            row = create_user(username, password, role, (data.get("display_name") or "").strip(), email,
+                              sso_allowed=bool(data.get("sso")), must_change=data.get("must_change", True) is not False)
         except ValueError as e:
             return _deny(str(e), 400)
-        audit("user.created", row["username"], {"role": row["role"], "sso_only": not row["password_hash"]})
+        audit("user.created", row["username"], {"role": row["role"], "sso": bool(data.get("sso")),
+                                                "password": bool(row["password_hash"]),
+                                                "must_change_password": bool(row["must_change_pw"])})
         return jsonify({"ok": True, "user": public_user(row)})
 
     @app.route("/api/users/<int:uid>", methods=["PUT", "DELETE"])
@@ -1185,7 +1224,7 @@ def init_app(app):
             audit("user.deleted", row["username"])
             return jsonify({"ok": True})
         data = request.get_json(silent=True) or {}
-        editing = {k for k in ("username", "display_name", "email", "disabled", "password", "sign_out") if k in data}
+        editing = {k for k in ("username", "display_name", "email", "disabled", "password", "sign_out", "sso_allowed") if k in data}
         if editing and not perms.has(me, "users.edit"):
             return _deny("You don't have permission to edit people", 403)
         if ({"role", "caps_grant", "caps_deny"} & set(data)) and not perms.has(me, "users.roles"):
@@ -1206,6 +1245,8 @@ def init_app(app):
                 if not is_admin(me) and any(c not in mine for c in vals):
                     return _deny("You can only hand out abilities you have yourself", 403)
                 changes[k] = json.dumps(vals)
+        if "sso_allowed" in data and bool(data["sso_allowed"]) != bool(row["sso_allowed"]):
+            changes["sso_allowed"] = 1 if data["sso_allowed"] else 0
         if "disabled" in data and bool(data["disabled"]) != bool(row["disabled"]):
             if uid == me["id"]:
                 return _deny("You can't disable yourself", 400)
@@ -1233,10 +1274,15 @@ def init_app(app):
         d.commit()
         if data.get("password"):
             try:
-                set_password(uid, data["password"])
+                # someone else chose it: they pick their own at next sign-in (unless the admin says not to)
+                must = uid != me["id"] and data.get("must_change", True) is not False
+                set_password(uid, data["password"], must_change=must)
             except ValueError as e:
                 return _deny(str(e), 400)
-            changes["password"] = "changed"
+            changes["password"] = "changed" + (", must change at next sign-in" if must else "")
+            if must:   # their open sessions follow the new rule straight away
+                d.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+                d.commit()
         if data.get("sign_out"):
             d.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
             d.commit()

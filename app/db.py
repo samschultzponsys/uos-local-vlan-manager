@@ -262,6 +262,8 @@ COLUMNS = [
     ("users", "caps_deny", "TEXT NOT NULL DEFAULT '[]'"),          # abilities taken away from their role
     ("users", "pending", "INTEGER NOT NULL DEFAULT 0"),            # signed in with SSO, waiting for an admin to set them up
     ("feedback_comments", "github_id", "INTEGER"),                   # the matching GitHub issue comment
+    ("users", "sso_allowed", "INTEGER NOT NULL DEFAULT 0"),        # an admin added them for SSO: first SSO sign-in links by email
+    ("users", "must_change_pw", "INTEGER NOT NULL DEFAULT 0"),     # an admin set their password: choose their own before anything else
 ]
 
 

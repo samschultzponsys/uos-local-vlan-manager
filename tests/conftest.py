@@ -98,7 +98,7 @@ def configure_unifi(client, name="Rack 7"):
 
 def make_user(admin, app, username, role="viewer", password="userpass123"):
     """Create a user with a role; returns (user id, a signed-in test client)."""
-    uid = admin.post("/api/users", json={"username": username, "password": password}).get_json()["user"]["id"]
+    uid = admin.post("/api/users", json={"username": username, "password": password, "must_change": False}).get_json()["user"]["id"]
     if role != "viewer":
         admin.put(f"/api/users/{uid}", json={"role": role})
     c = app.test_client()

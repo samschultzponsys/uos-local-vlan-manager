@@ -5,6 +5,29 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.5 — 2026-10-01
+
+### Added
+- **SSO and a password for the same person.** Users → Add user → *Will sign in with SSO*, then
+  *Can also sign in with a password*: set their email, a username (or let it come from the
+  email) and a temporary password. Their first SSO sign-in with that **verified** email links
+  to the account, and the password keeps working too. Existing people can get the same with
+  *Can sign in with SSO* in their edit page.
+- **Admin-set passwords are temporary.** When you set someone's password (adding them or with
+  the key button), they **choose their own at their next sign-in before anything else**: no
+  environments, What's new, setup or tips, and the server refuses everything else until they
+  have. Their open sessions end when you set it. It can't be the password they were given.
+  Untick *They choose their own password* to skip this.
+- People who also have SSO can instead **remove the password** on that screen and only use SSO.
+- **Set password** is now a proper dialog with show / hide, **Generate** (a random 14-character
+  one) and copy.
+- The Users list shows *SSO + password*, *SSO ready* and *new password due*.
+
+### Changed
+- A pre-added account with a password links to an SSO sign-in only when it's marked for SSO, and
+  then only by verified email (never by username), so a matching SSO name can't take over a
+  local account.
+
 ## 3.4 — 2026-10-01
 
 ### Added

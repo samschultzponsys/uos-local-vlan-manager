@@ -620,7 +620,9 @@ export function UsersModal({ me, onClose }) {
   const [tab, setTab] = useState("people");
   const [adding, setAdding] = useState(false);
   const [view, setView] = useState(null);   // { kind: "access" | "edit", user }
-  const [form, setForm] = useState({ username: "", display_name: "", email: "", password: "", role: "" });
+  const blank = { username: "", display_name: "", email: "", password: "", role: "", sso: false, with_pw: false, must_change: true };
+  const [form, setForm] = useState(blank);
+  const [pwFor, setPwFor] = useState(null);
   const load = () => api("/api/users").then(setData).catch((e) => toast(e.message, "err"));
   useEffect(() => { load(); }, []);
   const can = (c) => data && data.my_caps.includes(c);
@@ -648,18 +650,25 @@ export function UsersModal({ me, onClose }) {
     ${!data ? html`<${Spinner} />` : tab === "roles" ? html`<${RolesEditor} onChanged=${load} />` : html`
     ${adding && html`<div class="panel add-user">
       <${Toggle} checked=${!!form.sso} onChange=${(v) => setForm({ ...form, sso: v })} label="Will sign in with SSO"
-        hint="Just their name, email and role: their first SSO sign-in finds this account by email and they're ready to go." />
+        hint="Their first SSO sign-in finds this account by their (verified) email and they're ready to go." />
+      ${form.sso && html`<${Toggle} checked=${form.with_pw} onChange=${(v) => setForm({ ...form, with_pw: v, password: v ? form.password : "" })}
+        label="Can also sign in with a password" hint="For when SSO is down, or on a device without it." />`}
       <div class="grid3">
-        ${!form.sso && html`<${Field} label="Username"><input value=${form.username} onInput=${(e) => setForm({ ...form, username: e.target.value })} /></${Field}>`}
+        ${(!form.sso || form.with_pw) && html`<${Field} label="Username" hint=${form.sso ? "Leave empty to use the part of their email before @." : ""}>
+          <input value=${form.username} autocomplete="off" onInput=${(e) => setForm({ ...form, username: e.target.value })} /></${Field}>`}
         <${Field} label="Display name"><input value=${form.display_name} onInput=${(e) => setForm({ ...form, display_name: e.target.value })} /></${Field}>
         <${Field} label=${form.sso ? "Email (required)" : "Email"}><input type="email" value=${form.email} onInput=${(e) => setForm({ ...form, email: e.target.value })} /></${Field}>
-        ${!form.sso && html`<${Field} label="Password" hint="Leave blank for an SSO-only user."><input type="password" autocomplete="new-password" value=${form.password} onInput=${(e) => setForm({ ...form, password: e.target.value })} /></${Field}>`}
+        ${(!form.sso || form.with_pw) && html`<${Field} label=${form.sso ? "Password" : "Password"} hint="A temporary one to give them, 8+ characters.">
+          <input type="password" autocomplete="new-password" value=${form.password} onInput=${(e) => setForm({ ...form, password: e.target.value })} /></${Field}>`}
         ${(data.admin || can("users.roles")) && html`<${Field} label="Role"><select value=${form.role || rolesByLevel[rolesByLevel.length - 1].key} onChange=${(e) => setForm({ ...form, role: e.target.value })}>
           ${rolesByLevel.filter((r) => data.assignable_roles.includes(r.key)).map((r) => html`<option value=${r.key}>${r.name}</option>`)}</select></${Field}>`}
+        ${form.password && html`<div class="field span3"><${Toggle} checked=${form.must_change} onChange=${(v) => setForm({ ...form, must_change: v })}
+          label="They choose their own password at first sign-in" hint="Before they see anything else. Recommended: you know the one you set." /></div>`}
         <div class="field end"><button class="btn primary" onClick=${async () => {
           try {
-            const r = await api("/api/users", { method: "POST", body: form });
-            toast(`Added ${form.display_name || r.user.username}`); setForm({ username: "", display_name: "", email: "", password: "", role: "", sso: false }); setAdding(false);
+            const { with_pw, ...body } = form;
+            const r = await api("/api/users", { method: "POST", body });
+            toast(`Added ${form.display_name || r.user.username}`); setForm(blank); setAdding(false);
             if (r.user.role !== "admin" && can("users.access")) setView({ kind: "access", user: r.user }); else load();
           } catch (e) { toast(e.message, "err"); }
         }}>Create</button></div>
@@ -673,7 +682,8 @@ export function UsersModal({ me, onClose }) {
         <td><div class="u-cell"><${Avatar} user=${u} size=${32} />${u.avatar_locked ? html`<span class="av-lock" title="Picture locked"><${Icon} name="lock" size=${10} /></span>` : null}
           <div><b>${u.display_name || u.username}</b>${u.seeded && html` <span class="badge">first admin</span>`}
             ${u.pending && html` <span class="badge warn" title="Signed in with SSO; sees a 'your admin hasn't set you up yet' page until you give them access, a role or abilities">waiting for setup</span>`}
-            <div class="muted small">${u.username}${u.email ? ` · ${u.email}` : ""}${u.sso ? " · SSO" : ""}</div></div></div></td>
+            ${u.must_change_password && html` <span class="badge" title="An admin set their password; they choose their own at next sign-in">new password due</span>`}
+            <div class="muted small">${u.username}${u.email ? ` · ${u.email}` : ""}${u.sso ? (u.has_password ? " · SSO + password" : " · SSO") : u.sso_allowed ? (u.has_password ? " · password, SSO ready" : " · SSO ready") : ""}</div></div></div></td>
         <td>${!self && (data.admin || can("users.roles")) && (data.admin || data.assignable_roles.includes(u.role))
             ? html`<select class="sm" value=${u.role} onChange=${(e) => update(u, { role: e.target.value }, `${u.username} is now ${roleName(data.roles, e.target.value)}`)}>
                 ${rolesByLevel.filter((r) => data.assignable_roles.includes(r.key) || r.key === u.role).map((r) => html`<option value=${r.key}>${r.name}</option>`)}</select>`
@@ -690,7 +700,7 @@ export function UsersModal({ me, onClose }) {
             try { await api(`/api/users/${u.id}/impersonate`, { method: "POST" }); location.href = "/"; } catch (e) { toast(e.message, "err"); }
           }}><${Icon} name="eye" size=${15} /></button>`}
           ${(data.admin || (!self && (can("users.edit") || can("users.roles")))) && html`<button class="icon-btn sm" title="Edit, abilities" onClick=${() => setView({ kind: "edit", user: u })}><${Icon} name="user" size=${15} /></button>`}
-          ${!self && can("users.edit") && html`<button class="icon-btn sm" title="Set password" onClick=${() => { const pw = prompt(`New password for ${u.username} (8+ characters):`); if (pw) update(u, { password: pw }, "Password set"); }}><${Icon} name="key" size=${15} /></button>`}
+          ${!self && can("users.edit") && html`<button class="icon-btn sm" title="Set password" onClick=${() => setPwFor(u)}><${Icon} name="key" size=${15} /></button>`}
           ${u.sessions > 0 && !self && can("users.edit") && html`<button class="icon-btn sm" title="Sign out everywhere" onClick=${() => update(u, { sign_out: true }, "Signed out")}><${Icon} name="logout" size=${15} /></button>`}
           ${!self && can("users.delete") && html`<button class="icon-btn sm danger" title="Delete" onClick=${async () => {
             if (await ask({ title: `Delete ${u.username}?`, body: "Their sessions, sign-in links and access are removed too.", danger: true, confirm: "Delete" })) {
@@ -699,6 +709,8 @@ export function UsersModal({ me, onClose }) {
           }}><${Icon} name="trash" size=${15} /></button>`}
         </td></tr>`;
       })}</tbody></table></div>`}
+    ${pwFor && html`<${SetPasswordModal} user=${pwFor} onClose=${() => setPwFor(null)}
+      onSave=${async (body) => { if (await update(pwFor, body, body.must_change ? "Password set - they'll choose their own at next sign-in" : "Password set")) setPwFor(null); }} />`}
   </${Modal}>`;
 }
 
@@ -776,8 +788,33 @@ function RolesEditor({ onChanged }) {
   </div>`;
 }
 
+/** An admin sets someone's password: temporary by default (they choose their own at next sign-in). */
+function SetPasswordModal({ user, onClose, onSave }) {
+  const [pw, setPw] = useState("");
+  const [show, setShow] = useState(false);
+  const [must, setMust] = useState(true);
+  const gen = () => {
+    const a = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const r = crypto.getRandomValues(new Uint32Array(14));
+    setPw(Array.from(r, (x) => a[x % a.length]).join("")); setShow(true);
+  };
+  return html`<${Modal} title=${`Password · ${user.display_name || user.username}`} icon="key" onClose=${onClose}
+    footer=${html`<button class="btn ghost" onClick=${onClose}>Cancel</button>
+      <button class="btn primary" disabled=${pw.length < 8} onClick=${() => onSave({ password: pw, must_change: must })}>Set password</button>`}>
+    <div class="form">
+      <${Field} label="New password" hint="8+ characters. Generate makes a random one you can copy.">
+        <div class="row"><input type=${show ? "text" : "password"} autocomplete="new-password" value=${pw} onInput=${(e) => setPw(e.target.value)} />
+          <button class="btn sm ghost" onClick=${() => setShow(!show)}>${show ? "Hide" : "Show"}</button>
+          <button class="btn sm" onClick=${gen}>Generate</button>${show && pw && html`<${Copy} text=${pw} />`}</div></${Field}>
+      <${Toggle} checked=${must} onChange=${setMust} label="They choose their own password at next sign-in"
+        hint="Before they see anything else, including What's new and the setup. Their open sessions end now." />
+      ${user.sso && html`<p class="muted small">They also sign in with SSO; this adds password sign-in for them.</p>`}
+    </div></${Modal}>`;
+}
+
 function UserEditor({ user, data, me, onSave, onCancel }) {
-  const [f, setF] = useState({ username: user.username, display_name: user.display_name || "", email: user.email || "" });
+  const [f, setF] = useState({ username: user.username, display_name: user.display_name || "", email: user.email || "",
+    sso_allowed: !!user.sso_allowed });
   const [grant, setGrant] = useState(user.caps_grant || []);
   const [deny, setDeny] = useState(user.caps_deny || []);
   const mayEdit = data.admin || data.my_caps.includes("users.edit");
@@ -808,6 +845,9 @@ function UserEditor({ user, data, me, onSave, onCancel }) {
       <input value=${f.username} autocomplete="off" onInput=${(e) => setF({ ...f, username: e.target.value })} /></${Field}>
     <${Field} label="Display name"><input value=${f.display_name} onInput=${(e) => setF({ ...f, display_name: e.target.value })} /></${Field}>
     <${Field} label="Email"><input value=${f.email} onInput=${(e) => setF({ ...f, email: e.target.value })} /></${Field}>
+    ${mayEdit && (user.sso ? html`<p class="muted small"><${Icon} name="shield" size=${13} /> Signs in with SSO${user.has_password ? " and with a password" : ""}.</p>`
+      : html`<${Toggle} checked=${f.sso_allowed} onChange=${(v) => setF({ ...f, sso_allowed: v })} label="Can sign in with SSO"
+          hint=${f.email ? `Their first SSO sign-in with the verified email ${f.email} links to this account. Password sign-in keeps working.` : "Add their email: a first SSO sign-in with that verified email links to this account."} />`)}
     ${mayRoles && html`<h4 class="section">Abilities</h4>
       <p class="muted small">From their role (<b>${user.role_name}</b>) unless you allow or deny one here.${data.admin ? "" : " You can only hand out abilities you have yourself."}</p>
       <div class="cap-grid">${capGroups(data.caps).map((g) => html`<div class="cap-group"><div class="field-label">${g.group}</div>

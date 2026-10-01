@@ -1259,6 +1259,7 @@ function App() {
     const m = await api("/api/me");
     if (m.method === "none") m.prefs = lsGet("vlanmgr.prefs", {});
     setMe(m);
+    return m;
   }, []);
   useEffect(() => { if (me) applyZoom((me.prefs || {}).scales); }, [me && JSON.stringify((me.prefs || {}).scales || {})]);
   const loadEnvs = useCallback(async () => {
@@ -1293,10 +1294,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    Promise.all([loadMe(), loadEnvs()]).catch((e) => { if (e.message !== "Signed out") setBootErr(e.message); });
-    loadVersion().then((v) => {
+    const meP = loadMe();
+    Promise.all([meP, loadEnvs()]).catch((e) => { if (e.message !== "Signed out") setBootErr(e.message); });
+    // What's new waits until someone who must choose a password has done so
+    Promise.all([loadVersion(), meP]).then(([v, m]) => {
+      if (m && m.must_change_password) return;
       if (lsGet("vlanmgr.seenVersion") !== v.version) { setModal("changelog"); lsSet("vlanmgr.seenVersion", v.version); }
-    });
+    }).catch(() => {});
   }, []);
   useEffect(() => { lsSet("vlanmgr.env", envId); setSel(null); setHighlight(null); setSt(null); load(true); }, [envId]);
   // the start page: All devices when that page is on and chosen, otherwise the environment
@@ -1340,6 +1344,8 @@ function App() {
     else await api("/api/me/prefs", { method: "PUT", body: patch }).catch((e) => toast(e.message, "err"));
   }
 
+  // an admin set this person's password: they choose their own before anything else shows
+  if (me && me.must_change_password && !me.impersonator) return html`<${ChoosePassword} me=${me} />`;
   if (bootErr) return html`<${BootError} error=${bootErr} />`;
   if (me && me.pending) return html`<${Waiting} me=${me} />`;
   if (!me || !envList) {
@@ -1589,6 +1595,43 @@ function App() {
 }
 
 const BUILD = (document.querySelector('meta[name="vlanmgr-build"]') || {}).content || "";
+
+/** First sign-in with a password an admin chose: pick your own (or, with SSO, drop the password). Nothing else until then. */
+function ChoosePassword({ me }) {
+  const [pw, setPw] = useState({ password: "", confirm: "" });
+  const [busy, setBusy] = useState(false);
+  window.__vlanmgrStarted = true;
+  const save = async (body) => {
+    setBusy(true);
+    try { await api("/api/me/password", { method: "PUT", body }); location.reload(); }
+    catch (e) { toast(e.message, "err"); setBusy(false); }
+  };
+  const submit = (e) => {
+    e.preventDefault();
+    if (pw.password.length < 8) return toast("At least 8 characters", "err");
+    if (pw.password !== pw.confirm) return toast("The passwords don't match", "err");
+    save({ password: pw.password });
+  };
+  const signOut = async () => { const r = await api("/api/auth/logout", { method: "POST" }); location.href = r.redirect; };
+  return html`<div class="boot waiting">
+    <${Logo} size=${52} />
+    <form class="boot-error choose-pw" onSubmit=${submit}>
+      <h2>Choose your own password</h2>
+      <p class="muted">Hi${me.display_name ? ` ${me.display_name.split(" ")[0]}` : ""}. An admin set a temporary password for you.
+        Pick one only you know before you continue.</p>
+      <input type="text" name="username" autocomplete="username" value=${me.username} hidden />
+      <label class="field"><span class="field-label">New password</span>
+        <input type="password" autocomplete="new-password" autofocus value=${pw.password} onInput=${(e) => setPw({ ...pw, password: e.target.value })} /></label>
+      <label class="field"><span class="field-label">Repeat it</span>
+        <input type="password" autocomplete="new-password" value=${pw.confirm} onInput=${(e) => setPw({ ...pw, confirm: e.target.value })} /></label>
+      <small class="hint">At least 8 characters.</small>
+      <button class="btn primary" type="submit" disabled=${busy}>Save and continue</button>
+      ${me.sso_linked && html`<div class="choose-pw-sso">
+        <span class="muted small">Only going to sign in with SSO?</span>
+        <button class="link-btn" type="button" disabled=${busy} onClick=${() => save({ remove: true })}>Remove the password and continue</button></div>`}
+      <button class="btn ghost" type="button" onClick=${signOut}><${Icon} name="logout" />Sign out</button>
+    </form></div>`;
+}
 
 /** Someone who signed in with SSO but hasn't been set up by an admin yet. Continues on its own once they are. */
 function Waiting({ me }) {

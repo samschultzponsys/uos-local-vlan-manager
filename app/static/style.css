@@ -1285,3 +1285,8 @@ button.fb-status.on { box-shadow: 0 0 0 2px color-mix(in srgb, var(--st) 45%, tr
 .audit-keep { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; border-radius: 12px;
   background: var(--bg2); border: 1px solid var(--border); }
 .audit-keep select { width: auto; height: 34px; }
+.choose-pw { display: grid; gap: 12px; text-align: left; width: min(420px, calc(100vw - 32px)); }
+.choose-pw h2, .choose-pw > p { text-align: center; margin: 0; }
+.choose-pw .field { display: grid; gap: 6px; }
+.choose-pw-sso { display: grid; justify-items: center; gap: 2px; padding-top: 4px; }
+.grid3 .span3 { grid-column: 1 / -1; }

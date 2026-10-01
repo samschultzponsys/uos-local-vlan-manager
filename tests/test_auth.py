@@ -32,7 +32,7 @@ def test_new_users_default_to_viewer(admin):
 
 
 def test_role_gates(app, admin):
-    admin.post("/api/users", json={"username": "vic", "password": "vicpass123"})
+    admin.post("/api/users", json={"username": "vic", "password": "vicpass123", "must_change": False})
     c = app.test_client()
     login(c, "vic", "vicpass123")
     assert c.get("/api/envs").status_code == 200
@@ -150,7 +150,7 @@ def test_mutations_must_be_json(admin):
 
 
 def test_viewer_can_choose_own_token_for_link(app, admin):
-    admin.post("/api/users", json={"username": "val", "password": "valpass123"})
+    admin.post("/api/users", json={"username": "val", "password": "valpass123", "must_change": False})
     c = app.test_client()
     login(c, "val", "valpass123")
     r = c.post("/api/me/tokens", json={"name": "phone", "value": "my-own-phone-token-1"})
@@ -188,7 +188,7 @@ def test_admin_can_rename_seeded_admin(app, admin):
 
 
 def test_users_edit_display_name_but_not_username(app, admin):
-    admin.post("/api/users", json={"username": "tina", "password": "tinapass12"})
+    admin.post("/api/users", json={"username": "tina", "password": "tinapass12", "must_change": False})
     c = app.test_client()
     login(c, "tina", "tinapass12")
     assert c.put("/api/me/profile", json={"display_name": "Tina T"}).status_code == 200
@@ -229,7 +229,7 @@ PNG = "data:image/png;base64," + __import__("base64").b64encode(b"\x89PNG\r\n\x1
 
 
 def test_profile_picture_upload_and_admin_lock(app, admin):
-    admin.post("/api/users", json={"username": "pic", "password": "picpass123"})
+    admin.post("/api/users", json={"username": "pic", "password": "picpass123", "must_change": False})
     c = app.test_client()
     login(c, "pic", "picpass123")
     r = c.put("/api/me/avatar", json={"image": PNG})
@@ -343,3 +343,57 @@ def test_add_sso_person_with_just_name_email_and_role(app, admin):
         row, _ = auth._oidc_user({"sub": "pat-sub", "preferred_username": "pdoe", "email": "pat.doe@corp.io"})
         assert row["id"] == u["id"] and not row["pending"]
         db.close()
+
+
+def test_admin_set_password_must_be_changed_first(app, admin):
+    uid = admin.post("/api/users", json={"username": "newb", "password": "temppass123"}).get_json()["user"]["id"]
+    c = app.test_client()
+    assert login(c, "newb", "temppass123").status_code == 200
+    me = c.get("/api/me").get_json()
+    assert me["must_change_password"]
+    # nothing else works until they choose their own
+    r = c.get("/api/envs")
+    assert r.status_code == 403 and r.get_json()["password_change_required"]
+    assert c.get("/api/feedback").status_code == 403
+    assert c.put("/api/me/prefs", json={"theme": "light"}).status_code == 403
+    assert c.put("/api/me/password", json={"password": "temppass123"}).status_code == 400   # not the same one
+    assert c.put("/api/me/password", json={"password": "mine-now-123"}).status_code == 200
+    assert not c.get("/api/me").get_json()["must_change_password"]
+    assert c.get("/api/envs").status_code == 200
+    # an admin resetting it again: their sessions end and the rule is back
+    admin.put(f"/api/users/{uid}", json={"password": "another-temp1"})
+    assert c.get("/api/envs").status_code == 401
+    c2 = app.test_client()
+    login(c2, "newb", "another-temp1")
+    assert c2.get("/api/envs").status_code == 403
+    # ...unless the admin says it needn't be changed
+    admin.put(f"/api/users/{uid}", json={"password": "keep-this-12", "must_change": False})
+    c3 = app.test_client()
+    login(c3, "newb", "keep-this-12")
+    assert c3.get("/api/envs").status_code == 200
+
+
+def test_sso_user_with_a_password_links_by_verified_email(app, admin):
+    import auth
+    r = admin.post("/api/users", json={"sso": True, "email": "ann@corp.test", "display_name": "Ann", "password": "temppass123"})
+    row = r.get_json()["user"]
+    assert row["username"] == "ann" and row["sso_allowed"] and row["has_password"] and row["must_change_password"]
+    with app.test_request_context():
+        # an unverified email never links an account
+        u, err = auth._oidc_user({"sub": "x1", "email": "ann@corp.test", "email_verified": False, "preferred_username": "ann"})
+        assert u is None or u["id"] != row["id"]
+        u, err = auth._oidc_user({"sub": "x2", "email": "ann@corp.test", "email_verified": True})
+        assert err is None and u["id"] == row["id"] and u["oidc_sub"] == "x2"
+    # password sign-in still works
+    c = app.test_client()
+    assert login(c, "ann", "temppass123").status_code == 200
+    # SSO people may drop the password when choosing
+    assert c.put("/api/me/password", json={"remove": True}).status_code == 200
+    assert login(app.test_client(), "ann", "temppass123").status_code == 401
+
+
+def test_local_only_people_cannot_drop_their_password(app, admin):
+    admin.post("/api/users", json={"username": "loc", "password": "temppass123"})
+    c = app.test_client()
+    login(c, "loc", "temppass123")
+    assert c.put("/api/me/password", json={"remove": True}).status_code == 400

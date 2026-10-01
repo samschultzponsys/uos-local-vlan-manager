@@ -320,6 +320,10 @@ Set up under **Settings → Sign-in**. Any combination works:
   - **Add people first** (Users → Add user, with their email and no password) and they're
     ready on their first SSO sign-in: matched by username, or by email when the provider
     doesn't mark it unverified.
+  - **SSO and a password**: tick *Can also sign in with a password* when adding them (or *Can
+    sign in with SSO* on an existing person). Such accounts link to SSO only by verified email.
+  - **Passwords you set are temporary**: the person chooses their own at their next sign-in,
+    before they see anything else (people with SSO may drop the password instead).
   - Anyone else who signs in with SSO gets an account **waiting for setup**: they see "your
     admin hasn't set you up yet" until someone gives them access, a role or abilities, and
     admins see who's waiting. Or turn *Let new people sign in with SSO* off so only people
