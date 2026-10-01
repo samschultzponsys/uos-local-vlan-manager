@@ -5,6 +5,14 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.6 — 2026-10-01
+
+### Changed
+- **A password you set must be replaced, whichever way they sign in.** Someone added with SSO and a
+  temporary password who signs in with SSO first (matched by their verified email) also gets
+  *Choose your own password* before anything else, and can't skip it by dropping the password.
+  SSO keeps working; the new password is for signing in without it.
+
 ## 3.5 — 2026-10-01
 
 ### Added
@@ -18,7 +26,6 @@ here and nowhere else.
   environments, What's new, setup or tips, and the server refuses everything else until they
   have. Their open sessions end when you set it. It can't be the password they were given.
   Untick *They choose their own password* to skip this.
-- People who also have SSO can instead **remove the password** on that screen and only use SSO.
 - **Set password** is now a proper dialog with show / hide, **Generate** (a random 14-character
   one) and copy.
 - The Users list shows *SSO + password*, *SSO ready* and *new password due*.

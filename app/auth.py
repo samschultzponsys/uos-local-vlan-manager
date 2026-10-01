@@ -1078,6 +1078,8 @@ def init_app(app):
         if row["password_hash"] and not forced and not check_password_hash(row["password_hash"], data.get("current") or ""):
             return _deny("Current password is wrong", 400)
         if data.get("remove"):
+            if forced:   # the password an admin chose is replaced, not dropped
+                return _deny("Choose a new password first", 400)
             # SSO people can drop the password and only use SSO
             if not row["oidc_sub"] and not (row["sso_allowed"] and config()["oidc_enabled"]):
                 return _deny("Keep a password: you have no other way to sign in", 400)

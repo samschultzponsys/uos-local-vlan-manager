@@ -1596,7 +1596,7 @@ function App() {
 
 const BUILD = (document.querySelector('meta[name="vlanmgr-build"]') || {}).content || "";
 
-/** First sign-in with a password an admin chose: pick your own (or, with SSO, drop the password). Nothing else until then. */
+/** First sign-in (password or SSO) after an admin chose their password: pick your own. Nothing else until then. */
 function ChoosePassword({ me }) {
   const [pw, setPw] = useState({ password: "", confirm: "" });
   const [busy, setBusy] = useState(false);
@@ -1626,9 +1626,8 @@ function ChoosePassword({ me }) {
         <input type="password" autocomplete="new-password" value=${pw.confirm} onInput=${(e) => setPw({ ...pw, confirm: e.target.value })} /></label>
       <small class="hint">At least 8 characters.</small>
       <button class="btn primary" type="submit" disabled=${busy}>Save and continue</button>
-      ${me.sso_linked && html`<div class="choose-pw-sso">
-        <span class="muted small">Only going to sign in with SSO?</span>
-        <button class="link-btn" type="button" disabled=${busy} onClick=${() => save({ remove: true })}>Remove the password and continue</button></div>`}
+      ${me.method === "oidc" && html`<p class="muted small choose-pw-sso">You signed in with SSO, which keeps working. This sets the password for
+        signing in without it.</p>`}
       <button class="btn ghost" type="button" onClick=${signOut}><${Icon} name="logout" />Sign out</button>
     </form></div>`;
 }

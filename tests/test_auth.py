@@ -387,9 +387,31 @@ def test_sso_user_with_a_password_links_by_verified_email(app, admin):
     # password sign-in still works
     c = app.test_client()
     assert login(c, "ann", "temppass123").status_code == 200
-    # SSO people may drop the password when choosing
-    assert c.put("/api/me/password", json={"remove": True}).status_code == 200
-    assert login(app.test_client(), "ann", "temppass123").status_code == 401
+    # the temporary password is replaced, not dropped
+    assert c.put("/api/me/password", json={"remove": True}).status_code == 400
+    assert c.get("/api/envs").status_code == 403
+
+
+def test_first_sso_sign_in_also_requires_a_new_password(app, admin, monkeypatch):
+    admin.put("/api/settings/auth", json={"oidc_enabled": True,
+                                          "oidc": {"issuer": "https://idp.test", "client_id": "abc"}})
+    uid = admin.post("/api/users", json={"sso": True, "email": "ben@corp.test", "password": "temppass123"}).get_json()["user"]["id"]
+
+    class IdP:
+        def authorize_access_token(self):
+            return {"userinfo": {"sub": "ben-1", "email": "ben@corp.test", "email_verified": True, "groups": []}}
+    monkeypatch.setattr(auth, "_ensure_oauth", lambda cfg: type("O", (), {"idp": IdP()})())
+    c = app.test_client()
+    assert c.get("/auth/oidc/callback?code=x&state=y").status_code == 302
+    me = c.get("/api/me").get_json()
+    assert me["id"] == uid and me["method"] == "oidc" and me["must_change_password"]
+    assert c.get("/api/envs").status_code == 403          # nothing until the password is changed
+    assert c.put("/api/me/password", json={"remove": True}).status_code == 400
+    assert c.put("/api/me/password", json={"password": "bens-own-pw1"}).status_code == 200
+    assert c.get("/api/envs").status_code == 200
+    # both ways in work afterwards; the temporary one doesn't
+    assert login(app.test_client(), "ben", "bens-own-pw1").status_code == 200
+    assert login(app.test_client(), "ben", "temppass123").status_code == 401
 
 
 def test_local_only_people_cannot_drop_their_password(app, admin):
