@@ -52,6 +52,7 @@ import requests
 from flask import g, jsonify, redirect, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import brand
 import db
 import perms
 
@@ -93,7 +94,7 @@ BUTTON_ICONS = ("none", "key", "shield", "lock", "login", "authentik", "custom")
 PUBLIC_PATHS = {"/login", "/healthz", "/favicon.svg", "/api/auth/config", "/api/auth/login",
                 "/auth/oidc/login", "/auth/oidc/callback", "/api/version",
                 "/manifest.webmanifest"}
-PUBLIC_PREFIXES = ("/static/",)
+PUBLIC_PREFIXES = ("/static/", "/brand/")
 
 _oauth = None
 _oauth_sig = None
@@ -785,6 +786,7 @@ def init_app(app):
             "button": {k: b[k] for k in DEFAULT_BUTTON},
             "no_auth": bool(cfg["no_auth"]),
             "app_name": db.get_setting("app_name"),
+            "brand": brand.public(),
             "signed_in": current() is not None and current()["method"] != "none",
         })
 

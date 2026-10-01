@@ -1,6 +1,6 @@
 import { render, useState, useEffect, useMemo, useCallback, useRef, useErrorBoundary } from "./vendor/preact-htm.module.js";
 import {
-  html, api, Icon, Modal, Segmented, Toggle, Toasts, toast, Spinner, useInterval, Logo, markdown,
+  html, api, Icon, Modal, Segmented, Toggle, Toasts, toast, Spinner, useInterval, Logo, setBrand, markdown,
   vlanColors, colorsFor, colorKey, readable, glyphHalo, speedLabel, linkLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
 } from "./ui.js";
 import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
@@ -1214,6 +1214,7 @@ function App() {
   useEffect(() => { if (me) applyZoom((me.prefs || {}).scales); }, [me && JSON.stringify((me.prefs || {}).scales || {})]);
   const loadEnvs = useCallback(async () => {
     const r = await api("/api/envs");
+    if (r.settings) { setBrand(r.settings.brand); document.title = r.settings.app_name || "VLAN Manager"; }
     setEnvList(r);
     setEnvId((cur) => (r.envs.some((e) => e.id === cur) ? cur : (r.envs[0] ? r.envs[0].id : null)));
     return r;

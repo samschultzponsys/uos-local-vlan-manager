@@ -1,5 +1,5 @@
 import { render, useState, useEffect } from "./vendor/preact-htm.module.js";
-import { html, api, Icon, Logo, SsoButton, Spinner } from "./ui.js";
+import { html, api, Icon, Logo, setBrand, SsoButton, Spinner } from "./ui.js";
 
 function Login() {
   const q = new URLSearchParams(location.search);
@@ -11,7 +11,7 @@ function Login() {
   const [ver, setVer] = useState("");
 
   useEffect(() => {
-    api("/api/auth/config").then((c) => { window.__vlanmgrStarted = true; setCfg(c); document.title = `Sign in · ${c.app_name}`; });
+    api("/api/auth/config").then((c) => { window.__vlanmgrStarted = true; setBrand(c.brand); setCfg(c); document.title = `Sign in · ${c.app_name}`; });
     api("/api/version").then((v) => setVer(v.version)).catch(() => {});
   }, []);
 
@@ -27,7 +27,7 @@ function Login() {
   if (!cfg) return html`<div class="boot"><${Logo} size=${48} /><${Spinner} /></div>`;
   const ssoHref = "/auth/oidc/login?next=" + encodeURIComponent(next);
   return html`<div class="login-page"><div class="login-card">
-    <div class="login-brand"><${Logo} size=${52} /><h1>${cfg.app_name}</h1><p>Switch port VLANs for UniFi</p></div>
+    <div class="login-brand"><${Logo} size=${52} /><h1>${cfg.app_name}</h1>${cfg.brand && cfg.brand.tagline && html`<p>${cfg.brand.tagline}</p>`}</div>
     ${q.get("logged_out") && !err && html`<div class="notice good"><${Icon} name="check" /><div>You're signed out.</div></div>`}
     ${err && html`<div class="notice err"><${Icon} name="alert" /><div>${err}</div></div>`}
     ${cfg.no_auth && html`<div class="notice warn"><${Icon} name="alert" /><div><b>No-auth mode is on</b> — you can <a href="/">go straight in</a>. Sign in here only to use your own account.</div></div>`}

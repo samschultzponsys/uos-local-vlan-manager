@@ -5,6 +5,31 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.0 — 2026-10-01
+
+### Added
+- **Branding** (Settings → Branding, admins): make the app yours.
+  - **App name**: shown in the top bar, the browser tab, the sign-in page, the setup wizard
+    and the installed app's name. It's put into the page by the server, so the stock name
+    never flashes on load.
+  - **Sign-in tagline**: the line under the name on the sign-in page (or none).
+  - **Header logo**: the stock mark, one of **18 icons** on a gradient (**8 palettes** —
+    Ocean, Sunset, Forest, Grape, Ember, Gold, Slate, Mono — or **custom** top, bottom and icon
+    colors), or an **uploaded picture** (PNG, JPEG or WebP; squared in the browser, see-through
+    parts kept).
+  - **Browser tab icon**: follows the logo, or its own icon / palette / picture — a simpler
+    mark often reads better at 16 pixels.
+  - A **live preview** of the browser tab, the top bar and the sign-in card while you edit;
+    **Back to stock** undoes it all.
+- The installed app (PWA) uses the custom name and logo.
+
+### Changed
+- *App name* moved from Settings → Ports to Settings → Branding.
+
+### Security
+- Uploaded pictures are checked by their content (no SVG, which could carry script) and served
+  with a `default-src 'none'` policy. The name is escaped wherever the server writes it into a page.
+
 ## 2.9 — 2026-10-01
 
 ### Added

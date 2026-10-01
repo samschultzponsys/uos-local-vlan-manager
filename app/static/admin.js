@@ -1,7 +1,7 @@
 import { useState, useEffect } from "./vendor/preact-htm.module.js";
 import {
   html, api, Icon, Modal, Toggle, Segmented, Field, Copy, toast, Spinner, SsoButton, ask, Avatar, pickImage,
-  vlanColors, ROLE_LABEL, MODE_LABEL, ago, when, rank,
+  Logo, setBrand, vlanColors, ROLE_LABEL, MODE_LABEL, ago, when, rank,
 } from "./ui.js";
 
 
@@ -24,13 +24,14 @@ const roleName = (roles, key) => ((roles || []).find((r) => r.key === key) || { 
 export function SettingsModal({ onClose, onSaved, addEnv }) {
   const [tab, setTab] = useState("envs");
   const tabs = [["envs", "Environments", "server"], ["auth", "Sign-in", "shield"], ["behavior", "Ports", "grid"],
-    ["updates", "Updates", "sparkle"]];
+    ["brand", "Branding", "palette"], ["updates", "Updates", "sparkle"]];
   return html`<${Modal} title="Settings" icon="settings" onClose=${onClose} wide>
     <nav class="tabs">${tabs.map(([k, l, i]) => html`<button class=${tab === k ? "on" : ""} onClick=${() => setTab(k)}><${Icon} name=${i} size=${15} />${l}</button>`)}</nav>
     <div class="tab-body">
       ${tab === "envs" && html`<${EnvironmentsTab} onSaved=${onSaved} startNew=${addEnv} />`}
       ${tab === "auth" && html`<${AuthTab} />`}
       ${tab === "behavior" && html`<${BehaviorTab} onSaved=${onSaved} />`}
+      ${tab === "brand" && html`<${BrandingTab} onSaved=${onSaved} />`}
       ${tab === "updates" && html`<${UpdatesTab} />`}
     </div></${Modal}>`;
 }
@@ -334,7 +335,6 @@ function BehaviorTab({ onSaved }) {
   if (!s) return html`<${Spinner} />`;
   const set = (k, v) => setS({ ...s, [k]: v });
   return html`<div class="form">
-    <${Field} label="App name"><input value=${s.app_name} maxlength="40" onInput=${(e) => set("app_name", e.target.value)} /></${Field}>
     <${Field} label="Tagged VLAN management when changing a port" hint="Pre-selected in the port panel. Anyone who can change ports can still pick another option.">
       <${Segmented} value=${s.default_tagged_mode} onChange=${(v) => set("default_tagged_mode", v)}
         options=${["auto", "block_all", "custom"].map((m) => ({ value: m, label: MODE_LABEL[m] }))} /></${Field}>
@@ -342,8 +342,106 @@ function BehaviorTab({ onSaved }) {
       hint="Uplinks, links to other UniFi devices, LAG and mirror ports can only be changed by an admin, after a warning." />
     <${Field} label="Refresh every (seconds)"><input type="number" min="5" max="600" value=${s.poll_seconds} onInput=${(e) => set("poll_seconds", e.target.value)} /></${Field}>
     <div class="form-actions"><button class="btn primary" onClick=${async () => {
-      try { await api("/api/settings", { method: "PUT", body: { app_name: s.app_name, default_tagged_mode: s.default_tagged_mode, protect_uplinks: s.protect_uplinks, poll_seconds: s.poll_seconds } }); toast("Saved"); onSaved(); } catch (e) { toast(e.message, "err"); }
+      try { await api("/api/settings", { method: "PUT", body: { default_tagged_mode: s.default_tagged_mode, protect_uplinks: s.protect_uplinks, poll_seconds: s.poll_seconds } }); toast("Saved"); onSaved(); } catch (e) { toast(e.message, "err"); }
     }}>Save</button></div></div>`;
+}
+
+// --- branding ------------------------------------------------------------------
+
+const MARK_KINDS = [{ value: "default", label: "Stock" }, { value: "icon", label: "Icon" }, { value: "image", label: "Picture" }];
+const PALETTE_NAMES = { ocean: "Ocean", sunset: "Sunset", forest: "Forest", grape: "Grape", ember: "Ember", gold: "Gold", slate: "Slate", mono: "Mono" };
+
+/** a mark as the Logo component draws it (the same shape the server sends) */
+function drawable(m, which, b) {
+  const colors = m.palette === "custom" ? [m.c1, m.c2, m.fg] : b.palettes[m.palette] || b.palettes.ocean;
+  return { kind: m.kind, icon: m.icon, path: b.icons[m.icon], colors, src: m.image ? `/brand/${which}?v=${m.image}` : null };
+}
+
+function BrandingTab({ onSaved }) {
+  const [b, setB] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => api("/api/settings/brand").then(setB).catch((e) => toast(e.message, "err"));
+  useEffect(() => { load(); }, []);
+  if (!b) return html`<${Spinner} />`;
+  const set = (k, v) => setB({ ...b, [k]: v });
+  const logo = drawable(b.logo, "logo", b);
+  const fav = b.favicon_same ? logo : drawable(b.favicon, "favicon", b);
+  const name = b.app_name.trim() || "VLAN Manager";
+  const upload = async (which) => {
+    let image;
+    try { image = await pickImage(which === "logo" ? 256 : 128, { transparent: true }); } catch (e) { return toast(e.message, "err"); }
+    if (!image) return;
+    try {
+      await api(`/api/settings/brand/image/${which}`, { method: "PUT", body: { image } });
+      const fresh = await api("/api/settings/brand");
+      setB({ ...b, [which]: { ...b[which], kind: "image", image: fresh[which].image } });   // keep unsaved edits
+      toast("Picture uploaded - Save to use it");
+    } catch (e) { toast(e.message, "err"); }
+  };
+  const save = async () => {
+    setBusy(true);
+    try {
+      const mark = (m) => ({ kind: m.kind, icon: m.icon, palette: m.palette, c1: m.c1, c2: m.c2, fg: m.fg });
+      const r = await api("/api/settings/brand", { method: "PUT", body: {
+        app_name: b.app_name, tagline: b.tagline, favicon_same: b.favicon_same, logo: mark(b.logo), favicon: mark(b.favicon) } });
+      setBrand(r.brand);
+      toast("Saved");
+      onSaved();
+    } catch (e) { toast(e.message, "err"); }
+    setBusy(false);
+  };
+  return html`<div class="form brand-form">
+    <div class="brand-preview" aria-label="Preview">
+      <div class="bp-tab"><span class="bp-fav"><${Logo} size=${16} mark=${fav} /></span><span class="bp-title">${name}</span><${Icon} name="x" size=${12} /></div>
+      <div class="bp-bar"><${Logo} size=${28} mark=${logo} /><b>${name}</b></div>
+      <div class="bp-login"><${Logo} size=${40} mark=${logo} /><b>${name}</b>${b.tagline && html`<small>${b.tagline}</small>`}</div>
+    </div>
+    <${Field} label="App name" hint="Shown in the top bar, the browser tab, the sign-in page, the setup wizard and the installed app.">
+      <input value=${b.app_name} maxlength="40" onInput=${(e) => set("app_name", e.target.value)} /></${Field}>
+    <${Field} label="Sign-in tagline" hint="The line under the name on the sign-in page. Leave empty for none.">
+      <input value=${b.tagline} maxlength="80" onInput=${(e) => set("tagline", e.target.value)} /></${Field}>
+    <${MarkEditor} title="Logo" hint="The top bar, the sign-in page and the installed app's icon." which="logo" b=${b}
+      mark=${b.logo} onChange=${(m) => set("logo", m)} onUpload=${() => upload("logo")} />
+    <${Toggle} checked=${b.favicon_same} onChange=${(v) => set("favicon_same", v)} label="Browser tab icon matches the logo"
+      hint="Turn off to give the tab its own icon - a simpler one often reads better at 16 pixels." />
+    ${!b.favicon_same && html`<${MarkEditor} title="Browser tab icon" which="favicon" b=${b}
+      mark=${b.favicon} onChange=${(m) => set("favicon", m)} onUpload=${() => upload("favicon")} />`}
+    <div class="form-actions">
+      <button class="btn" onClick=${() => setB({ ...b, app_name: "VLAN Manager", tagline: "Switch port VLANs for UniFi", favicon_same: true,
+        logo: { ...b.logo, kind: "default" }, favicon: { ...b.favicon, kind: "default" } })}>Back to stock</button>
+      <button class="btn primary" disabled=${busy} onClick=${save}>Save</button></div>
+  </div>`;
+}
+
+function MarkEditor({ title, hint, which, b, mark, onChange, onUpload }) {
+  const m = mark;
+  const set = (patch) => onChange({ ...m, ...patch });
+  const preview = drawable(m, which, b);
+  return html`<fieldset class="mark-ed">
+    <legend>${title}</legend>
+    ${hint && html`<small class="hint">${hint}</small>`}
+    <div class="mark-head">
+      <div class="mark-big"><${Logo} size=${56} mark=${preview} /></div>
+      <${Segmented} value=${m.kind} onChange=${(v) => set({ kind: v })} options=${MARK_KINDS} />
+    </div>
+    ${m.kind === "icon" && html`
+      <span class="field-label">Icon</span>
+      <div class="icon-pick">${Object.keys(b.icons).map((k) => html`<button class=${`ip ${m.icon === k ? "on" : ""}`} title=${k}
+        aria-label=${k} onClick=${() => set({ icon: k })}><${Logo} size=${30} mark=${{ ...preview, icon: k, path: b.icons[k] }} /></button>`)}</div>
+      <span class="field-label">Colors</span>
+      <div class="pal-pick">${Object.entries(b.palettes).map(([k, c]) => html`<button class=${`pal ${m.palette === k ? "on" : ""}`}
+        onClick=${() => set({ palette: k })} title=${PALETTE_NAMES[k] || k}>
+        <span class="pal-sw" style=${`background:linear-gradient(135deg,${c[0]},${c[1]});color:${c[2]}`}>A</span><span>${PALETTE_NAMES[k] || k}</span></button>`)}
+        <button class=${`pal ${m.palette === "custom" ? "on" : ""}`} onClick=${() => set({ palette: "custom" })}>
+          <span class="pal-sw custom"><${Icon} name="palette" size=${14} /></span><span>Custom</span></button></div>
+      ${m.palette === "custom" && html`<div class="pal-custom">
+        ${[["c1", "Top"], ["c2", "Bottom"], ["fg", "Icon"]].map(([k, l]) => html`<label><input type="color" value=${m[k]}
+          onInput=${(e) => set({ [k]: e.target.value })} /><span>${l}</span><code>${m[k]}</code></label>`)}</div>`}`}
+    ${m.kind === "image" && html`<div class="mark-upload">
+      <button class="btn" onClick=${onUpload}><${Icon} name="upload" size=${15} />${m.image ? "Change picture" : "Upload a picture"}</button>
+      <small class="hint">PNG, JPEG or WebP. It's made square (see-through parts stay see-through)${which === "favicon" ? "; small, bold pictures read best in a tab" : ""}.</small>
+    </div>`}
+  </fieldset>`;
 }
 
 function UpdatesTab() {

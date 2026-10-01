@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tempfile
 
@@ -60,6 +61,7 @@ def app(capsys):
     for f in os.listdir(_TMP):
         if f.startswith("vlanmgr"):
             os.remove(os.path.join(_TMP, f))
+    shutil.rmtree(os.path.join(_TMP, "brand"), ignore_errors=True)
     main.startup()
     db.close()
     out = capsys.readouterr().out

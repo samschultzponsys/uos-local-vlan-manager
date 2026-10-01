@@ -17,6 +17,7 @@ import time
 from flask import Flask, g, jsonify, redirect, request, send_from_directory
 
 import auth
+import brand
 import db
 import envs
 import perms
@@ -80,7 +81,24 @@ def _page(name):
     with open(os.path.join(STATIC_DIR, name), encoding="utf-8") as fh:
         html = fh.read()
     html = html.replace('"/static/', f'"/static/{BUILD}/').replace("__BUILD__", BUILD)
+    # the admin-chosen name, tab icon and logo are in the page itself, so nothing flashes the stock ones
+    b = brand.public()
+    name = _esc(b["app_name"])
+    html = html.replace("VLAN Manager", name)
+    html = html.replace('href="/favicon.svg" type="image/svg+xml"', f'href="{_esc(_favicon_href(b))}"')
+    if b["logo"].get("src"):
+        html = html.replace(f'"/static/{BUILD}/apple-touch-icon.png"', f'"{_esc(b["logo"]["src"])}"')
+    html = html.replace("<!--brand-->", "<script>window.__brand = " + json.dumps(b).replace("<", "\\u003c") + ";</script>")
     return app.response_class(html, mimetype="text/html")
+
+
+def _esc(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _favicon_href(b):
+    f = b["favicon"]
+    return f.get("src") or f"/favicon.svg?v={b['version']}"
 
 
 @app.route("/")
@@ -99,23 +117,63 @@ def login_page():
 @app.route("/manifest.webmanifest")
 def manifest():
     """Installable web app: launched from its icon it opens full screen, no browser bars."""
-    name = db.get_setting("app_name") or "VLAN Manager"
-    body = {
-        "name": name, "short_name": name[:12], "start_url": "/", "scope": "/", "id": "/",
-        "display": "standalone", "orientation": "any",
-        "background_color": "#0a0c11", "theme_color": "#0a0c11",
-        "icons": [
+    b = brand.public()
+    name = b["app_name"]
+    if b["logo"]["kind"] == "default":
+        icons = [
             {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
             {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
             {"src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
-        ],
+        ]
+    elif b["logo"].get("src"):
+        icons = [{"src": b["logo"]["src"], "sizes": "256x256", "type": brand.IMAGE_MIME[brand.image_ext("logo")]}]
+    else:
+        icons = [{"src": f"/brand/logo.svg?v={b['version']}", "sizes": "any", "type": "image/svg+xml"}]
+    body = {
+        "name": name, "short_name": name[:12], "start_url": "/", "scope": "/", "id": "/",
+        "display": "standalone", "orientation": "any",
+        "background_color": "#0a0c11", "theme_color": "#0a0c11", "icons": icons,
     }
-    return app.response_class(json.dumps(body), mimetype="application/manifest+json")
+    resp = app.response_class(json.dumps(body), mimetype="application/manifest+json")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+def _svg_response(mark):
+    resp = app.response_class(brand.svg(mark), mimetype="image/svg+xml")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+    return resp
 
 
 @app.route("/favicon.svg")
 def favicon():
-    return send_from_directory(STATIC_DIR, "favicon.svg")
+    c = brand.config()
+    m = c["logo"] if c["favicon_same"] else c["favicon"]
+    if m["kind"] == "default":
+        return send_from_directory(STATIC_DIR, "favicon.svg")
+    if m["kind"] == "image":   # browsers asking for the old address still get the picture
+        return redirect(brand.public()["favicon"].get("src") or "/static/favicon.svg")
+    return _svg_response(m)
+
+
+@app.route("/brand/<which>.svg")
+def brand_svg(which):
+    if which not in ("logo", "favicon"):
+        return _deny("Not found", 404)
+    return _svg_response(brand.config()[which])
+
+
+@app.route("/brand/<which>")
+def brand_image(which):
+    """An uploaded logo or favicon (public: the sign-in page shows it)."""
+    if which not in ("logo", "favicon") or not brand.image_path(which):
+        return _deny("Not found", 404)
+    p = brand.image_path(which)
+    resp = send_from_directory(os.path.dirname(p), os.path.basename(p), mimetype=brand.IMAGE_MIME[brand.image_ext(which)])
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable" if request.args.get("v") else "no-cache"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'"
+    return resp
 
 
 @app.route("/static/<path:fname>")
@@ -172,6 +230,7 @@ def _update_loop():
 def public_settings():
     return {
         "app_name": db.get_setting("app_name"),
+        "brand": brand.public(),
         "default_tagged_mode": db.get_setting("default_tagged_mode"),
         "poll_seconds": int(db.get_setting("poll_seconds") or 10),
         "protect_uplinks": db.setting_bool("protect_uplinks"),
@@ -951,6 +1010,39 @@ def api_settings_put():
         envs.invalidate(e["id"])
     auth.audit("settings.app", "", vals)
     return jsonify({"ok": True})
+
+
+@app.route("/api/settings/brand")
+@auth.require("settings.manage")
+def api_brand():
+    return jsonify({**brand.config(), "app_name": db.get_setting("app_name") or "VLAN Manager",
+                    "icons": brand.ICONS, "palettes": brand.PALETTES, "public": brand.public()})
+
+
+@app.route("/api/settings/brand", methods=["PUT"])
+@auth.require("settings.manage")
+def api_brand_put():
+    data = request.get_json(silent=True) or {}
+    try:
+        if "app_name" in data:
+            db.set_setting("app_name", (str(data["app_name"] or "").strip() or "VLAN Manager")[:40])
+        brand.save(data)
+    except ValueError as e:
+        return _deny(str(e))
+    auth.audit("settings.brand", "", {k: data[k] for k in ("app_name", "tagline") if k in data})
+    return jsonify({"ok": True, "brand": brand.public()})
+
+
+@app.route("/api/settings/brand/image/<which>", methods=["PUT"])
+@auth.require("settings.manage")
+def api_brand_image(which):
+    data = request.get_json(silent=True) or {}
+    try:
+        brand.save_image(which, data.get("image"))
+    except ValueError as e:
+        return _deny(str(e))
+    auth.audit("settings.brand", "", {"image": which})
+    return jsonify({"ok": True, "brand": brand.public()})
 
 
 # ----------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 // Shared bits: API helper, icons, small components, markdown, colors.
-import { html, useState, useEffect, useRef } from "./vendor/preact-htm.module.js";
+import { html, useState, useEffect, useRef, useMemo } from "./vendor/preact-htm.module.js";
 
 export { html };
 
@@ -78,6 +78,7 @@ const P = {
   pencil: "M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z",
   target: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
   download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+  upload: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
   bulb: "M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z",
   upgrade: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM16 12l-4-4-4 4M12 16V8",
   dots: "M4 4h4v4H4zM10 4h4v4h-4zM16 4h4v4h-4zM4 10h4v4H4zM10 10h4v4h-4zM16 10h4v4h-4zM4 16h4v4H4zM10 16h4v4h-4z",
@@ -311,14 +312,34 @@ export function useInterval(fn, ms) {
   }, [ms]);
 }
 
-export function Logo({ size = 28 }) {
-  return html`<svg width=${size} height=${size} viewBox="0 0 32 32" aria-hidden="true" class="logo">
-    <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs>
-    <rect x="1" y="1" width="30" height="30" rx="8" fill="url(#lg)"/>
-    <rect x="6" y="11" width="4.5" height="4.5" rx="1" fill="#fff"/><rect x="11.8" y="11" width="4.5" height="4.5" rx="1" fill="#fff" opacity=".85"/>
+// the brand (name, logo, favicon) as the server sent it in the page; settings refreshes it
+export function brandInfo() { return window.__brand || { app_name: "VLAN Manager", logo: { kind: "default" }, favicon: { kind: "default" } }; }
+export function setBrand(b) {
+  if (!b) return;
+  window.__brand = b;
+  const f = b.favicon || {};
+  const href = f.src || `/favicon.svg?v=${b.version || ""}`;
+  document.querySelectorAll('link[rel="icon"]').forEach((l) => { if (l.getAttribute("href") !== href) { l.removeAttribute("type"); l.href = href; } });
+}
+
+let gradSeq = 0;
+// the header logo; `mark` previews an unsaved one
+export function Logo({ size = 28, mark }) {
+  const m = mark || brandInfo().logo || { kind: "default" };
+  const id = useMemo(() => `lg${++gradSeq}`, []);
+  if (m.kind === "image" && m.src) {
+    return html`<img src=${m.src} width=${size} height=${size} alt="" class="logo logo-img" />`;
+  }
+  const [c1, c2, fg] = m.kind === "icon" && m.colors ? m.colors : ["#60a5fa", "#6366f1", "#fff"];
+  const glyph = m.kind === "icon" && m.path
+    ? html`<g transform="translate(5 5) scale(.9167)" fill="none" stroke=${fg} stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d=${m.path} /></g>`
+    : html`<rect x="6" y="11" width="4.5" height="4.5" rx="1" fill="#fff"/><rect x="11.8" y="11" width="4.5" height="4.5" rx="1" fill="#fff" opacity=".85"/>
     <rect x="17.6" y="11" width="4.5" height="4.5" rx="1" fill="#22c55e"/><rect x="23.4" y="11" width="2.6" height="4.5" rx="1" fill="#fff" opacity=".6"/>
     <rect x="6" y="17.5" width="4.5" height="4.5" rx="1" fill="#f59e0b"/><rect x="11.8" y="17.5" width="4.5" height="4.5" rx="1" fill="#fff" opacity=".85"/>
-    <rect x="17.6" y="17.5" width="4.5" height="4.5" rx="1" fill="#fff"/><rect x="23.4" y="17.5" width="2.6" height="4.5" rx="1" fill="#fff" opacity=".6"/></svg>`;
+    <rect x="17.6" y="17.5" width="4.5" height="4.5" rx="1" fill="#fff"/><rect x="23.4" y="17.5" width="2.6" height="4.5" rx="1" fill="#fff" opacity=".6"/>`;
+  return html`<svg width=${size} height=${size} viewBox="0 0 32 32" aria-hidden="true" class="logo">
+    <defs><linearGradient id=${id} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color=${c1}/><stop offset="1" stop-color=${c2}/></linearGradient></defs>
+    <rect x="1" y="1" width="30" height="30" rx="8" fill=${`url(#${id})`}/>${glyph}</svg>`;
 }
 
 export function SsoButton({ button, href, onClick }) {
@@ -356,7 +377,8 @@ export function Avatar({ user, size = 28, cls = "" }) {
 }
 
 // let the user pick a photo, crop it to a centred square and shrink it (phones take huge photos)
-export function pickImage(size = 256) {
+// pick a picture and square it; `transparent` keeps see-through areas (PNG) and fits the whole picture in
+export function pickImage(size = 256, { transparent = false } = {}) {
   return new Promise((resolve, reject) => {
     const input = document.createElement("input");
     input.type = "file";
@@ -367,15 +389,22 @@ export function pickImage(size = 256) {
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
-        const s = Math.min(img.naturalWidth, img.naturalHeight);
+        const w = img.naturalWidth, h = img.naturalHeight;
         const c = document.createElement("canvas");
         c.width = c.height = size;
         const ctx = c.getContext("2d");
-        ctx.fillStyle = "#1a1f2a";
-        ctx.fillRect(0, 0, size, size);
-        ctx.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, size, size);
+        ctx.imageSmoothingQuality = "high";
+        if (transparent) {
+          const k = size / Math.max(w, h);
+          ctx.drawImage(img, (size - w * k) / 2, (size - h * k) / 2, w * k, h * k);
+        } else {
+          const s = Math.min(w, h);
+          ctx.fillStyle = "#1a1f2a";
+          ctx.fillRect(0, 0, size, size);
+          ctx.drawImage(img, (w - s) / 2, (h - s) / 2, s, s, 0, 0, size, size);
+        }
         URL.revokeObjectURL(url);
-        resolve(c.toDataURL("image/jpeg", 0.88));
+        resolve(transparent ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.88));
       };
       img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file isn't a picture this browser can open")); };
       img.src = url;

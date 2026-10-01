@@ -78,6 +78,11 @@ manage only their own switches and only the VLANs you allow.
   from UniFi, so changes made in the UniFi console or cloud UI show up within seconds (see
   [Staying in sync](#staying-in-sync-with-unifi)).
 - **Users & roles**: see [Sign-in, users & roles](#sign-in-users--roles).
+- **Your name and logo** (Settings → Branding, admins): rename the app, set the sign-in
+  tagline, and pick the header logo and the browser tab icon: the stock mark, one of 18 icons
+  on a color palette (8 presets or your own colors), or an uploaded picture. The tab icon can
+  follow the logo or be its own. The name shows in the top bar, the browser tab, the sign-in
+  page, the setup wizard and the installed app.
 - **Looks like an app** when launched from its icon (PWA), in dark or light.
 - **Changelog** in the app (click the version). It opens by itself after an update, and a
   pulsing dot means a newer release is on GitHub.
@@ -114,6 +119,7 @@ Everything lives in `./data` (a bind mount) on the host:
 | `data/vlanmgr.db` | SQLite: users, sessions, API tokens (hashed), settings, environments with their UniFi API keys, who may use which environment, activity log |
 | `data/backups/` | a copy of the DB taken automatically before each version upgrade (newest 10 kept) |
 | `data/avatars/` | profile pictures |
+| `data/brand/` | an uploaded logo / browser tab icon |
 
 Schema changes are additive only, so a newer image keeps using your existing DB. To roll
 back, stop the container, copy a backup over `data/vlanmgr.db`, and run the older tag.
