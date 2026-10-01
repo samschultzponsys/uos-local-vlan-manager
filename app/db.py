@@ -317,6 +317,16 @@ def init(version):
         db.commit()
 
 
+def prune_audit(days):
+    """Drop activity older than `days` (0 keeps everything). Returns how many rows went."""
+    if not days:
+        return 0
+    conn = get()
+    n = conn.execute("DELETE FROM audit WHERE ts < ?", (now() - days * 86400,)).rowcount
+    conn.commit()
+    return n
+
+
 def audit(username, role, action, target="", detail=None, ok=True, ip="", env_id=None):
     db = get()
     db.execute("INSERT INTO audit (ts, username, role, action, target, detail, ok, ip, env_id) "

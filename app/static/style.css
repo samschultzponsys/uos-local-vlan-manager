@@ -1266,3 +1266,22 @@ button.fb-status.on { box-shadow: 0 0 0 2px color-mix(in srgb, var(--st) 45%, tr
 .int-events .field-label { flex-basis: 100%; }
 .good-badge { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
 @media (max-width: 600px) { .int-grid { grid-template-columns: 1fr; } }
+
+/* --- activity log --- */
+.audit-tools { display: grid; gap: 10px; margin-bottom: 12px; }
+.audit-tools .search { margin: 0; }
+.audit-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.audit-sel { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 6px; padding-left: 10px; margin: 0;
+  border-radius: 10px; border: 1px solid var(--border2); background: var(--bg2); color: var(--muted); }
+.audit-sel select { border: 0 !important; background-color: transparent; height: 34px; width: auto; min-width: 0; padding-right: 28px; box-shadow: none; }
+.audit-dates { display: inline-flex; align-items: center; gap: 6px; }
+.audit-dates input { height: 36px; width: auto; }
+.audit-group { margin-bottom: 6px; }
+.audit-group > .group-head { position: sticky; top: -1px; z-index: 1; background: var(--surface); }
+.audit-group .timeline { margin: 4px 0 10px; }
+.tl-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tl-foot .btn.sm { height: 26px; padding: 0 8px; }
+.audit-more { display: flex; justify-content: center; padding: 8px 0; }
+.audit-keep { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; border-radius: 12px;
+  background: var(--bg2); border: 1px solid var(--border); }
+.audit-keep select { width: auto; height: 34px; }

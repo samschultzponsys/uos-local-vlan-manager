@@ -1060,32 +1060,176 @@ const ACTION_LABEL = {
   "env.deleted": "Environment deleted", "port.locked": "Port locked", "port.unlocked": "Port unlocked",
   "port.lock_reapplied": "Locked settings re-applied", "role.created": "Role added", "role.updated": "Role changed",
   "role.deleted": "Role deleted", "user.avatar": "Picture changed", "user.impersonate": "Started viewing as",
-  "user.impersonate_stop": "Stopped viewing as",
+  "user.impersonate_stop": "Stopped viewing as", "port.undo": "Change undone", "port.power_cycle": "PoE power-cycled",
+  "device.restart": "Device restarted", "device.locate": "Locate light on", "device.locate_off": "Locate light off", "device.upgrade": "Firmware update", "device.updated": "Device changed", "settings.brand": "Branding changed",
+  "settings.integrations": "Integrations changed", "settings.audit_retention": "Activity retention changed",
+  "github.sync": "GitHub synced", "feedback.new": "Feedback posted", "feedback.edit": "Feedback changed",
+  "feedback.delete": "Feedback deleted", "request.new": "Change requested", "request.approved": "Request approved",
+  "request.declined": "Request declined",
 };
 
-export function AuditModal({ onClose }) {
+const AUDIT_KINDS = [["", "Everything"], ["ports", "Port changes"], ["devices", "Devices"], ["people", "People & sign-in"],
+  ["settings", "Settings"], ["feedback", "Feedback & requests"]];
+const RANGES = [["", "Any time"], ["today", "Today"], ["7", "7 days"], ["30", "30 days"], ["custom", "Pick dates"]];
+const RETENTION = [[0, "Forever"], [30, "30 days"], [90, "90 days"], [180, "6 months"], [365, "1 year"], [730, "2 years"]];
+
+const dayStart = (ts) => { const d = new Date(ts * 1000); d.setHours(0, 0, 0, 0); return d; };
+function dayLabel(d) {
+  const today = dayStart(Date.now() / 1000);
+  const diff = Math.round((today - d) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: d.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+}
+/** "admin (as vera)" -> "admin" for grouping by person */
+const actor = (r) => (r.username || "?").replace(/ \(as .*\)$/, "");
+
+export function AuditModal({ onClose, me }) {
+  const can = (c) => ((me && me.caps) || []).includes(c);
   const [rows, setRows] = useState(null);
-  const [q, setQ] = useState("");
-  useEffect(() => { api("/api/audit").then((r) => setRows(r.entries)).catch((e) => toast(e.message, "err")); }, []);
-  const list = (rows || []).filter((r) => !q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase()));
+  const [more, setMore] = useState(false);
+  const [meta, setMeta] = useState(null);
+  const [f, setF] = useState({ q: "", user: "", kind: "", range: "", from: "", to: "", order: "desc", group: "day" });
+  const [closed, setClosed] = useState({});
+  const [busy, setBusy] = useState(null);
+  const params = (extra = {}) => {
+    const p = new URLSearchParams();
+    if (f.q.trim()) p.set("q", f.q.trim());
+    if (f.user) p.set("user", f.user);
+    if (f.kind) p.set("kind", f.kind);
+    if (f.order === "asc") p.set("order", "asc");
+    const now = Date.now() / 1000;
+    if (f.range === "today") p.set("since", Math.floor(dayStart(now) / 1000));
+    if (f.range === "7" || f.range === "30") p.set("since", Math.floor(dayStart(now) / 1000) - (Number(f.range) - 1) * 86400);
+    if (f.range === "custom") {
+      if (f.from) p.set("since", Math.floor(new Date(`${f.from}T00:00`) / 1000));
+      if (f.to) p.set("until", Math.floor(new Date(`${f.to}T00:00`) / 1000) + 86400);
+    }
+    Object.entries(extra).forEach(([k, v]) => p.set(k, v));
+    return p.toString();
+  };
+  const load = async (append) => {
+    try {
+      const last = append && rows && rows[rows.length - 1];
+      const r = await api(`/api/audit?${params({ limit: 200, ...(last ? { [f.order === "asc" ? "after" : "before"]: last.id } : {}), ...(meta ? {} : { meta: 1 }) })}`);
+      setRows(append ? [...rows, ...r.entries] : r.entries);
+      setMore(r.has_more);
+      if (r.people) setMeta(r);
+    } catch (e) { toast(e.message, "err"); }
+  };
+  // filters apply as you type / pick (text waits a moment)
+  useEffect(() => { const t = setTimeout(() => load(false), f.q ? 300 : 0); return () => clearTimeout(t); }, [JSON.stringify(f)]);
+  const set = (patch) => setF({ ...f, ...patch });
+
+  const undo = async (r, extra = {}) => {
+    if (!Object.keys(extra).length && !(await ask({ title: "Undo this change?", confirm: "Undo it",
+      body: html`<p><b>${r.target}</b> goes back to <b>${r.detail.before.native} · ${r.detail.before.tagged}</b>.</p>
+        <p class="muted small">It's done as you, with the usual checks, and logged as an undo.</p>` }))) return;
+    setBusy(r.id);
+    try {
+      const x = await api(`/api/audit/${r.id}/undo`, { method: "POST", body: extra });
+      toast("Undone");
+      if (x.warning) toast(x.warning, "warn");
+      await load(false);
+    } catch (e) {
+      const c = e.status === 409 && e.data && e.data.confirm;
+      const again = c === "changed" ? await ask({ title: "Port changed since", danger: true, confirm: "Undo anyway",
+          body: html`<p>The port was changed after this entry. It's now <b>${e.data.current.native}</b>, ${e.data.current.tagged}.</p><p>Put it back to how it was before this change anyway?</p>` })
+        : c === "protected" ? await ask({ title: "Change a protected port?", danger: true, confirm: "Change it anyway",
+          body: html`<p>This port is protected:</p><ul>${e.data.reasons.map((x) => html`<li>${x}</li>`)}</ul>` })
+        : c === "profile" ? await ask({ title: "Detach port profile?", confirm: "Detach and undo",
+          body: html`<p>The port now uses the port profile <b>${e.data.profile}</b>. Undoing detaches it.</p>` })
+        : c === "locked" ? await ask({ title: "Change a locked port?", confirm: "Change and keep locked", body: html`<p>It stays locked, to the restored settings.</p>` })
+        : (toast(e.message, "err"), false);
+      setBusy(null);
+      if (again) return undo(r, { ...extra, [{ changed: "confirm_changed", protected: "confirm_protected", profile: "detach_profile", locked: "confirm_locked" }[c]]: true });
+    }
+    setBusy(null);
+    return null;
+  };
+  const setRetention = async (days) => {
+    const opt = RETENTION.find(([d]) => d === days);
+    if (days && meta.oldest && meta.oldest < Date.now() / 1000 - days * 86400
+      && !(await ask({ title: `Keep ${opt[1]} of activity?`, danger: true, confirm: "Delete older entries",
+        body: html`<p>Entries older than ${opt[1].toLowerCase()} are deleted now, and from then on every day. This can't be undone.</p>` }))) return;
+    try {
+      const r = await api("/api/audit/retention", { method: "PUT", body: { days } });
+      toast(days ? `Keeping ${opt[1]}${r.removed ? ` · ${r.removed} older entries deleted` : ""}` : "Keeping everything");
+      setMeta({ ...meta, retention_days: days }); load(false);
+    } catch (e) { toast(e.message, "err"); }
+  };
+
+  // groups: by day or by person, in the chosen order
+  const groups = [];
+  for (const r of rows || []) {
+    const key = f.group === "person" ? actor(r) : dayStart(r.ts).getTime();
+    let g = groups.find((x) => x.key === key);
+    if (!g) groups.push(g = { key, label: f.group === "person" ? key : dayLabel(dayStart(r.ts)), rows: [] });
+    g.rows.push(r);
+  }
+  if (f.group === "person") groups.sort((a, b) => a.label.localeCompare(b.label));
+  const allClosed = groups.length > 0 && groups.every((g) => closed[`${f.group}:${g.key}`]);
+  const toggleAll = () => setClosed(allClosed ? {} : Object.fromEntries(groups.map((g) => [`${f.group}:${g.key}`, true])));
+
+  const entry = (r) => {
+    const d = r.detail || {};
+    const undoable = can("ports.change") && r.ok && (r.action === "port.set" || r.action === "port.undo") && d.undo && d.device_id && !r.undone_by;
+    return html`<div class=${"tl" + (r.ok ? "" : " fail")} key=${r.id}>
+      <div class="tl-dot"></div>
+      <div class="tl-main">
+        <div class="tl-head"><b>${ACTION_LABEL[r.action] || r.action}</b>${r.target && html`<span class="muted"> · ${r.target}</span>`}
+          ${(r.action === "port.set" || r.action === "port.undo" || r.action === "port.lock_reapplied") && r.ok && (d.verified ? html`<span class="badge good">verified</span>` : d.verified === false ? html`<span class="badge warn">unverified</span>` : null)}
+          ${r.undone_by && html`<span class="badge">undone</span>`}
+          ${!r.ok && html`<span class="badge err">failed</span>`}</div>
+        ${d.before && d.after && html`<div class="tl-diff">
+          <span>${d.before.native} · ${d.before.tagged}</span><span class="arrow">→</span><b>${d.after.native} · ${d.after.tagged}</b>
+          ${d.after.excluded && d.after.excluded.length > 0 && html`<span class="muted small"> (not tagged: ${d.after.excluded.join(", ")})</span>`}</div>`}
+        ${d.via && html`<div class="muted small">${d.via}</div>`}
+        ${d.note && html`<div class="muted small">“${d.note}”</div>`}
+        ${d.error && html`<div class="err-text small">${d.error}</div>`}
+        <div class="tl-foot"><span class="muted small">${f.group === "person" ? html`${dayLabel(dayStart(r.ts))}, ${new Date(r.ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+            : html`${r.username || "?"}${r.role ? ` (${r.role})` : ""} · ${new Date(r.ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`}${r.ip ? ` · ${r.ip}` : ""}</span>
+          ${undoable && html`<button class="btn sm ghost" disabled=${busy === r.id} onClick=${() => undo(r)}><${Icon} name="refresh" size=${13} />Undo</button>`}</div>
+      </div></div>`;
+  };
+
   return html`<${Modal} title="Activity" icon="list" onClose=${onClose} wide>
-    <div class="search"><${Icon} name="search" /><input placeholder="Filter by user, device, VLAN…" value=${q} onInput=${(e) => setQ(e.target.value)} /></div>
-    ${!rows ? html`<${Spinner} />` : list.length === 0 ? html`<div class="empty-sm">Nothing yet.</div>` : html`<div class="timeline">
-      ${list.map((r) => {
-        const d = r.detail || {};
-        return html`<div class=${"tl" + (r.ok ? "" : " fail")} key=${r.id}>
-          <div class="tl-dot"></div>
-          <div class="tl-main">
-            <div class="tl-head"><b>${ACTION_LABEL[r.action] || r.action}</b>${r.target && html`<span class="muted"> · ${r.target}</span>`}
-              ${(r.action === "port.set" || r.action === "port.lock_reapplied") && r.ok && (d.verified ? html`<span class="badge good">verified</span>` : html`<span class="badge warn">unverified</span>`)}
-              ${!r.ok && html`<span class="badge err">failed</span>`}</div>
-            ${d.before && d.after && html`<div class="tl-diff">
-              <span>${d.before.native} · ${d.before.tagged}</span><span class="arrow">→</span><b>${d.after.native} · ${d.after.tagged}</b>
-              ${d.after.excluded && d.after.excluded.length > 0 && html`<span class="muted small"> (not tagged: ${d.after.excluded.join(", ")})</span>`}</div>`}
-            ${d.note && html`<div class="muted small">“${d.note}”</div>`}
-            ${d.error && html`<div class="err-text small">${d.error}</div>`}
-            <div class="muted small">${r.username || "?"}${r.role ? ` (${r.role})` : ""} · ${when(r.ts)}${r.ip ? ` · ${r.ip}` : ""}</div>
-          </div></div>`;
-      })}</div>`}
+    <div class="audit-tools">
+      <div class="search"><${Icon} name="search" /><input placeholder="Search device, port, network, environment…" value=${f.q} onInput=${(e) => set({ q: e.target.value })} /></div>
+      <div class="audit-filters">
+        <label class="audit-sel"><${Icon} name="user" size=${14} /><select value=${f.user} onChange=${(e) => set({ user: e.target.value })} aria-label="Person">
+          <option value="">Everyone</option>${(meta ? meta.people : []).map((p) => html`<option value=${p}>${p}</option>`)}</select></label>
+        <label class="audit-sel"><${Icon} name="list" size=${14} /><select value=${f.kind} onChange=${(e) => set({ kind: e.target.value })} aria-label="What">
+          ${AUDIT_KINDS.map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></label>
+        <label class="audit-sel"><${Icon} name="clock" size=${14} /><select value=${f.range} onChange=${(e) => set({ range: e.target.value })} aria-label="When">
+          ${RANGES.map(([k, l]) => html`<option value=${k}>${l}</option>`)}</select></label>
+        ${f.range === "custom" && html`<span class="audit-dates"><input type="date" value=${f.from} onInput=${(e) => set({ from: e.target.value })} aria-label="From" />
+          <span class="muted">to</span><input type="date" value=${f.to} onInput=${(e) => set({ to: e.target.value })} aria-label="To" /></span>`}
+      </div>
+      <div class="audit-filters">
+        <span class="muted small">Group by</span><${Segmented} value=${f.group} onChange=${(v) => set({ group: v })}
+          options=${[{ value: "day", label: "Day" }, { value: "person", label: "Person" }]} />
+        <${Segmented} value=${f.order} onChange=${(v) => set({ order: v })} options=${[{ value: "desc", label: "Newest first" }, { value: "asc", label: "Oldest first" }]} />
+        <span class="grow"></span>
+        ${groups.length > 1 && html`<button class="link-btn small" onClick=${toggleAll}>${allClosed ? "Expand all" : "Collapse all"}</button>`}
+      </div>
+    </div>
+    ${!rows ? html`<${Spinner} />` : rows.length === 0 ? html`<div class="empty-sm">Nothing ${f.q || f.user || f.kind || f.range ? "matches" : "yet"}.</div>` : html`
+      ${groups.map((g) => {
+        const k = `${f.group}:${g.key}`;
+        return html`<section class="audit-group" key=${k}>
+          <button class="group-head" onClick=${() => setClosed({ ...closed, [k]: !closed[k] })} aria-expanded=${!closed[k]}>
+            <${Icon} name=${f.group === "person" ? "user" : "clock"} size=${15} /><b>${g.label}</b><span class="badge">${g.rows.length}${more && g === groups[groups.length - 1] ? "+" : ""}</span>
+            <span class="grow"></span><span class="chev" style=${closed[k] ? "transform:rotate(-90deg)" : ""}><${Icon} name="chevron" /></span></button>
+          ${!closed[k] && html`<div class="timeline">${g.rows.map(entry)}</div>`}
+        </section>`;
+      })}
+      ${more && html`<div class="audit-more"><button class="btn" onClick=${() => load(true)}>Load more</button></div>`}`}
+    ${meta && meta.can_retention && html`<div class="audit-keep">
+      <${Icon} name="clock" size=${15} /><span><b>Keep activity for</b>${meta.oldest ? html`<span class="muted small"> · oldest entry ${when(meta.oldest)}</span>` : ""}</span>
+      <span class="grow"></span>
+      <select value=${meta.retention_days} onChange=${(e) => setRetention(Number(e.target.value))} aria-label="Keep activity for">
+        ${RETENTION.some(([d]) => d === meta.retention_days) ? null : html`<option value=${meta.retention_days}>${meta.retention_days} days</option>`}
+        ${RETENTION.map(([d, l]) => html`<option value=${d}>${l}</option>`)}</select></div>`}
   </${Modal}>`;
 }

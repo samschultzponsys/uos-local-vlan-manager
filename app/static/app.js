@@ -1581,7 +1581,7 @@ function App() {
     ${(modal === "settings" || modal === "settings-add") && html`<${SettingsModal} addEnv=${modal === "settings-add"} onClose=${() => setModal(null)} onSaved=${onEnvsChanged} />`}
     ${modal === "users" && html`<${UsersModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "account" && html`<${AccountModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
-    ${modal === "audit" && html`<${AuditModal} onClose=${() => setModal(null)} />`}
+    ${modal === "audit" && html`<${AuditModal} me=${me} onClose=${() => { setModal(null); load(true); }} />`}
     ${modal === "envinfo" && env && html`<${EnvInfoModal} env=${env} networks=${networks} devices=${devices} onClose=${() => setModal(null)} />`}
     ${pv.tips !== false && html`<${TipsHost} ctx=${{ change: can("ports.change"), multiEnv: envList.envs.length > 1, feedback: can("feedback.submit") }} paused=${tipsPaused}
       onOff=${() => { setPv({ tips: false }); toast("No more tips. Display options can turn them back on."); }} />`}

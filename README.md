@@ -70,7 +70,9 @@ manage only their own switches and only the VLANs you allow.
   with a details panel (model, firmware, uptime, uplink, clients...). With the right abilities:
   rename, blink the locate light, set the status LED, restart, update firmware, name ports,
   turn PoE on / off and power-cycle a port to restart what it powers.
-- **Activity log**: who changed which port or device, from what to what, and whether UniFi confirmed it.
+- **Activity log**: who changed which port or device, from what to what, and whether UniFi
+  confirmed it. Grouped by day or person (collapsible), filtered by person, kind, dates or text,
+  with **Undo** on port changes and an admin-set retention period.
 - **All devices page** (optional, per person): every environment on one view-only page; a port
   opens in its environment. It can be your start page.
 - **Many environments, scoped per user**: see [Environments & access](#environments--access).

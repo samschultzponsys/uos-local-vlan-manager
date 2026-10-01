@@ -5,6 +5,28 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.4 — 2026-10-01
+
+### Added
+- **Activity, reorganised**:
+  - **Grouped by day** (Today, Yesterday, then dates) or **by person**, each group
+    collapsible, with *Collapse all / Expand all*; **newest or oldest first**.
+  - **Filters**: person (someone viewing as another person counts for both), what
+    (port changes, devices, people & sign-in, settings, feedback & requests), when (today,
+    7 days, 30 days or a date range), and a search over devices, ports, networks and
+    environments. Filters run on the server, so they cover the whole log; *Load more* pages
+    back through it.
+- **Undo** on port changes: puts the port back exactly as it was (native VLAN, tagging and
+  the tagged networks), as you, with the same checks and confirmations as any change. If the
+  port was changed again since, it says what it is now and asks first. Undone changes are
+  marked, and an undo can itself be undone. Bulk changes can be undone port by port. (Changes
+  logged before 3.4 didn't keep their exact previous settings, so they can't be undone.)
+- **Keep activity for** (admins, at the bottom of Activity): forever, 30 / 90 days, 6 months,
+  1 or 2 years. Older entries are deleted right away (after a confirmation) and then
+  automatically.
+- Requests, approvals, feedback, branding, integrations and GitHub syncs have readable names
+  in the log; changes made by approving a request say whose request it was.
+
 ## 3.3 — 2026-10-01
 
 ### Added

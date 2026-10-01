@@ -223,6 +223,8 @@ def _update_loop():
                 enabled = db.setting_bool("update_check")
             if enabled and versioning.due():
                 versioning.check(True)
+            with app.app_context():
+                db.prune_audit(int(db.get_setting("audit_retention_days") or 0))
         except Exception as e:   # never let the loop die
             print(f"[update-check] {e}", flush=True)
         time.sleep(600)
@@ -377,7 +379,7 @@ def _readonly(env):
     return env["mode"] == "cloud" and envs.snapshot(env["id"]).readonly
 
 
-def _set_port(env_id, device_id, idx, body, action="port.set", via=None):
+def _set_port(env_id, device_id, idx, body, action="port.set", via=None, extra=None):
     me = auth.current()
     env, acc, err = _env_or_404(env_id)
     if err:
@@ -462,6 +464,7 @@ def _set_port(env_id, device_id, idx, body, action="port.set", via=None):
         detail["after"].update({"tagged": f"not supported by {ndev['model_name']}", "excluded": []})
     if via:
         detail["via"] = via
+    detail.update(extra or {})
     # the exact settings before, so the change can be undone
     detail["undo"] = {"native_network_id": port["native_network_id"], "tagged_mode": port["tagged_mode"],
                       "excluded_network_ids": list(port["excluded_network_ids"])}
@@ -503,6 +506,8 @@ def _set_port(env_id, device_id, idx, body, action="port.set", via=None):
         pass
     envs.invalidate(env_id)
     detail["verified"] = verified
+    detail["applied"] = {"native_network_id": native, "tagged_mode": mode,
+                         "excluded_network_ids": after.get("excluded_networkconf_ids", []) if mode == "custom" else []}
     auth.audit(action, target, detail, ok=True, env_id=env_id)
     return jsonify({"ok": True, "verified": verified, "native_only": native_only,
                     "warning": learned or (None if verified else
@@ -654,6 +659,10 @@ def api_bulk_ports(env_id):
                            "profile": port["profile_name"]},
                 "after": {"native": _net_label(nets, native),
                           "tagged": f"not supported by {nd['model_name']}" if native_only else unifi.MODE_LABEL[m]},
+                "undo": {"native_network_id": port["native_network_id"], "tagged_mode": port["tagged_mode"],
+                         "excluded_network_ids": list(port["excluded_network_ids"])},
+                "applied": {"native_network_id": native, "tagged_mode": m,
+                            "excluded_network_ids": after.get("excluded_networkconf_ids", []) if m == "custom" else []},
                 **({"lock": "kept, updated to the new settings"} if lock else {})}, env_id=env_id)
             changed.append(label)
     envs.invalidate(env_id)
@@ -1069,25 +1078,139 @@ def api_env_diagnostics(env_id):
 # Audit log
 # ----------------------------------------------------------------------------
 
+# what each "kind" filter in the activity log covers
+AUDIT_KINDS = {
+    "ports": ["port.%"], "devices": ["device.%"], "people": ["user.%", "token.%", "login.%", "role.%"],
+    "settings": ["settings.%", "env.%", "github.%"], "feedback": ["feedback.%", "request.%"],
+}
+
+
+def _audit_scope(me):
+    """(where, args) limiting the log to what this person may see."""
+    if perms.has(me, "settings.manage"):
+        return [], []
+    # everyone but admins: port changes in their own environments
+    ids = [e["id"] for e, _ in envs.accessible(me)] or [-1]
+    return ["a.action LIKE 'port.%' AND a.env_id IN (" + ",".join("?" * len(ids)) + ")"], ids
+
+
 @app.route("/api/audit")
 @auth.require("activity.view")
 def api_audit():
+    """The activity log, newest first (or oldest first with order=asc), filtered by person, dates,
+    kind and text; `before` / `after` (an id) page through it."""
     me = auth.current()
-    limit = max(1, min(500, int(request.args.get("limit") or 200)))
-    where, args = [], []
-    if request.args.get("before"):
+    a = request.args
+    limit = max(1, min(500, int(a.get("limit") or 200)))
+    asc = a.get("order") == "asc"
+    where, args = _audit_scope(me)
+    scope_where, scope_args = list(where), list(args)
+    if a.get("before"):
         where.append("a.id < ?")
-        args.append(int(request.args["before"]))
-    if not perms.has(me, "settings.manage"):
-        # everyone but admins: port changes in their own environments
-        ids = [e["id"] for e, _ in envs.accessible(me)] or [-1]
-        where.append("a.action LIKE 'port.%' AND a.env_id IN (" + ",".join("?" * len(ids)) + ")")
-        args += ids
+        args.append(int(a["before"]))
+    if a.get("after"):
+        where.append("a.id > ?")
+        args.append(int(a["after"]))
+    if a.get("user"):
+        u = a["user"]
+        # someone viewing as another person is logged as "admin (as vera)": both names find it
+        where.append("(a.username = ? OR a.username LIKE ? OR a.username LIKE ?)")
+        args += [u, f"{u} (as %)", f"% (as {u})"]
+    for key, op in (("since", ">="), ("until", "<")):
+        if a.get(key):
+            where.append(f"a.ts {op} ?")
+            args.append(int(a[key]))
+    if a.get("kind") in AUDIT_KINDS:
+        pats = AUDIT_KINDS[a["kind"]]
+        where.append("(" + " OR ".join("a.action LIKE ?" for _ in pats) + ")")
+        args += pats
+    if a.get("q"):
+        where.append("(a.username LIKE ? OR a.target LIKE ? OR a.detail LIKE ? OR a.action LIKE ? OR e.name LIKE ?)")
+        args += [f"%{a['q']}%"] * 5
     q = ("SELECT a.*, e.name AS env_name FROM audit a LEFT JOIN environments e ON e.id = a.env_id"
-         + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY a.id DESC LIMIT ?")
-    rows = db.get().execute(q, args + [limit]).fetchall()
-    return jsonify({"entries": [{**dict(r), "detail": json.loads(r["detail"] or "{}"), "ok": bool(r["ok"])}
-                                for r in rows]})
+         + (" WHERE " + " AND ".join(where) if where else "") + f" ORDER BY a.id {'ASC' if asc else 'DESC'} LIMIT ?")
+    conn = db.get()
+    rows = conn.execute(q, args + [limit + 1]).fetchall()
+    more = len(rows) > limit
+    rows = rows[:limit]
+    # which changes were undone, and by which entry
+    undone = {}
+    for r in conn.execute("SELECT id, detail FROM audit WHERE action='port.undo' AND ok=1 ORDER BY id DESC LIMIT 2000"):
+        of = json.loads(r["detail"] or "{}").get("undo_of")
+        if of:
+            undone.setdefault(of, r["id"])
+    out = {"entries": [{**dict(r), "detail": json.loads(r["detail"] or "{}"), "ok": bool(r["ok"]),
+                        "undone_by": undone.get(r["id"])} for r in rows], "has_more": more}
+    if a.get("meta"):
+        sw = " WHERE " + " AND ".join(scope_where) if scope_where else ""
+        names = {r[0] for r in conn.execute(f"SELECT DISTINCT a.username FROM audit a{sw}", scope_args)}
+        # "admin (as vera)" counts for both people
+        people = set()
+        for n in names:
+            m = re.match(r"^(.*) \(as (.*)\)$", n or "")
+            people |= {m.group(1), m.group(2)} if m else {n}
+        out["people"] = sorted(p for p in people if p and p != "?")
+        out["oldest"] = conn.execute(f"SELECT MIN(a.ts) FROM audit a{sw}", scope_args).fetchone()[0]
+        out["retention_days"] = int(db.get_setting("audit_retention_days") or 0)
+        out["can_retention"] = perms.has(me, "settings.manage")
+    return jsonify(out)
+
+
+@app.route("/api/audit/retention", methods=["PUT"])
+@auth.require("settings.manage")
+def api_audit_retention():
+    try:
+        days = max(0, min(3650, int((request.get_json(silent=True) or {}).get("days") or 0)))
+    except (TypeError, ValueError):
+        return _deny("Days is a number (0 keeps everything)")
+    db.set_setting("audit_retention_days", str(days))
+    removed = db.prune_audit(days)
+    auth.audit("settings.audit_retention", "", {"days": days or "forever", "removed": removed})
+    return jsonify({"ok": True, "removed": removed})
+
+
+@app.route("/api/audit/<int:aid>/undo", methods=["POST"])
+@auth.require("ports.change")
+def api_audit_undo(aid):
+    """Put a port back the way it was before a logged change, with the same checks as any change."""
+    r = db.get().execute("SELECT * FROM audit WHERE id=?", (aid,)).fetchone()
+    me = auth.current()
+    if not r:
+        return _deny("That entry is gone", 404)
+    where, args = _audit_scope(me)
+    if where and not db.get().execute("SELECT 1 FROM audit a WHERE a.id=? AND " + " AND ".join(where), [aid] + args).fetchone():
+        return _deny("That entry is gone", 404)
+    d = json.loads(r["detail"] or "{}")
+    if r["action"] not in ("port.set", "port.undo") or not r["ok"]:
+        return _deny("Only port changes that went through can be undone")
+    if not (d.get("undo") and d.get("device_id") and r["env_id"]):
+        return _deny("This change was made before undo existed, so its exact previous settings weren't kept")
+    for x in db.get().execute("SELECT detail FROM audit WHERE action='port.undo' AND ok=1 AND detail LIKE ?", (f'%"undo_of": {aid}%',)):
+        if json.loads(x["detail"] or "{}").get("undo_of") == aid:
+            return _deny("This change was already undone")
+    body = request.get_json(silent=True) or {}
+    applied = d.get("applied")
+    if applied and not body.get("confirm_changed"):
+        env, acc, err = _env_or_404(r["env_id"])
+        if err:
+            return err
+        try:
+            data, _ = envs.snapshot(env["id"]).get(envs.client(env), db.setting_bool("protect_uplinks"), force=True)
+        except unifi.UniFiError as e:
+            return _deny(str(e), 502)
+        dev = next((x for x in data["devices"] if x["id"] == d["device_id"]), None)
+        port = dev and next((p for p in dev["ports"] if p["idx"] == d["port"]), None)
+        if port:
+            def key(c):
+                return (c["native_network_id"], c["tagged_mode"],
+                        sorted(c["excluded_network_ids"]) if c["tagged_mode"] == "custom" else [])
+            if key(port) != key(applied):
+                return _deny("Changed since", 409, confirm="changed",
+                             current={"native": _net_label(data["networks"], port["native_network_id"]),
+                                      "tagged": unifi.MODE_LABEL[port["tagged_mode"]]})
+    flags = {k: body[k] for k in ("confirm_locked", "confirm_protected", "detach_profile") if body.get(k)}
+    return _set_port(r["env_id"], d["device_id"], d["port"], {**d["undo"], **flags}, action="port.undo",
+                     via=f"undo of a change by {r['username']}", extra={"undo_of": aid})
 
 
 # ----------------------------------------------------------------------------
