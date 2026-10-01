@@ -83,6 +83,12 @@ const P = {
   upgrade: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM16 12l-4-4-4 4M12 16V8",
   dots: "M4 4h4v4H4zM10 4h4v4h-4zM16 4h4v4h-4zM4 10h4v4H4zM10 10h4v4h-4zM16 10h4v4h-4zM4 16h4v4H4zM10 16h4v4h-4z",
   rows: "M3 5h18M3 12h18M3 19h18",
+  bug: "M8 2l1.9 1.9M16 2l-1.9 1.9M9 7.1V6a3 3 0 1 1 6 0v1.1M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6zM12 20v-9M6.5 9 3 7M6 13H2M6 17l-3 2M17.5 9 21 7M18 13h4M18 17l3 2",
+  vote: "M12 19V5M5 12l7-7 7 7",
+  comment: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+  image: "M3 3h18v18H3zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21",
+  inbox: "M22 12h-6l-2 3h-4l-2-3H2M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z",
+  clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
 };
 
 export function Icon({ name, size = 16, fill = false, cls = "" }) {
@@ -376,9 +382,49 @@ export function Avatar({ user, size = 28, cls = "" }) {
   return html`<span class=${"avatar " + cls} style=${style}>${name.slice(0, 1).toUpperCase()}</span>`;
 }
 
-// let the user pick a photo, crop it to a centred square and shrink it (phones take huge photos)
-// pick a picture and square it; `transparent` keeps see-through areas (PNG) and fits the whole picture in
-export function pickImage(size = 256, { transparent = false } = {}) {
+// a picture file -> a data URL, shrunk (phones take huge photos):
+//   default       cropped to a centred square of `size` (JPEG)
+//   transparent   the whole picture fitted into the square, see-through parts kept (PNG)
+//   fit           the whole picture, longest side at most `size`, shape kept (JPEG) - screenshots
+export function imageFromFile(file, size = 256, { transparent = false, fit = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth, h = img.naturalHeight;
+      const c = document.createElement("canvas");
+      const ctx = c.getContext("2d");
+      if (fit) {
+        const k = Math.min(1, size / Math.max(w, h));
+        c.width = Math.round(w * k); c.height = Math.round(h * k);
+        ctx.imageSmoothingQuality = "high";
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        return resolve(c.toDataURL("image/jpeg", 0.85));
+      }
+      c.width = c.height = size;
+      ctx.imageSmoothingQuality = "high";
+      if (transparent) {
+        const k = size / Math.max(w, h);
+        ctx.drawImage(img, (size - w * k) / 2, (size - h * k) / 2, w * k, h * k);
+      } else {
+        const s = Math.min(w, h);
+        ctx.fillStyle = "#1a1f2a";
+        ctx.fillRect(0, 0, size, size);
+        ctx.drawImage(img, (w - s) / 2, (h - s) / 2, s, s, 0, 0, size, size);
+      }
+      URL.revokeObjectURL(url);
+      resolve(transparent ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.88));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file isn't a picture this browser can open")); };
+    img.src = url;
+  });
+}
+
+// let the user pick a picture (see imageFromFile for the options); null if they cancel
+export function pickImage(size = 256, opts = {}) {
   return new Promise((resolve, reject) => {
     const input = document.createElement("input");
     input.type = "file";
@@ -386,28 +432,7 @@ export function pickImage(size = 256, { transparent = false } = {}) {
     input.onchange = () => {
       const file = input.files && input.files[0];
       if (!file) return resolve(null);
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        const w = img.naturalWidth, h = img.naturalHeight;
-        const c = document.createElement("canvas");
-        c.width = c.height = size;
-        const ctx = c.getContext("2d");
-        ctx.imageSmoothingQuality = "high";
-        if (transparent) {
-          const k = size / Math.max(w, h);
-          ctx.drawImage(img, (size - w * k) / 2, (size - h * k) / 2, w * k, h * k);
-        } else {
-          const s = Math.min(w, h);
-          ctx.fillStyle = "#1a1f2a";
-          ctx.fillRect(0, 0, size, size);
-          ctx.drawImage(img, (w - s) / 2, (h - s) / 2, s, s, 0, 0, size, size);
-        }
-        URL.revokeObjectURL(url);
-        resolve(transparent ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.88));
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file isn't a picture this browser can open")); };
-      img.src = url;
+      imageFromFile(file, size, opts).then(resolve, reject);
     };
     input.click();
   });

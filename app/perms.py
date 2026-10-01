@@ -45,6 +45,10 @@ CAPS = [
     ("apps.other", "UniFi apps", "Other UniFi devices", "Talk, Connect, LED and anything else."),
     ("env.info", "Environments", "See environment settings", "Connection, site and notes. Never the API key."),
     ("activity.view", "Environments", "See the activity log", "Changes made in their environments."),
+    ("feedback.view", "Feedback", "See the feedback board", "Every bug report and idea, with its status."),
+    ("feedback.submit", "Feedback", "Report bugs and suggest ideas", "Also vote and comment."),
+    ("feedback.manage", "Feedback", "Manage feedback",
+     "Set the status (planned, done...), edit and delete anyone's reports and comments."),
     ("users.view", "People", "See the people below them", "Opens the Users page, showing only lower roles."),
     ("users.create", "People", "Add people", "New people get the lowest role."),
     ("users.edit", "People", "Edit people below them",
@@ -63,8 +67,9 @@ ALL_CAPS = CAP_KEYS + ADMIN_CAPS
 
 DEFAULT_ROLES = [
     (ADMIN, "Admin", ADMIN_LEVEL, ALL_CAPS),
-    ("supervisor", "Supervisor", 50, ["ports.change", "env.info", "activity.view", "apps.network"]),
-    ("viewer", "Viewer", 10, ["apps.network"]),
+    ("supervisor", "Supervisor", 50, ["ports.change", "env.info", "activity.view", "apps.network",
+                                      "feedback.view", "feedback.submit"]),
+    ("viewer", "Viewer", 10, ["apps.network", "feedback.view", "feedback.submit"]),
 ]
 APPS = ("network", "protect", "access")
 
@@ -89,15 +94,23 @@ def seed(conn):
                      (key, name, level, json.dumps(caps)))
 
 
+# abilities every existing role gets once, when the version that brings them starts
+MIGRATIONS = [
+    ("migrated_apps_caps", ["apps.network"]),                         # 1.7: devices split by UniFi app
+    ("migrated_feedback_caps", ["feedback.view", "feedback.submit"]),   # 3.1: the feedback board, for everyone
+]
+
+
 def migrate(conn):
-    """1.7 split devices by UniFi app. Everyone kept seeing Network devices as before."""
-    if conn.execute("SELECT 1 FROM settings WHERE key='migrated_apps_caps'").fetchone():
-        return
-    for r in conn.execute("SELECT key, caps FROM roles").fetchall():
-        caps = _loads(r["caps"])
-        if "apps.network" not in caps:
-            conn.execute("UPDATE roles SET caps=? WHERE key=?", (json.dumps(caps + ["apps.network"]), r["key"]))
-    conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('migrated_apps_caps', '1')")
+    for flag, add in MIGRATIONS:
+        if conn.execute("SELECT 1 FROM settings WHERE key=?", (flag,)).fetchone():
+            continue
+        for r in conn.execute("SELECT key, caps FROM roles").fetchall():
+            caps = _loads(r["caps"])
+            more = [c for c in add if c not in caps]
+            if more:
+                conn.execute("UPDATE roles SET caps=? WHERE key=?", (json.dumps(caps + more), r["key"]))
+        conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '1')", (flag,))
 
 
 def roles():

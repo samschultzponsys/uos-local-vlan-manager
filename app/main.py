@@ -20,6 +20,7 @@ import auth
 import brand
 import db
 import envs
+import feedback
 import perms
 import unifi
 import versioning
@@ -51,6 +52,7 @@ app.config.update(SESSION_COOKIE_NAME="vlanmgr_flow", SESSION_COOKIE_HTTPONLY=Tr
                   SESSION_COOKIE_SAMESITE="Lax", MAX_CONTENT_LENGTH=1024 * 1024)
 app.secret_key = secrets.token_hex(32)
 auth.init_app(app)
+feedback.register(app)
 
 
 @app.teardown_appcontext

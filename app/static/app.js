@@ -4,7 +4,8 @@ import {
   vlanColors, colorsFor, colorKey, readable, glyphHalo, speedLabel, linkLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
 } from "./ui.js";
 import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
-import { SetupWizard } from "./wizard.js";
+import { SetupWizard, wizardNeeded } from "./wizard.js";
+import { FeedbackPage } from "./feedback.js";
 
 // --- tooltip ------------------------------------------------------------------
 
@@ -479,7 +480,14 @@ function ColorsModal({ networks, prefs, envColors, onSave, onClose }) {
 
 const SHOW_OPTS = [{ value: "off", label: "Off" }, { value: "always", label: "Always" }, { value: "hover", label: canHover ? "On hover" : "On tap" }];
 
-function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, onClose, scales, setScale }) {
+/** where someone lands after signing in: their environment, the All devices page (when on) or Feedback */
+export function startOptions(pv, canFeedback) {
+  return [{ value: "env", label: "My environment" }, ...(pv.overview ? [{ value: "all", label: "All devices" }] : []),
+    ...(canFeedback ? [{ value: "feedback", label: "Feedback" }] : [])];
+}
+const startValue = (pv, canFeedback) => (pv.start === "all" && pv.overview) || (pv.start === "feedback" && canFeedback) ? pv.start : "env";
+
+function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, onClose, scales, setScale, canFeedback }) {
   const screen = useScreen();
   const here = screenKey();
   const cur = (scales || {})[here] || 1;
@@ -542,12 +550,11 @@ function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, 
     <${Toggle} checked=${pv.tag_marks} onChange=${(v) => setPv({ tag_marks: v })} label="Mark ports that carry tagged VLANs"
       hint="Ordinary ports set to Allow All or Custom. Uplinks and links to UniFi devices always show their own mark." />
 
-    <h4 class="section">All devices page</h4>
+    <h4 class="section">Pages</h4>
     <${Toggle} checked=${pv.overview} onChange=${(v) => setPv({ overview: v, start: v ? "all" : pv.start })} label="Show the All devices page"
-      hint="Every environment on one long page, view only. When it's on, it's where you start." />
-    ${pv.overview && html`<div class="opt-row"><div><b>Start on</b></div>
-      <${Segmented} value=${pv.start} onChange=${(v) => setPv({ start: v })}
-        options=${[{ value: "all", label: "All devices" }, { value: "env", label: "My environment" }]} /></div>`}
+      hint="Every environment on one long page, view only." />
+    ${startOptions(pv, canFeedback).length > 1 && html`<div class="opt-row"><div><b>Start on</b><div class="muted small">The page you land on after signing in.</div></div>
+      <${Segmented} value=${startValue(pv, canFeedback)} onChange=${(v) => setPv({ start: v })} options=${startOptions(pv, canFeedback)} /></div>`}
 
     <h4 class="section">Devices</h4>
     <${Toggle} checked=${pv.group} onChange=${(v) => setPv({ group: v })} label="Group by type" hint="Gateways, switches, access points." />
@@ -958,6 +965,7 @@ const TIPS = [
   { id: "ver", text: html`The version next to the title opens <b>What's new</b>.` },
   { id: "wizard", text: html`<b>Set up my view</b>, in your menu, runs the setup again.` },
   { id: "theme", text: html`The sun / moon button switches between day and night.` },
+  { id: "feedback", when: (c) => c.feedback, text: html`Found a bug or have an idea? Post it on the <b>Feedback</b> tab, or vote for one that's already there.` },
 ];
 
 function TipsHost({ ctx, paused, onOff }) {
@@ -1178,7 +1186,8 @@ function App() {
   const [collapsed, setCollapsed] = useState(lsGet("vlanmgr.collapsed", {}));
   const [closedGroups, setClosedGroups] = useState(lsGet("vlanmgr.groups", {}));
   const [devModal, setDevModal] = useState(null);   // id of the device whose details are open
-  const [view, setView] = useState(null);           // "env" or "all" (the All devices page)
+  const [view, setView] = useState(null);           // "env", "all" (the All devices page) or "feedback"
+  const lastPage = useRef("env");
   const [pending, setPending] = useState(null);     // a port to open once its environment has loaded
   const [wizardLater, setWizardLater] = useState(false);   // closed the setup wizard: ask again next visit
   const tipsPaused = useRef(false);                         // no tips over dialogs and port panels
@@ -1254,11 +1263,12 @@ function App() {
   useEffect(() => {
     if (!me || view) return;
     const p = { ...PORTS_DEFAULTS, ...((me.prefs || {}).ports_view || {}) };
-    setView(p.overview && p.start === "all" ? "all" : "env");
+    setView(startValue(p, (m => (m.caps || []).includes("feedback.view"))(me)));
   }, [me]);
   useEffect(() => {
     if (!me || !envList || modal || wizardLater || me.pending || me.impersonator) return;
-    if (!(me.prefs || {}).setup_done && envList.envs.length > 0) setModal("wizard");
+    const need = wizardNeeded(me.prefs);
+    if (need && envList.envs.length > 0) setModal(need === "new" ? "wizard-new" : "wizard");
   }, [me, envList, modal, wizardLater]);
   useEffect(() => {
     if (pending && st && st.env.id === pending.env) { setSel({ d: pending.d, i: pending.i }); setPending(null); }
@@ -1308,7 +1318,11 @@ function App() {
     savePrefs({ scales: next });
   };
   const setPv = (patch) => savePrefs({ ports_view: { ...pv, ...patch } });
-  const showAll = pv.overview && view === "all";
+  const canFb = (me.caps || []).includes("feedback.view");
+  if (view && view !== "feedback") lastPage.current = view;   // where a bug report says it happened
+  const showFb = canFb && view === "feedback";
+  const showAll = !showFb && pv.overview && view === "all";
+  const showEnv = !showFb && !showAll;
   const openFromOverview = (envTo, d, i) => {
     setView("env");
     if (d) setPending({ env: envTo, d, i });
@@ -1362,7 +1376,7 @@ function App() {
     setAnchor({ d, i });
   };
   const multiSet = new Set(multi);
-  tipsPaused.current = !!(modal || sel || multi.length);
+  tipsPaused.current = !!(modal || sel || multi.length || showFb);
   const multiPorts = multi.map((k) => { const [d, i] = k.split("|"); const dev = devices.find((x) => x.id === d);
     const port = dev && dev.ports.find((p) => p.idx === Number(i)); return port ? { dev, port } : null; }).filter(Boolean);
   const clearMulti = () => { setMulti([]); setAnchor(null); };
@@ -1462,13 +1476,18 @@ function App() {
       </div>
     </header>
 
-    <main class=${"main" + (!showAll && (selPort || multiPorts.length) ? " with-drawer" : "") + (selectMode ? " select-mode" : "") + (pv.fx === "solid" ? "" : " fx-pulse") + (pv.size && pv.size !== "auto" ? ` ps-${pv.size}` : "")}>
-      ${pv.overview && html`<div class="view-tabs" role="tablist">
-        <button role="tab" aria-selected=${showAll} class=${showAll ? "on" : ""} onClick=${() => setView("all")}><${Icon} name="grid" size=${15} />All devices</button>
-        <button role="tab" aria-selected=${!showAll} class=${!showAll ? "on" : ""} onClick=${() => setView("env")}><${Icon} name="server" size=${15} />Environment</button>
+    <main class=${"main" + (showEnv && (selPort || multiPorts.length) ? " with-drawer" : "") + (selectMode ? " select-mode" : "") + (pv.fx === "solid" ? "" : " fx-pulse") + (pv.size && pv.size !== "auto" ? ` ps-${pv.size}` : "")}>
+      ${(pv.overview || canFb) && html`<div class="view-tabs" role="tablist">
+        ${pv.overview && html`<button role="tab" aria-selected=${showAll} class=${showAll ? "on" : ""} onClick=${() => setView("all")}><${Icon} name="grid" size=${15} />All devices</button>`}
+        <button role="tab" aria-selected=${showEnv} class=${showEnv ? "on" : ""} onClick=${() => setView("env")}><${Icon} name="server" size=${15} />Environment</button>
+        ${canFb && html`<button role="tab" aria-selected=${showFb} class=${showFb ? "on" : ""} onClick=${() => setView("feedback")}><${Icon} name="comment" size=${15} />Feedback
+          ${me.feedback_unseen > 0 && html`<span class="count-dot" title="News on feedback you follow">${me.feedback_unseen}</span>`}</button>`}
       </div>`}
       ${showAll && html`<${Overview} me=${me} pv=${pv} lg=${lg} prefs=${prefs} poll=${poll} onOpen=${openFromOverview} />`}
-      ${!showAll && env && html`<div class="env-bar">
+      ${showFb && html`<${FeedbackPage} me=${me} onSeen=${loadMe}
+        info=${{ version: version ? version.version : "", page: lastPage.current === "all" ? "All devices" : "Environment",
+          env: env ? env.name : "", view: viewFor(pv, screenOf(innerWidth)) }} />`}
+      ${showEnv && env && html`<div class="env-bar">
         ${envList.envs.length > 1 ? html`<label class="env-select"><${Icon} name="server" size=${16} />
           <select value=${envId || ""} aria-label="Environment"
             onChange=${(e) => { if (e.target.value === "__add") { e.target.value = String(envId); setModal("settings-add"); } else setEnvId(Number(e.target.value)); }}>
@@ -1486,13 +1505,13 @@ function App() {
           onClick=${() => { setSelectMode(!selectMode); if (selectMode) clearMulti(); }}>
           <${Icon} name="check" size=${14} />${selectMode ? `Selecting${multi.length ? ` · ${multi.length}` : ""}` : "Select ports"}</button>`}
       </div>`}
-      ${!showAll && body}
+      ${showEnv && body}
     </main>
 
-    ${!showAll && multiPorts.length > 0 && html`<${BulkDrawer} env=${env} access=${env.access} items=${multiPorts} networks=${networks} colors=${colors}
+    ${showEnv && multiPorts.length > 0 && html`<${BulkDrawer} env=${env} access=${env.access} items=${multiPorts} networks=${networks} colors=${colors}
       me=${me} settings=${settings} onRemove=${(d, i) => setMulti(multi.filter((x) => x !== keyOf(d, i)))}
       onClose=${() => { clearMulti(); setSelectMode(false); }} onApplied=${() => { clearMulti(); setSelectMode(false); load(true); }} />`}
-    ${!showAll && selPort && !multiPorts.length && html`<${PortDrawer} readonly=${!!(st && st.readonly)} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
+    ${showEnv && selPort && !multiPorts.length && html`<${PortDrawer} readonly=${!!(st && st.readonly)} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
       settings=${settings} onClose=${() => setSel(null)} onApplied=${() => load(true)} />`}
 
 
@@ -1502,12 +1521,13 @@ function App() {
       onSave=${(macs) => { savePrefs({ devices: { ...picks, [env.id]: macs } }); setModal(null); }} />`}
     ${devOpen && html`<${DeviceModal} env=${env} device=${devOpen} me=${me} readonly=${!!st.readonly} onClose=${() => setDevModal(null)}
       onChanged=${() => load(true)} />`}
-    ${modal === "wizard" && html`<${SetupWizard} me=${me} prefs=${prefs}
-      kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, appName: settings.app_name }}
+    ${(modal === "wizard" || modal === "wizard-new") && html`<${SetupWizard} me=${me} prefs=${prefs} onlyNew=${modal === "wizard-new"}
+      kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, appName: settings.app_name, startOptions }}
       theme=${theme} setTheme=${setTheme}
-      onSave=${async (patch) => { await savePrefs(patch); setModal(null); toast("All set. Redo it any time from the menu: Set up my view"); }} />`}
+      onSave=${async (patch) => { await savePrefs(patch); setModal(null); setView(startValue({ ...PORTS_DEFAULTS, ...patch.ports_view }, canFb));
+        toast("All set. Redo it any time from the menu: Set up my view"); }} />`}
     ${modal === "display" && html`<${DisplayModal} lg=${lg} setLg=${setLg} pv=${pv} setPv=${setPv} sample=${sample} scales=${scales} setScale=${setScale}
-      sampleColor=${sample ? colors[sample.id] : ""} sampleCount=${sampleCount}
+      sampleColor=${sample ? colors[sample.id] : ""} sampleCount=${sampleCount} canFeedback=${canFb}
       onClose=${() => { setModal(null); if (lg.key_open) setLg({ key_open: false }); }} />`}
     ${modal === "colors" && html`<${ColorsModal} networks=${networks} prefs=${prefs} envColors=${env ? env.vlan_colors : {}}
       onClose=${() => setModal(null)} onSave=${(patch) => { savePrefs(patch); setModal(null); toast("Colors saved"); }} />`}
@@ -1516,7 +1536,7 @@ function App() {
     ${modal === "account" && html`<${AccountModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "audit" && html`<${AuditModal} onClose=${() => setModal(null)} />`}
     ${modal === "envinfo" && env && html`<${EnvInfoModal} env=${env} networks=${networks} devices=${devices} onClose=${() => setModal(null)} />`}
-    ${pv.tips !== false && html`<${TipsHost} ctx=${{ change: can("ports.change"), multiEnv: envList.envs.length > 1 }} paused=${tipsPaused}
+    ${pv.tips !== false && html`<${TipsHost} ctx=${{ change: can("ports.change"), multiEnv: envList.envs.length > 1, feedback: can("feedback.submit") }} paused=${tipsPaused}
       onOff=${() => { setPv({ tips: false }); toast("No more tips. Display options can turn them back on."); }} />`}
     <${TipHost} /><${AskHost} /><${Toasts} />`;
 }

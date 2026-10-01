@@ -3,7 +3,15 @@
 import { useState, useEffect } from "./vendor/preact-htm.module.js";
 import { html, api, Icon, Modal, Segmented, Toggle, Spinner, colorsFor, colorKey, vlanColors } from "./ui.js";
 
-export const SETUP_VERSION = "2.9";
+export const SETUP_VERSION = "3.1";
+const vnum = (v) => { const [a, b] = String(v || "0.0").split("."); return Number(a) * 100 + Number(b || 0); };
+
+/** "full" before someone's first setup, "new" when a later version added questions they haven't seen, else null */
+export function wizardNeeded(prefs) {
+  const done = (prefs || {}).setup_done;
+  if (!done) return "full";
+  return vnum(done) < vnum(SETUP_VERSION) ? "new" : null;
+}
 
 const MONITORS = [
   ["1366x768", "1366 × 768", "small laptop"], ["1920x1080", "1920 × 1080", "Full HD"], ["2560x1440", "2560 × 1440", "QHD"],
@@ -38,8 +46,8 @@ function sampleDevice(networks) {
 
 function screenClass(SCREENS, w) { return SCREENS.find((x) => w <= x.max).key; }
 
-export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme }) {
-  const { NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS } = kit;
+export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme, onlyNew }) {
+  const { NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, startOptions } = kit;
   const caps = me.caps || [];
   const [data, setData] = useState(null);
   const [step, setStep] = useState(0);
@@ -76,6 +84,8 @@ export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme }) {
   const kinds = [...new Set(data.envs.flatMap((x) => x.devices.map((d) => d.kind || "other")))];
   const appKinds = ["protect", "access", "other"].filter((a) => caps.includes(`apps.${a}`));
   const multiEnv = data.envs.length > 1;
+  const canFeedback = caps.includes("feedback.view");
+  const startNow = startOptions(pv, canFeedback).some((o) => o.value === pv.start) ? pv.start : "env";
   const used = new Set(data.envs.flatMap((x) => x.devices.flatMap((d) => d.ports.map((p) => p.native_network_id))));
   const unused = allNets.filter((n) => !used.has(n.id)).length;
 
@@ -91,7 +101,7 @@ export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme }) {
         <b>${label}</b><span class="muted small">${hint}</span></button>`)}</div>`;
 
   const steps = [
-    { key: "welcome", title: "Welcome", body: html`
+    { key: "welcome", since: "2.9", title: "Welcome", body: html`
       <p>Let's make ${kit.appName} look the way you like. It takes a minute, every step can keep the defaults, and you can redo it any
         time from the menu (<b>Set up my view</b>).</p>
       <div class="wz-themes">${[["dark", "Night", "moon"], ["light", "Day", "sun"]].map(([t, label, icon]) => html`
@@ -127,7 +137,7 @@ export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme }) {
         <${Segmented} value=${foldScreen} onChange=${setFoldScreen} options=${[{ value: "cover", label: "Cover" }, { value: "inner", label: "Inner" }]} /></div>`}
       <div class="field-label wz-label">Ports on ${phoneClass === "tablet" ? "the inner screen" : "your phone"}</div>
       ${viewPicker(phoneClass, phoneClass === "phone")}` },
-    { key: "bubbles", title: "Network bubbles", body: html`
+    { key: "bubbles", since: "2.9", title: "Network bubbles", body: html`
       ${sampleNet && html`<div class="opt-preview"><${NetChip} n=${sampleNet} color=${colors0[sampleNet.id]} lg=${lg} ports=${4} example />
         <span class="muted small">This is how a network shows above your devices.</span></div>`}
       ${[["vlan", "VLAN number"], ["ports", "Ports on the network"], ["clients", "Connected clients"], ["ip", "IP subnet"]].map(([k, label]) => html`
@@ -157,14 +167,22 @@ export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme }) {
     { key: "finish", title: "Last touches", body: html`
       <div class="opt-row"><div><b>Ports with link</b><div class="muted small">Pulse gently in their network's color, or stay solid.</div></div>
         <${Segmented} value=${pv.fx} onChange=${(v) => setPv({ fx: v })} options=${[{ value: "pulse", label: "Pulse" }, { value: "solid", label: "Solid" }]} /></div>
-      <${Toggle} checked=${pv.overview} onChange=${(v) => setPv({ overview: v, start: v ? "all" : pv.start })} label="All devices page"
-        hint="Every environment on one view-only page." />
-      ${pv.overview && html`<div class="opt-row"><b>Start on</b><${Segmented} value=${pv.start} onChange=${(v) => setPv({ start: v })}
-        options=${[{ value: "all", label: "All devices" }, { value: "env", label: "My environment" }]} /></div>`}
       <p class="muted small">Everything here is also under <b>Display options</b> and <b>My VLAN colors</b>.</p>` },
+    { key: "start", since: "3.1", title: "Where do you want to land?", body: html`
+      <p class="muted">The page you see first after signing in. The tabs at the top switch between them any time.</p>
+      <${Toggle} checked=${pv.overview} onChange=${(v) => setPv({ overview: v, start: v ? "all" : pv.start === "all" ? "env" : pv.start })}
+        label="All devices page" hint="Every environment on one view-only page." />
+      <div class="wz-starts">${startOptions(pv, canFeedback).map((o) => html`<button key=${o.value}
+        class=${"wz-start" + (startNow === o.value ? " on" : "")} onClick=${() => setPv({ start: o.value })}>
+        <${Icon} name=${{ env: "server", all: "grid", feedback: "comment" }[o.value]} size=${22} /><b>${o.label}</b>
+        <span class="muted small">${{ env: "Your switches and ports, one environment at a time.", all: "Everything at a glance, view only.",
+          feedback: "Bug reports and ideas, and where they're at." }[o.value]}</span></button>`)}</div>` },
   ];
-  const s = steps[step];
-  const last = step === steps.length - 1;
+  // after an update, only the questions added since this person last went through it
+  const newSteps = steps.filter((x) => vnum(x.since) > vnum(prefs.setup_done));
+  const shownSteps = onlyNew && newSteps.length ? newSteps : steps;
+  const s = shownSteps[step];
+  const last = step === shownSteps.length - 1;
   const keepDefaults = () => {
     if (s.key === "devices") setPv({ kinds: {}, app_kinds: {} });
     if (s.key === "monitor") { setView(monClass, PORTS_DEFAULTS.desktop); const x = { ...scales }; delete x[monitor]; setScales(x); }
@@ -172,18 +190,21 @@ export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme }) {
     if (s.key === "welcome") setTheme("dark");
     if (s.key === "bubbles") setLgS({ ...LEGEND_DEFAULTS });
     if (s.key === "colors") { setSync("off"); }
-    if (s.key === "finish") setPv({ fx: "pulse", overview: false });
+    if (s.key === "finish") setPv({ fx: "pulse" });
+    if (s.key === "start") setPv({ overview: false, start: "env" });
     if (last) finish(); else setStep(step + 1);
   };
   // no way around it: everyone goes through once (each step can keep the defaults)
-  return html`<${Modal} title="Set up your view" icon="sparkle" wide
-    footer=${html`<div class="wz-dots">${steps.map((x, i) => html`<span class=${i === step ? "on" : i < step ? "done" : ""} key=${x.key}></span>`)}</div>
+  return html`<${Modal} title=${onlyNew ? "A few new choices" : "Set up your view"} icon="sparkle" wide
+    footer=${html`<div class="wz-dots">${shownSteps.map((x, i) => html`<span class=${i === step ? "on" : i < step ? "done" : ""} key=${x.key}></span>`)}</div>
       <span class="grow"></span>
       ${step > 0 && html`<button class="btn ghost" onClick=${() => setStep(step - 1)}>Back</button>`}
       <button class="btn ghost" onClick=${keepDefaults}>Keep the defaults</button>
-      <button class="btn primary" onClick=${() => (last ? finish() : setStep(step + 1))}>${step === 0 ? "Let's go" : last ? "Done" : "Next"}</button>`}>
+      <button class="btn primary" onClick=${() => (last ? finish() : setStep(step + 1))}>${step === 0 && !onlyNew ? "Let's go" : last ? "Done" : "Next"}</button>`}>
     <div class="wz">
-      <div class="wz-step muted small">Step ${step + 1} of ${steps.length}</div>
+      ${onlyNew && step === 0 && html`<p class="wz-new muted"><${Icon} name="sparkle" size=${15} />${kit.appName} was updated and has something new to set.${" "}
+        ${shownSteps.length > 1 ? `${shownSteps.length} quick questions` : "One quick question"}, then you're back where you were.</p>`}
+      <div class="wz-step muted small">Step ${step + 1} of ${shownSteps.length}</div>
       <h3 class="wz-title">${s.title}</h3>
       ${s.body}
     </div></${Modal}>`;

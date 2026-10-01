@@ -121,7 +121,47 @@ CREATE TABLE IF NOT EXISTS roles (
     caps     TEXT NOT NULL DEFAULT '[]',
     builtin  INTEGER NOT NULL DEFAULT 0
 );
+-- the feedback board: bug reports and ideas from the people using the app
+CREATE TABLE IF NOT EXISTS feedback (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT NOT NULL DEFAULT 'bug',
+    title        TEXT NOT NULL,
+    body         TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'open',
+    user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    author       TEXT NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    closed_at    INTEGER NOT NULL DEFAULT 0,
+    context      TEXT NOT NULL DEFAULT '{}',
+    image        INTEGER NOT NULL DEFAULT 0,
+    request      TEXT NOT NULL DEFAULT '{}',
+    env_id       INTEGER,
+    github_issue INTEGER NOT NULL DEFAULT 0,
+    github_url   TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS feedback_votes (
+    item_id  INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+    user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS feedback_comments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id     INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+    user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    author      TEXT NOT NULL DEFAULT '',
+    body        TEXT NOT NULL DEFAULT '',
+    event       TEXT NOT NULL DEFAULT '',      -- '' for a comment, else e.g. 'status:done'
+    created_at  INTEGER NOT NULL
+);
+-- news on an item someone follows (reported, voted or commented) they haven't opened yet
+CREATE TABLE IF NOT EXISTS feedback_unseen (
+    user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    item_id  INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, item_id)
+);
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
+CREATE INDEX IF NOT EXISTS feedback_comments_item ON feedback_comments(item_id);
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
 """
 

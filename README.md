@@ -78,6 +78,11 @@ manage only their own switches and only the VLANs you allow.
   from UniFi, so changes made in the UniFi console or cloud UI show up within seconds (see
   [Staying in sync](#staying-in-sync-with-unifi)).
 - **Users & roles**: see [Sign-in, users & roles](#sign-in-users--roles).
+- **Feedback board**: a *Feedback* tab where everyone can report bugs and suggest ideas (with a
+  screenshot and the technical details attached), vote "me too", comment, and see the status
+  (Open, Planned, In progress, Done, Won't do). Whoever manages feedback sets the status; people
+  following an item see news on the tab. Who sees and posts is an ability, so it can be taken
+  away per role or per person.
 - **Your name and logo** (Settings → Branding, admins): rename the app, set the sign-in
   tagline, and pick the header logo and the browser tab icon: the stock mark, one of 18 icons
   on a color palette (8 presets or your own colors), or an uploaded picture. The tab icon can
@@ -120,6 +125,7 @@ Everything lives in `./data` (a bind mount) on the host:
 | `data/backups/` | a copy of the DB taken automatically before each version upgrade (newest 10 kept) |
 | `data/avatars/` | profile pictures |
 | `data/brand/` | an uploaded logo / browser tab icon |
+| `data/feedback/` | screenshots attached to feedback |
 
 Schema changes are additive only, so a newer image keeps using your existing DB. To roll
 back, stop the container, copy a backup over `data/vlanmgr.db`, and run the older tag.
@@ -209,6 +215,8 @@ Everything a person can do is an **ability**. A **role** is a named set of abili
 | Lock and unlock ports | ✓ | | |
 | See environment settings (never the API key) | ✓ | ✓ | |
 | See the activity log (their environments) | ✓ | ✓ | |
+| See the feedback board / report bugs and ideas, vote, comment | ✓ | ✓ | ✓ |
+| Manage feedback (status, edit and delete anyone's) | ✓ | | |
 | See / add / edit / delete people below them | ✓ | | |
 | Give access to people below them (from their own access) | ✓ | | |
 | Change roles and abilities of people below them | ✓ | | |

@@ -901,6 +901,9 @@ def init_app(app):
             pw = db.get_setting("initial_admin_password", "")
             out["initial_password"] = bool(row["seeded"] and pw)
             out["pending"] = bool(row["pending"])
+        if u["id"] and perms.has(u, "feedback.view"):
+            out["feedback_unseen"] = db.get().execute(
+                "SELECT COUNT(*) FROM feedback_unseen WHERE user_id=?", (u["id"],)).fetchone()[0]
         if perms.has(u, "users.access"):   # people waiting for someone to set them up
             out["waiting"] = db.get().execute("SELECT COUNT(*) FROM users WHERE pending=1 AND disabled=0").fetchone()[0]
         return jsonify(out)

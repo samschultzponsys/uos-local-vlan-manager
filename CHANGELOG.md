@@ -5,6 +5,32 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 3.1 — 2026-10-01
+
+### Added
+- **Feedback board**: a **Feedback** tab next to *Environment* where anyone can **report a bug
+  or suggest an idea**, and everyone can see where each one is at.
+  - Columns **Open → Planned → In progress → Done**, plus *Won't do* on request. On a phone,
+    one column at a time.
+  - **Vote** ("me too") instead of posting the same thing twice; sort by most votes, newest or
+    recently updated; filter bugs / ideas; search.
+  - **Comments** on every item, and an optional **screenshot**: attach one or just paste it
+    (Ctrl / ⌘ V).
+  - **Technical details** go along by default (version, page, environment, port view, browser,
+    screen, theme), visible only to the reporter and whoever handles it. They can be left out.
+  - **Status changes** by whoever manages feedback, with an optional note shown in the
+    item's activity.
+  - **News for you**: when an item you reported, voted for or commented on changes status or
+    gets a comment, the tab shows a count and the item is marked until you open it.
+  - The reporter can edit or delete their item while it's still open.
+- New abilities, under **Feedback** in roles and per person: *See the feedback board*,
+  *Report bugs and suggest ideas* (all roles have both, so take them away per person or per
+  role to hide the board) and *Manage feedback* (admins).
+- **Where do you want to land?**: the start page can now be your environment, the All devices
+  page or **Feedback** (setup wizard and Display options).
+- **Only what's new**: after an update that adds setup questions, people get a short "A few
+  new choices" dialog with just those, instead of the whole setup again.
+
 ## 3.0 — 2026-10-01
 
 ### Added
