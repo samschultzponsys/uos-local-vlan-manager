@@ -1,7 +1,7 @@
 import { render, useState, useEffect, useMemo, useCallback, useErrorBoundary } from "./vendor/preact-htm.module.js";
 import {
   html, api, Icon, Modal, Segmented, Toggle, Toasts, toast, Spinner, useInterval, Logo, markdown,
-  vlanColors, colorsFor, colorKey, readable, glyphHalo, speedLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
+  vlanColors, colorsFor, colorKey, readable, glyphHalo, speedLabel, linkLabel, bytes, ago, rank, ROLE_LABEL, MODE_LABEL, lsGet, lsSet, ask, AskHost, Avatar,
 } from "./ui.js";
 import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } from "./admin.js";
 import { SetupWizard } from "./wizard.js";
@@ -102,7 +102,7 @@ function PortTip({ port, device, networks }) {
   const c = port.clients[0];
   const tag = nativeOnly(device) ? "tagging not supported" : TAG_TEXT[port.tagged_mode];
   return html`<div class="tip-title">Port ${port.idx}${port.name !== `Port ${port.idx}` ? ` · ${port.name}` : ""}</div>
-    <div class="tip-row"><span class=${"led " + (port.up ? "on" : "")}></span>${port.up ? `Up · ${speedLabel(port.speed)}${port.full_duplex ? " FD" : ""}` : port.enabled ? "No link" : "Disabled"}</div>
+    <div class="tip-row"><span class=${"led " + (port.up ? "on" : "")}></span>${port.up ? `Up · ${linkLabel(port)}` : port.enabled ? "No link" : "Disabled"}</div>
     ${port.role && html`<div class="tip-row"><${Icon} name=${ROLE[port.role].icon} size=${13} />${roleLine(port)}</div>`}
     ${!port.wan && html`<div class="tip-row"><${Icon} name="tag" size=${13} />${port.native_network_id === null ? "VLAN not available through UniFi's cloud" : `${n ? `${n.name} (${n.vlan})` : "Unknown network"} · ${tag}`}</div>`}
     ${port.poe_capable && html`<div class="tip-row"><${Icon} name="bolt" size=${13} />${port.poe_active ? (port.poe_power == null ? "PoE delivering" : `PoE delivering ${port.poe_power} W`) : port.poe_enabled ? "PoE on · idle" : "PoE off"}</div>`}
@@ -172,7 +172,7 @@ function PortRow({ port, device, networks, colors, highlight, selected, marked, 
     <span class="prow-who">${who && html`<${Icon} name=${port.peer ? ROLE[port.role] ? ROLE[port.role].icon : "link" : APP_ICON[c && c.app] || "plug"} size=${12} />${who}${port.client_count > 1 ? ` +${port.client_count - 1}` : ""}`}</span>
     <span class="prow-state">
       ${port.poe_capable && html`<span class=${"p-poe " + (port.poe_active ? "active" : port.poe_enabled ? "on" : "offpoe")}><${Icon} name="bolt" size=${12} fill=${port.poe_active} /></span>`}
-      <span class=${"prow-speed" + (port.up ? " on" : "")}>${port.up ? speedLabel(port.speed) : "—"}</span>
+      <span class=${"prow-speed" + (port.up ? " on" : "")}>${port.up ? linkLabel(port) : "—"}</span>
       <${Flags} port=${port} device=${device} pv=${pv} size=${12} /></span>
   </button>`;
 }
@@ -224,7 +224,8 @@ function Faceplate({ device, pv, forceView, forceMobile, ...rest }) {
   const marked = (p) => !!(rest.multi && rest.multi.has(`${device.id}|${p.idx}`));
   const sel = (p) => (rest.sel && rest.sel.d === device.id && rest.sel.i === p.idx) || marked(p);
   const tile = (p, mini) => html`<${PortTile} key=${p.idx} port=${p} device=${device} selected=${sel(p)} marked=${marked(p)} pv=${pv} mini=${mini} ...${rest} />`;
-  const shown = (view === "compact" || view === "list") && pv.hide_down ? device.ports.filter((p) => p.up) : device.ports;
+  const hideDown = !!pv.hide_down;
+  const shown = hideDown ? device.ports.filter((p) => p.up) : device.ports;
   const hidden = device.ports.length - shown.length;
   const more = hidden > 0 && html`<div class="muted small hidden-note">${plural(hidden, "port")} without link hidden</div>`;
   if (view === "list") {
@@ -236,15 +237,17 @@ function Faceplate({ device, pv, forceView, forceMobile, ...rest }) {
   if (mobile) {
     // phones: every port in order, big tap targets, no sideways scrolling
     return html`<div class=${"chassis compact " + (device.kind || "")}>
-      <div class="pgrid">${device.ports.map((p) => tile(p))}</div></div>`;
+      <div class="pgrid">${shown.map((p) => tile(p))}</div></div>${more}`;
   }
+  // the faceplate keeps the hardware layout: a hidden port leaves an empty socket
+  const slot = (p) => (hideDown && !p.up ? html`<span class=${"port ghost" + (p.sfp ? " sfp" : "")} key=${p.idx} aria-hidden="true"></span>` : tile(p));
   const rj = device.ports.filter((p) => !p.sfp);
   const sfp = device.ports.filter((p) => p.sfp);
   const twoRow = rj.length > 10;
   const groups = twoRow ? chunk(rj, rj.length > 16 ? 12 : 8) : [rj];
   const grp = (ports, two) => html`<div class=${"pgroup" + (two ? " two" : "")}
     style=${`--cols:${two ? Math.ceil(ports.length / 2) : ports.length}`}>
-    ${ports.map((p) => tile(p))}</div>`;
+    ${ports.map(slot)}</div>`;
   return html`<div class=${"chassis " + (device.kind || "")}>
     <div class="chassis-label">
       <span class=${"chassis-led " + (device.online ? "on" : "")}></span>
@@ -339,7 +342,8 @@ function AppDevices({ apps, devices, me, env, onOpenPort, collapsed, onCollapse,
       return html`<div class="app-row" key=${a.mac}>
         <span class=${"status-dot " + (a.online ? "on" : a.online === false ? "" : "unknown")} title=${a.online ? "Online" : a.online === false ? "Offline" : "Unknown"}></span>
         <div class="app-main"><b>${a.name}</b><span class="muted small">${a.model}${a.ip ? ` · ${a.ip}` : ""}</span></div>
-        ${port ? html`<button class="link-btn small" onClick=${() => onOpenPort(sw.id, port.idx)}>${sw.name} · port ${port.idx}</button>`
+        ${port && onOpenPort ? html`<button class="link-btn small" onClick=${() => onOpenPort(sw.id, port.idx)}>${sw.name} · port ${port.idx}</button>`
+          : port ? html`<span class="muted small">${sw.name} · port ${port.idx}</span>`
           : html`<span class="muted small">${a.switch_name ? `${a.switch_name} · port ${a.sw_port}` : "port unknown"}</span>`}
         ${cycle && !readOnly && html`<button class="btn sm ghost" title="Turn PoE off and on to restart it" onClick=${() => powerCycle(env, sw, port, onChanged)}><${Icon} name="power" size=${14} />Restart</button>`}
       </div>`;
@@ -533,7 +537,8 @@ function DisplayModal({ lg, setLg, pv, setPv, sample, sampleColor, sampleCount, 
         options=${[{ value: "auto", label: "Auto" }, { value: "s", label: "S" }, { value: "m", label: "M" }, { value: "l", label: "L" }, { value: "xl", label: "XL" }]} /></div>
     <div class="opt-row"><div><b>Ports with link</b><div class="muted small">Pulse gently in their network's color, or stay solid.</div></div>
       <${Segmented} value=${pv.fx} onChange=${(v) => setPv({ fx: v })} options=${[{ value: "pulse", label: "Pulse" }, { value: "solid", label: "Solid" }]} /></div>
-    <${Toggle} checked=${pv.hide_down} onChange=${(v) => setPv({ hide_down: v })} label="Hide ports without link" hint="In the Compact and List views." />
+    <${Toggle} checked=${pv.hide_down} onChange=${(v) => setPv({ hide_down: v })} label="Hide ports without link"
+      hint="Tiles, Compact and List leave them out; the Faceplate keeps its layout and shows an empty socket." />
     <${Toggle} checked=${pv.tag_marks} onChange=${(v) => setPv({ tag_marks: v })} label="Mark ports that carry tagged VLANs"
       hint="Ordinary ports set to Allow All or Custom. Uplinks and links to UniFi devices always show their own mark." />
 
@@ -648,7 +653,7 @@ function PortDrawer({ env, access, device, port, networks, colors, me, settings,
     <div class="drawer-body">
       <div class="status-grid">
         <div class="sg"><span class="sg-l">Link</span><span class=${"sg-v " + (port.up ? "good" : "")}><span class=${"led " + (port.up ? "on" : "")}></span>
-          ${port.up ? `${speedLabel(port.speed)}${port.full_duplex ? " · Full duplex" : ""}` : port.enabled ? "Down" : "Disabled"}</span></div>
+          ${port.up ? linkLabel(port) : port.enabled ? "Down" : "Disabled"}</span></div>
         <div class="sg"><span class="sg-l">PoE</span><span class=${"sg-v " + (port.poe_active ? "poe" : "")}>
           ${!port.poe_capable ? "Not supported" : port.poe_active ? html`<${Icon} name="bolt" size=${14} fill />${port.poe_power == null ? "Delivering" : `${port.poe_power} W`}` : port.poe_enabled ? `On · idle (${port.poe_mode})` : "Off"}</span></div>
         ${port.wan ? null : readonly ? html`<div class="sg"><span class="sg-l">Max speed</span><span class="sg-v">${speedLabel(port.max_speed) || "—"}</span></div>` : html`
@@ -898,9 +903,10 @@ function Overview({ me, pv, lg, prefs, poll, onOpen }) {
   if (!data) return html`<div class="empty"><${Spinner} /></div>`;
   const toggle = (k) => { const c = { ...closed, [k]: !closed[k] }; setClosed(c); lsSet("vlanmgr.ovClosed", c); };
   const total = data.envs.reduce((a, x) => a + x.devices.length, 0);
-  return html`<div class="overview">
+  return html`<div class="overview ov-static">
     <div class="notice slim"><${Icon} name="eye" /><div><b>All devices</b> — ${plural(data.envs.length, "environment")}, ${plural(total, "device")}.
-      View only: ${canHover ? "click" : "tap"} a port to open it in its environment. <span class="muted">Updated ${ago(data.fetched_at)}.</span></div></div>
+      For information only${canHover ? "; point at a port for its details" : ""}. To change something, switch to <b>Environment</b>.
+      <span class="muted">Updated ${ago(data.fetched_at)}.</span></div></div>
     ${data.envs.map((x) => {
       const colors = colorsFor(x.networks, x.env.vlan_colors, prefs);
       const groups = pv.group
@@ -915,7 +921,6 @@ function Overview({ me, pv, lg, prefs, poll, onOpen }) {
             <${Icon} name="server" size=${17} /><b>${x.env.name}</b>
             <span class="muted small">${x.env.mode === "cloud" ? "UniFi cloud" : "UniFi"} · ${plural(x.devices.length, "device")}</span></button>
           <span class="grow"></span>
-          <button class="btn sm ghost" onClick=${() => onOpen(x.env.id)}>Open<${Icon} name="chevron" size=${13} cls="fwd-chev" /></button>
         </header>
         ${!closed[x.env.id] && html`<div class="ov-body">
           ${x.error ? html`<div class="notice err slim"><${Icon} name="alert" /><div>${x.error === "not_configured" ? "Not connected yet." : x.error}</div></div>` : html`
@@ -924,10 +929,10 @@ function Overview({ me, pv, lg, prefs, poll, onOpen }) {
           ${groups.map((g) => html`<div class="ov-group" key=${g.kind || "all"}>
             ${g.kind && html`<div class="ov-kind"><${Icon} name=${KIND[g.kind].icon} size=${14} />${KIND[g.kind].label}</div>`}
             <div class="devices">${g.list.map((d) => html`<${DeviceCard} key=${d.id} device=${d} networks=${x.networks} colors=${colors} pv=${pv}
-              highlight=${null} sel=${null} onPick=${(dev, idx) => onOpen(x.env.id, dev, idx)} onManage=${null}
+              highlight=${null} sel=${null} onPick=${() => {}} onManage=${null}
               collapsed=${false} onCollapse=${() => {}} />`)}</div></div>`)}
           ${pv.apps && x.app_devices.length > 0 && html`<${AppDevices} apps=${x.app_devices} devices=${x.devices} me=${me} env=${x.env} readOnly
-            collapsed=${{}} onCollapse=${() => {}} onOpenPort=${(dev, idx) => onOpen(x.env.id, dev, idx)} />`}`}
+            collapsed=${{}} onCollapse=${() => {}} onOpenPort=${null} />`}`}
         </div>`}
       </section>`;
     })}
@@ -1366,7 +1371,9 @@ function App() {
     ${me.initial_password && html`<div class="warn-banner"><${Icon} name="key" /><span>You're using the generated admin password.</span>
       <button class="link-btn" onClick=${() => setModal("account")}>Change it now</button></div>`}
     <header class="topbar">
-      <div class="brand"><${Logo} /><div><div class="brand-name">${settings.app_name}</div>
+      <div class="brand"><${Logo} /><div><div class="brand-name"><span class="bn">${settings.app_name}</span>
+        <button class=${"ver-chip" + (upd ? " has-update" : "")} onClick=${() => setModal("changelog")}
+          title=${upd ? `Version ${version.update.latest} is available` : "What's new"}>v${version ? version.version : "…"}${upd && html`<span class="pulse"></span>`}</button></div>
         <div class="brand-sub">${env ? `${env.name} · ${env.mode === "cloud" ? "UniFi cloud" : "UniFi"}${ready && st.fetched_at ? ` · updated ${ago(st.fetched_at)}` : ""}` : "No environment"}</div></div></div>
       <div class="top-actions">
         <button class="btn ghost" disabled=${!env} onClick=${() => load(true)} title="Refresh from UniFi">
@@ -1411,8 +1418,15 @@ function App() {
       ${showAll && html`<${Overview} me=${me} pv=${pv} lg=${lg} prefs=${prefs} poll=${poll} onOpen=${openFromOverview} />`}
       ${!showAll && env && html`<div class="env-bar">
         ${envList.envs.length > 1 ? html`<label class="env-select"><${Icon} name="server" size=${16} />
-          <select value=${envId || ""} onChange=${(e) => setEnvId(Number(e.target.value))} aria-label="Environment">
-            ${envList.envs.map((e) => html`<option value=${e.id}>${e.name}</option>`)}</select></label>`
+          <select value=${envId || ""} aria-label="Environment"
+            onChange=${(e) => { if (e.target.value === "__add") { e.target.value = String(envId); setModal("settings-add"); } else setEnvId(Number(e.target.value)); }}>
+            ${envList.envs.map((e) => html`<option value=${e.id}>${e.name}</option>`)}
+            ${canEnvs && html`<option disabled>──────────</option><option value="__add">+ Add environment…</option>`}</select></label>`
+          : canEnvs ? html`<label class="env-select"><${Icon} name="server" size=${16} />
+              <select value=${envId || ""} aria-label="Environment"
+                onChange=${(e) => { if (e.target.value === "__add") { e.target.value = String(envId); setModal("settings-add"); } }}>
+                <option value=${env.id}>${env.name}</option><option disabled>──────────</option><option value="__add">+ Add environment…</option>
+              </select></label>`
           : html`<span class="env-select single"><${Icon} name="server" size=${16} /><b>${env.name}</b></span>`}
         ${ready && st.fetched_at ? html`<span class="muted small env-updated">Updated ${ago(st.fetched_at)}</span>` : null}
         ${ready && !st.readonly && can("ports.change") && devices.length > 0 && html`<button class=${"btn sm select-btn" + (selectMode ? " primary" : " ghost")}
@@ -1429,8 +1443,6 @@ function App() {
     ${!showAll && selPort && !multiPorts.length && html`<${PortDrawer} readonly=${!!(st && st.readonly)} env=${env} access=${env.access} device=${selDev} port=${selPort} networks=${networks} colors=${colors} me=${me}
       settings=${settings} onClose=${() => setSel(null)} onApplied=${() => load(true)} />`}
 
-    <button class=${"version" + (upd ? " has-update" : "")} onClick=${() => setModal("changelog")} title=${upd ? `Version ${version.update.latest} is available` : "Changelog"}>
-      v${version ? version.version : "…"}${upd && html`<span class="pulse"></span>`}</button>
 
     ${modal === "changelog" && version && html`<${ChangelogModal} version=${version} isAdmin=${isAdmin} onClose=${() => setModal(null)}
       onCheck=${async () => { const r = await api("/api/version/check", { method: "POST" }); setVersion({ ...version, update: r.update }); toast(r.update.update_available ? `Version ${r.update.latest} is available` : "You're up to date"); }} />`}
@@ -1447,7 +1459,7 @@ function App() {
       onClose=${() => { setModal(null); if (lg.key_open) setLg({ key_open: false }); }} />`}
     ${modal === "colors" && html`<${ColorsModal} networks=${networks} prefs=${prefs} envColors=${env ? env.vlan_colors : {}}
       onClose=${() => setModal(null)} onSave=${(patch) => { savePrefs(patch); setModal(null); toast("Colors saved"); }} />`}
-    ${modal === "settings" && html`<${SettingsModal} onClose=${() => setModal(null)} onSaved=${onEnvsChanged} />`}
+    ${(modal === "settings" || modal === "settings-add") && html`<${SettingsModal} addEnv=${modal === "settings-add"} onClose=${() => setModal(null)} onSaved=${onEnvsChanged} />`}
     ${modal === "users" && html`<${UsersModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "account" && html`<${AccountModal} me=${me} onClose=${() => { setModal(null); loadMe(); }} />`}
     ${modal === "audit" && html`<${AuditModal} onClose=${() => setModal(null)} />`}

@@ -903,12 +903,12 @@ select option:checked { background-color: var(--accent); color: #fff; }
 
 /* lit ports breathe in their network's color (Display options -> Solid turns it off) */
 @keyframes portPulse {
-  0%, 100% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 3px 10px -4px var(--c), 0 1px 0 rgba(255, 255, 255, .7); filter: saturate(1); }
-  50% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 0 16px 1px color-mix(in srgb, var(--c) 85%, transparent), 0 1px 0 rgba(255, 255, 255, .7); filter: saturate(1.25) brightness(1.06); }
+  0%, 100% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 2px 8px -4px var(--c), 0 1px 0 rgba(255, 255, 255, .7); filter: saturate(.95) brightness(.97); }
+  50% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 0 18px 3px color-mix(in srgb, var(--c) 90%, transparent), 0 1px 0 rgba(255, 255, 255, .7); filter: saturate(1.3) brightness(1.1); }
 }
-.fx-pulse .port.up:not(.wan):not(.dim) { animation: portPulse 3.2s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -.23s); }
-.fx-pulse .prow.up .prow-num { animation: portPulse 3.2s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .fx-pulse .port.up, .fx-pulse .prow.up .prow-num { animation: none !important; } }
+/* on unless the person picks Solid (the OS "reduce motion" setting doesn't turn it off: nothing moves, it only glows) */
+.fx-pulse .port.up:not(.wan):not(.dim) { animation: portPulse 2.8s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -.23s); }
+.fx-pulse .prow.up .prow-num { animation: portPulse 2.8s ease-in-out infinite; }
 
 /* the key: its own collapsible section */
 .key-box { margin-top: 20px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
@@ -1074,3 +1074,23 @@ select option:checked { background-color: var(--accent); color: #fff; }
 .wz-preview { max-width: 100%; }
 @media (max-width: 760px) { .wz-preview { height: 120px; } }
 .wz-preview .chassis.compact:not(.mini) .port { height: 46px; }
+
+/* ---------- 2.8 ---------- */
+.port.ghost { cursor: default; opacity: .18; background: transparent !important; box-shadow: none !important; border-style: dashed;
+  border-color: var(--chassis-edge); animation: none !important; }
+.port.ghost::after, .port.ghost:hover { transform: none; }
+/* All devices: information only */
+.ov-static .port, .ov-static .prow, .ov-static .device-head { cursor: default; }
+.ov-static .port:hover { transform: none; }
+.ov-static .device-head:hover { background: none; }
+.ov-static .device-head .chev { display: none; }
+/* version next to the title (it used to float bottom-left and got cut off on narrow windows) */
+.brand-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ver-chip { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px; border-radius: 10px;
+  border: 1px solid var(--border2); background: var(--surface2); color: var(--muted); font: 600 11px ui-monospace, Menlo, monospace;
+  cursor: pointer; flex: none; }
+.ver-chip:hover { color: var(--text); border-color: var(--accent); }
+.ver-chip.has-update { color: var(--good); border-color: color-mix(in srgb, var(--good) 50%, transparent); }
+.ver-chip .pulse { position: static; width: 7px; height: 7px; }
+.brand-name .bn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.brand > div { min-width: 0; }

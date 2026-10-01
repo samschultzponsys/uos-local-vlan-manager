@@ -323,6 +323,16 @@ def admin_count(exclude_id=None):
                             (exclude_id or -1,)).fetchone()[0]
 
 
+def free_username(wanted):
+    """A username that's free, made from `wanted` (an email's part before @ is enough)."""
+    base = re.sub(r"[^A-Za-z0-9._@-]", "", str(wanted or ""))[:56] or "user"
+    username, n = base, 1
+    while find_user(username):
+        n += 1
+        username = f"{base}{n}"
+    return username
+
+
 def create_user(username, password="", role="viewer", display_name="", email="",
                 oidc_sub=None, seeded=False, pending=False):
     if not USERNAME_RE.match(username or ""):
@@ -678,11 +688,7 @@ def _oidc_user(claims):
     if row is None:
         if not o["auto_create"]:
             return None, "Your account hasn't been added to this app yet - ask an admin"
-        base = re.sub(r"[^A-Za-z0-9._@-]", "", str(claims.get("preferred_username") or email or sub))[:56] or "user"
-        username, n = base, 1
-        while find_user(username):
-            n += 1
-            username = f"{base}{n}"
+        username = free_username(claims.get("preferred_username") or email or sub)
         # SSO only proves who someone is: role and environments come from an admin here, so new
         # people wait (see a "your admin hasn't set you up yet" page) until an admin gives them access
         row = create_user(username, "", perms.lowest_role(), name, email, oidc_sub=sub, pending=True)
@@ -1131,10 +1137,20 @@ def init_app(app):
         if not is_admin(me) and (role not in perms.assignable_roles(me)
                                  or (role != perms.lowest_role() and not perms.has(me, "users.roles"))):
             role = perms.lowest_role()
+        email = (data.get("email") or "").strip()
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        if data.get("sso"):
+            # someone who'll sign in with SSO: their email is what matches them on first sign-in
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+                return _deny("Enter their email: it's how their first SSO sign-in finds this account", 400)
+            exists = db.get().execute("SELECT 1 FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
+            if exists:
+                return _deny("Someone with that email is already here", 400)
+            password = ""
+            username = username or free_username(email.split("@")[0])
         try:
-            row = create_user((data.get("username") or "").strip(), data.get("password") or "",
-                              role, (data.get("display_name") or "").strip(),
-                              (data.get("email") or "").strip())
+            row = create_user(username, password, role, (data.get("display_name") or "").strip(), email)
         except ValueError as e:
             return _deny(str(e), 400)
         audit("user.created", row["username"], {"role": row["role"], "sso_only": not row["password_hash"]})

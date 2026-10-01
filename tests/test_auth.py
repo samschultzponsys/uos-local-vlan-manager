@@ -328,3 +328,18 @@ def test_precreated_user_is_matched_by_verified_email_only(app, admin):
         row, _ = auth._oidc_user({"sub": "s-ok", "preferred_username": "jd2", "email": "Jane@Corp.io", "email_verified": True})
         assert row["username"] == "jane" and row["role"] == "supervisor" and not row["pending"]
         db.close()
+
+
+def test_add_sso_person_with_just_name_email_and_role(app, admin):
+    r = admin.post("/api/users", json={"sso": True, "display_name": "Pat Doe", "email": "pat.doe@corp.io", "role": "supervisor"})
+    u = r.get_json()["user"]
+    assert r.status_code == 200 and u["username"] == "pat.doe" and not u["has_password"] and u["role"] == "supervisor"
+    assert admin.post("/api/users", json={"sso": True, "display_name": "Pat 2", "email": "PAT.DOE@corp.io"}).status_code == 400
+    assert admin.post("/api/users", json={"sso": True, "display_name": "No mail"}).status_code == 400
+    with app.test_request_context("/"):
+        cfg = auth.stored_config()
+        cfg["oidc"].update(issuer="https://idp", client_id="x")
+        db.set_json("auth", cfg)
+        row, _ = auth._oidc_user({"sub": "pat-sub", "preferred_username": "pdoe", "email": "pat.doe@corp.io"})
+        assert row["id"] == u["id"] and not row["pending"]
+        db.close()

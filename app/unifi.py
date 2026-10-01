@@ -405,7 +405,7 @@ def integration_snapshot(client):
             conn = p.get("connector") or ""
             ports.append({
                 "idx": idx, "name": f"Port {idx}", "up": p.get("state") == "UP", "enabled": True,
-                "speed": _int(p.get("speedMbps")), "full_duplex": False, "media": conn,
+                "speed": _int(p.get("speedMbps")), "full_duplex": None, "media": conn,
                 "media_label": {"RJ45": "RJ45"}.get(conn, conn.replace("PLUS", "+")),
                 "sfp": conn not in ("", "RJ45"), "sfp_found": None, "is_uplink": False,
                 "wan": False, "role": None, "peer": None, "apps": [],

@@ -5,6 +5,32 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 2.8 — 2026-10-01
+
+### Added
+- **Add environment** at the bottom of the environment dropdown, for people who may add
+  environments. It opens the new-environment form straight away.
+- **Add someone who'll sign in with SSO** (Users → Add user → *Will sign in with SSO*): just
+  their display name, email and role. The username is made from their email, and their first
+  SSO sign-in finds the account by email.
+
+### Changed
+- **Link speeds are short and always fit**: **10M, 100M, 1G, 2.5G, 5G, 10G, 25G**, with
+  **FD** or **HD** for full / half duplex (e.g. *1G FD*), in tooltips, the port panel and the
+  List view.
+- **The version moved to the top bar**, next to the app's name (it used to sit bottom-left and
+  got cut off in narrow windows). Click it for *What's new*; it shows the update dot too.
+- **The All devices page is purely informational**: nothing on it opens or changes anything.
+  Point at a port for its details; switch to *Environment* to make changes.
+
+### Fixed
+- **Ports didn't pulse when the operating system asks for reduced motion** (Windows: *Animation
+  effects* off — which also applies in incognito windows). The glow doesn't move anything, so
+  it now stays on unless you choose **Solid** in Display options. The pulse is also a little
+  stronger.
+- **Hide ports without link** now works in every view. Tiles, Compact and List leave those
+  ports out; the Faceplate keeps the switch's layout and shows an empty socket.
+
 ## 2.7 — 2026-10-01
 
 ### Added

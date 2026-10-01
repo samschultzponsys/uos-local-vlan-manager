@@ -100,9 +100,16 @@ export const ROLE_LABEL = { admin: "Admin", supervisor: "Supervisor", viewer: "V
 export const MODE_LABEL = { auto: "Allow All", block_all: "Block All", custom: "Custom" };
 export const rank = (r) => ({ viewer: 0, supervisor: 1, admin: 2 }[r] ?? -1);
 
+/** 10M, 100M, 1G, 2.5G, 10G, 25G... short enough to always fit. */
 export function speedLabel(mbps) {
   if (!mbps) return "";
-  return mbps >= 1000 ? `${+(mbps / 1000).toFixed(1)} Gbps` : `${mbps} Mbps`;
+  return mbps >= 1000 ? `${+(mbps / 1000).toFixed(1)}G` : `${mbps}M`;
+}
+/** A link as "1G FD" / "100M HD" (no duplex when UniFi doesn't say). */
+export function linkLabel(port) {
+  if (!port.up) return "";
+  const d = port.full_duplex === true ? " FD" : port.full_duplex === false ? " HD" : "";
+  return speedLabel(port.speed) + d;
 }
 
 export function bytes(n) {

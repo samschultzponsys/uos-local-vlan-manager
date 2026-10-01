@@ -21,14 +21,14 @@ const roleName = (roles, key) => ((roles || []).find((r) => r.key === key) || { 
 // Settings
 // ============================================================================
 
-export function SettingsModal({ onClose, onSaved }) {
+export function SettingsModal({ onClose, onSaved, addEnv }) {
   const [tab, setTab] = useState("envs");
   const tabs = [["envs", "Environments", "server"], ["auth", "Sign-in", "shield"], ["behavior", "Ports", "grid"],
     ["updates", "Updates", "sparkle"]];
   return html`<${Modal} title="Settings" icon="settings" onClose=${onClose} wide>
     <nav class="tabs">${tabs.map(([k, l, i]) => html`<button class=${tab === k ? "on" : ""} onClick=${() => setTab(k)}><${Icon} name=${i} size=${15} />${l}</button>`)}</nav>
     <div class="tab-body">
-      ${tab === "envs" && html`<${EnvironmentsTab} onSaved=${onSaved} />`}
+      ${tab === "envs" && html`<${EnvironmentsTab} onSaved=${onSaved} startNew=${addEnv} />`}
       ${tab === "auth" && html`<${AuthTab} />`}
       ${tab === "behavior" && html`<${BehaviorTab} onSaved=${onSaved} />`}
       ${tab === "updates" && html`<${UpdatesTab} />`}
@@ -73,9 +73,9 @@ const CLOUD_NOTE = {
 const NEW_ENV = { id: null, name: "", mode: "local", host: "", site: "default", console_id: "", verify_ssl: false,
   supervisors_protected: false, notes: "", vlan_colors: {}, api_key_set: false };
 
-function EnvironmentsTab({ onSaved }) {
+function EnvironmentsTab({ onSaved, startNew }) {
   const [list, setList] = useState(null);
-  const [edit, setEdit] = useState(null);
+  const [edit, setEdit] = useState(startNew ? NEW_ENV : null);
   const load = () => api("/api/admin/envs").then((r) => setList(r.envs)).catch((e) => toast(e.message, "err"));
   useEffect(() => { load(); }, []);
   if (edit) return html`<${EnvEditor} env=${edit} onDone=${(changed) => { setEdit(null); load(); if (changed) onSaved(); }} />`;
@@ -403,17 +403,19 @@ export function UsersModal({ me, onClose }) {
       <button class=${tab === "roles" ? "on" : ""} onClick=${() => setTab("roles")}><${Icon} name="shield" size=${15} />Roles & abilities</button></nav>`}
     ${!data ? html`<${Spinner} />` : tab === "roles" ? html`<${RolesEditor} onChanged=${load} />` : html`
     ${adding && html`<div class="panel add-user">
+      <${Toggle} checked=${!!form.sso} onChange=${(v) => setForm({ ...form, sso: v })} label="Will sign in with SSO"
+        hint="Just their name, email and role: their first SSO sign-in finds this account by email and they're ready to go." />
       <div class="grid3">
-        <${Field} label="Username"><input value=${form.username} onInput=${(e) => setForm({ ...form, username: e.target.value })} /></${Field}>
+        ${!form.sso && html`<${Field} label="Username"><input value=${form.username} onInput=${(e) => setForm({ ...form, username: e.target.value })} /></${Field}>`}
         <${Field} label="Display name"><input value=${form.display_name} onInput=${(e) => setForm({ ...form, display_name: e.target.value })} /></${Field}>
-        <${Field} label="Email"><input value=${form.email} onInput=${(e) => setForm({ ...form, email: e.target.value })} /></${Field}>
-        <${Field} label="Password" hint="Leave blank for an SSO-only user."><input type="password" autocomplete="new-password" value=${form.password} onInput=${(e) => setForm({ ...form, password: e.target.value })} /></${Field}>
+        <${Field} label=${form.sso ? "Email (required)" : "Email"}><input type="email" value=${form.email} onInput=${(e) => setForm({ ...form, email: e.target.value })} /></${Field}>
+        ${!form.sso && html`<${Field} label="Password" hint="Leave blank for an SSO-only user."><input type="password" autocomplete="new-password" value=${form.password} onInput=${(e) => setForm({ ...form, password: e.target.value })} /></${Field}>`}
         ${(data.admin || can("users.roles")) && html`<${Field} label="Role"><select value=${form.role || rolesByLevel[rolesByLevel.length - 1].key} onChange=${(e) => setForm({ ...form, role: e.target.value })}>
           ${rolesByLevel.filter((r) => data.assignable_roles.includes(r.key)).map((r) => html`<option value=${r.key}>${r.name}</option>`)}</select></${Field}>`}
         <div class="field end"><button class="btn primary" onClick=${async () => {
           try {
             const r = await api("/api/users", { method: "POST", body: form });
-            toast(`Added ${form.username}`); setForm({ username: "", display_name: "", email: "", password: "", role: "" }); setAdding(false);
+            toast(`Added ${form.display_name || r.user.username}`); setForm({ username: "", display_name: "", email: "", password: "", role: "", sso: false }); setAdding(false);
             if (r.user.role !== "admin" && can("users.access")) setView({ kind: "access", user: r.user }); else load();
           } catch (e) { toast(e.message, "err"); }
         }}>Create</button></div>
