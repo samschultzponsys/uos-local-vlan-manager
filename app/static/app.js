@@ -7,6 +7,7 @@ import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } fro
 import { SetupWizard, wizardNeeded } from "./wizard.js";
 import { FeedbackPage } from "./feedback.js";
 import { Tour, tourSteps, tourCaps } from "./tour.js";
+import { UnlockHost, announce } from "./achievements.js";
 
 // --- tooltip ------------------------------------------------------------------
 
@@ -1271,6 +1272,7 @@ function App() {
     const m = await api("/api/me");
     if (m.method === "none") m.prefs = lsGet("vlanmgr.prefs", {});
     setMe(m);
+    if (m.achievements && m.achievements.new.length) announce(m.achievements.new, m.achievements.catch_up);
     return m;
   }, []);
   useEffect(() => { if (me) applyZoom((me.prefs || {}).scales); }, [me && JSON.stringify((me.prefs || {}).scales || {})]);
@@ -1630,6 +1632,7 @@ function App() {
       if (!steps.length) { setTimeout(done, 0); return null; }
       return html`<${Tour} key=${tour.since ? "new" : "all"} steps=${steps} onDone=${done} />`;
     })()}
+    ${settings.achievements && html`<${UnlockHost} onOpen=${() => setModal("account")} />`}
     <${TipHost} /><${AskHost} /><${Toasts} />`;
 }
 

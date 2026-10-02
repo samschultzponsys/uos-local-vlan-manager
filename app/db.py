@@ -160,7 +160,20 @@ CREATE TABLE IF NOT EXISTS feedback_unseen (
     item_id  INTEGER NOT NULL REFERENCES feedback(id) ON DELETE CASCADE,
     PRIMARY KEY (user_id, item_id)
 );
+-- achievements people earned (see achievements.py), and the days they used the app
+CREATE TABLE IF NOT EXISTS user_achievements (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key        TEXT NOT NULL,
+    earned_at  INTEGER NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
+CREATE TABLE IF NOT EXISTS user_days (
+    user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    day      TEXT NOT NULL,
+    PRIMARY KEY (user_id, day)
+);
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
+CREATE INDEX IF NOT EXISTS audit_user ON audit(username, action);
 CREATE INDEX IF NOT EXISTS feedback_comments_item ON feedback_comments(item_id);
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
 """

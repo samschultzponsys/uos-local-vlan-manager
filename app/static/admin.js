@@ -3,6 +3,7 @@ import {
   html, api, Icon, Modal, Toggle, Segmented, Field, Copy, toast, Spinner, SsoButton, ask, Avatar, pickImage,
   Logo, setBrand, vlanColors, ROLE_LABEL, MODE_LABEL, ago, when, rank, bytes,
 } from "./ui.js";
+import { AchievementsList, BadgeStrip } from "./achievements.js";
 
 
 /** Super admin and Admin: built in, every environment, abilities fixed */
@@ -349,6 +350,10 @@ function BehaviorTab({ onSaved }) {
         options=${["auto", "block_all", "custom"].map((m) => ({ value: m, label: MODE_LABEL[m] }))} /></${Field}>
     <${Toggle} checked=${s.protect_uplinks} onChange=${(v) => set("protect_uplinks", v)} label="Protect uplinks"
       hint="Uplinks, links to other UniFi devices, LAG and mirror ports can only be changed by an admin, after a warning." />
+    <${Toggle} checked=${s.achievements} onChange=${async (v) => {
+        try { await api("/api/settings/achievements", { method: "PUT", body: { enabled: v } }); set("achievements", v); toast(v ? "Achievements on" : "Achievements off"); onSaved(); }
+        catch (e) { toast(e.message, "err"); }
+      }} label="Achievements" hint="Badges people earn by using the app, shown in My account and on Users. Turning them off hides them; nothing is lost." />
     <${Field} label="Refresh every (seconds)"><input type="number" min="5" max="600" value=${s.poll_seconds} onInput=${(e) => set("poll_seconds", e.target.value)} /></${Field}>
     <div class="form-actions"><button class="btn primary" onClick=${async () => {
       try { await api("/api/settings", { method: "PUT", body: { default_tagged_mode: s.default_tagged_mode, protect_uplinks: s.protect_uplinks, poll_seconds: s.poll_seconds } }); toast("Saved"); onSaved(); } catch (e) { toast(e.message, "err"); }
@@ -632,7 +637,11 @@ export function UsersModal({ me, onClose }) {
   const [form, setForm] = useState(blank);
   const [pwFor, setPwFor] = useState(null);
   const [mergeFrom, setMergeFrom] = useState(null);
-  const load = () => api("/api/users").then(setData).catch((e) => toast(e.message, "err"));
+  const [badges, setBadges] = useState({});
+  const load = () => {
+    api("/api/users").then(setData).catch((e) => toast(e.message, "err"));
+    api("/api/achievements/people").then(setBadges).catch(() => {});
+  };
   useEffect(() => { load(); }, []);
   const can = (c) => data && data.my_caps.includes(c);
 
@@ -647,7 +656,8 @@ export function UsersModal({ me, onClose }) {
   }
   if (view && view.kind === "edit") {
     return html`<${Modal} title=${`Edit · ${view.user.username}`} icon="user" onClose=${onClose} wide>
-      <${UserEditor} user=${view.user} data=${data} me=${me} onSave=${async (b) => { if (await update(view.user, b, "Saved")) back(); }} onCancel=${back} /></${Modal}>`;
+      <${UserEditor} user=${view.user} data=${data} me=${me} onSave=${async (b) => { if (await update(view.user, b, "Saved")) back(); }} onCancel=${back} />
+      ${badges && Object.keys(badges).length > 0 && html`<h4 class="section">Achievements</h4><${AchievementsList} uid=${view.user.id} self=${view.user.id === me.id} />`}</${Modal}>`;
   }
   const rolesByLevel = data ? data.roles.slice().sort((x, y) => y.level - x.level) : [];
   return html`<${Modal} title="Users" icon="users" onClose=${onClose} wide
@@ -693,6 +703,7 @@ export function UsersModal({ me, onClose }) {
           <div><b>${u.display_name || u.username}</b>${u.seeded && html` <span class="badge">first admin</span>`}
             ${u.pending && html` <span class="badge warn" title="Signed in with SSO; sees a 'your admin hasn't set you up yet' page until you give them access, a role or abilities">waiting for setup</span>`}
             ${u.must_change_password && html` <span class="badge" title="An admin set their password; they choose their own at next sign-in">new password due</span>`}
+            <${BadgeStrip} s=${badges[u.id]} />
             <div class="muted small">${u.username}${u.email ? ` · ${u.email}` : ""}${u.sso ? (u.has_password ? " · SSO + password" : " · SSO") : u.sso_allowed ? (u.has_password ? " · password, SSO ready" : " · SSO ready") : ""}</div></div></div></td>
         <td>${!self && !locked && (data.admin || can("users.roles")) && (data.admin || data.assignable_roles.includes(u.role))
             ? html`<select class="sm" value=${u.role} onChange=${(e) => update(u, { role: e.target.value }, `${u.username} is now ${roleName(data.roles, e.target.value)}`)}>
@@ -1043,6 +1054,9 @@ export function AccountModal({ me, onClose }) {
       </div></div>
 
     <${ProfileForm} me=${me} />
+    ${me.id && me.achievements !== null && !me.impersonator && html`<details class="ach-wrap" open>
+      <summary><h4 class="section">Achievements${me.achievements ? html` <span class="badge">${me.achievements.count}</span>` : ""}</h4></summary>
+      <${AchievementsList} self /></details>`}
     ${me.method !== "token" && html`<h4 class="section">${me.has_password ? "Change password" : "Set a password"}</h4>
     <div class="grid3">
       ${me.has_password && html`<${Field} label="Current password"><input type="password" autocomplete="current-password" value=${pw.current} onInput=${(e) => setPw({ ...pw, current: e.target.value })} /></${Field}>`}

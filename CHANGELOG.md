@@ -5,6 +5,26 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 4.6 — 2026-10-02
+
+### Added
+- **Achievements**: 59 badges people earn by using the app, in bronze, silver, gold and platinum,
+  across *Getting started*, *Make it yours*, *Ports*, *Devices*, *Feedback*, *People & admin* and
+  *Regulars*: from *Hello, world* and *Tour guide* to *First patch* / *Patch panel* / *Cable
+  wrangler* / *Network architect* (1 / 10 / 50 / 250 port changes), *Trunk call*, *Fearless*
+  (a protected port), *Ctrl+Z*, *Have you tried turning it off and on?*, *Shipped!*, *Crowd
+  favorite*, *Gatekeeper*, *Better together*, *Veteran* (100 days) and *Completionist*.
+  - **Credit for the past**: they're worked out from what the app already knows (the activity
+    log, feedback, settings, pictures), so on their next visit people get everything they've
+    already done, in one "N achievements unlocked" card.
+  - **My account → Achievements**: every badge with the date earned, progress bars on the counted
+    ones (e.g. 9 / 10), and filters for earned / to do. People only see badges their abilities let
+    them earn (plus any they already have).
+  - **Users**: each person's best badges and count under their name, and the full list on their
+    edit page.
+  - An "Achievement unlocked" card pops up when one is earned.
+  - **Settings → Ports → Achievements** turns them off (nothing is lost).
+
 ## 4.5 — 2026-10-02
 
 ### Fixed

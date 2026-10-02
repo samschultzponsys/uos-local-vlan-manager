@@ -16,6 +16,7 @@ import time
 
 from flask import Flask, g, jsonify, redirect, request, send_from_directory
 
+import achievements
 import auth
 import brand
 import db
@@ -54,6 +55,7 @@ app.config.update(SESSION_COOKIE_NAME="vlanmgr_flow", SESSION_COOKIE_HTTPONLY=Tr
 app.secret_key = secrets.token_hex(32)
 auth.init_app(app)
 feedback.register(app)
+achievements.register(app)
 feedback.listeners.append(integrations.on_feedback)
 versioning.SOURCE = integrations.update_source
 
@@ -238,6 +240,7 @@ def public_settings():
     return {
         "app_name": db.get_setting("app_name"),
         "brand": brand.public(),
+        "achievements": achievements.enabled(),
         "default_tagged_mode": db.get_setting("default_tagged_mode"),
         "poll_seconds": int(db.get_setting("poll_seconds") or 10),
         "protect_uplinks": db.setting_bool("protect_uplinks"),
@@ -464,6 +467,8 @@ def _set_port(env_id, device_id, idx, body, action="port.set", via=None, extra=N
         detail["after"].update({"tagged": f"not supported by {ndev['model_name']}", "excluded": []})
     if via:
         detail["via"] = via
+    if port["protected"]:
+        detail["protected"] = True
     detail.update(extra or {})
     # the exact settings before, so the change can be undone
     detail["undo"] = {"native_network_id": port["native_network_id"], "tagged_mode": port["tagged_mode"],
@@ -659,6 +664,7 @@ def api_bulk_ports(env_id):
                            "profile": port["profile_name"]},
                 "after": {"native": _net_label(nets, native),
                           "tagged": f"not supported by {nd['model_name']}" if native_only else unifi.MODE_LABEL[m]},
+                **({"protected": True} if port["protected"] else {}),
                 "undo": {"native_network_id": port["native_network_id"], "tagged_mode": port["tagged_mode"],
                          "excluded_network_ids": list(port["excluded_network_ids"])},
                 "applied": {"native_network_id": native, "tagged_mode": m,
