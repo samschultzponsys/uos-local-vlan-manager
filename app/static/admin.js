@@ -260,6 +260,10 @@ function AuthTab() {
       <${Field} label="Groups claim"><input value=${a.oidc.groups_claim} onInput=${(e) => setO("groups_claim", e.target.value)} /></${Field}>
       <${Field} label="Allowed groups" hint="Comma-separated. Empty = anyone your provider lets through."><input value=${a.oidc.allowed_groups} onInput=${(e) => setO("allowed_groups", e.target.value)} /></${Field}>
     </div>
+    <${Field} label="A first SSO sign-in joins the existing account with the same email"
+      hint="Only when your provider says the email is verified. After that, they can sign in either way: with SSO or with their password.">
+      <${Segmented} value=${a.oidc.link_by_email || "any"} onChange=${(v) => setO("link_by_email", v)}
+        options=${[{ value: "any", label: "Any account" }, { value: "marked", label: "Only ones marked for SSO" }]} /></${Field}>
     <${Toggle} checked=${a.oidc.auto_create} onChange=${(v) => setO("auto_create", v)} label="Let new people sign in with SSO" hint="On: someone you haven't added gets an account that waits for you (they see “your admin hasn't set you up yet”) until you give them access, a role or abilities. Off: only people added under Users can sign in. Either way, people you added are matched by username or by email (when your provider says the email is verified)." />
     <${Toggle} checked=${a.oidc_auto_login} onChange=${(v) => set("oidc_auto_login", v)} label="Sign in automatically with SSO"
       hint="Visiting the app goes straight to your provider. /login always shows the login page as a fallback." />

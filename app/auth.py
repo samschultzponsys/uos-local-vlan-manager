@@ -67,6 +67,9 @@ DEFAULT_OIDC = {
     "scopes": "openid profile email", "redirect_uri": "",
     "groups_claim": "groups", "allowed_groups": "",
     "auto_create": True,
+    # a first SSO sign-in with a verified email joins the account with that email:
+    # "any" account (password or not), or only accounts "marked" for SSO / without a password
+    "link_by_email": "any",
     # how the client ID/secret are sent to the token endpoint
     "token_auth_method": "client_secret_basic",
 }
@@ -710,8 +713,10 @@ def _oidc_user(claims):
             cand = d.execute("SELECT * FROM users WHERE (username=? COLLATE NOCASE OR (email!='' AND email=? COLLATE NOCASE)) "
                              "AND oidc_sub IS NULL AND password_hash='' AND seeded=0", (key, key)).fetchone()
             if cand is None and key == email:
+                # any account with this (provider-verified) email, or only those marked for SSO
+                marked = "" if o.get("link_by_email", "any") == "any" else "AND sso_allowed=1 "
                 cand = d.execute("SELECT * FROM users WHERE email!='' AND email=? COLLATE NOCASE AND oidc_sub IS NULL "
-                                 "AND sso_allowed=1", (key,)).fetchone()
+                                 f"AND disabled=0 {marked}ORDER BY seeded DESC, id LIMIT 1", (key,)).fetchone()
             if cand:
                 d.execute("UPDATE users SET oidc_sub=? WHERE id=?", (sub, cand["id"]))
                 d.commit()
@@ -1506,6 +1511,10 @@ def init_app(app):
                     cand["oidc"][k] = str(o[k]).strip()
             elif k == "auto_create":
                 cand["oidc"][k] = bool(o[k])
+            elif k == "link_by_email":
+                if o[k] not in ("any", "marked"):
+                    return _deny("Link by email: any account or only marked ones", 400)
+                cand["oidc"][k] = o[k]
             elif k == "token_auth_method":
                 if o[k] not in TOKEN_AUTH_METHODS:
                     return _deny("Unknown client authentication method", 400)

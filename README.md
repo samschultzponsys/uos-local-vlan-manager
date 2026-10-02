@@ -333,8 +333,9 @@ Set up under **Settings → Sign-in**. Any combination works:
   - **Add people first** (Users → Add user, with their email and no password) and they're
     ready on their first SSO sign-in: matched by username, or by email when the provider
     doesn't mark it unverified.
-  - **SSO and a password**: tick *Can also sign in with a password* when adding them (or *Can
-    sign in with SSO* on an existing person). Such accounts link to SSO only by verified email.
+  - **SSO and a password**: add someone with their email and a password; their first SSO sign-in
+    with that (verified) email joins the same account, and both ways work from then on. Settings →
+    Sign-in can limit joining to accounts marked *Will sign in with SSO*.
   - **Passwords you set are temporary**: the person chooses their own at their next sign-in,
     before they see anything else, whether they sign in with the password or with SSO.
   - Anyone else who signs in with SSO gets an account **waiting for setup**: they see "your

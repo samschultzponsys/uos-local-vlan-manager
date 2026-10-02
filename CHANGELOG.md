@@ -5,6 +5,21 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 4.5 — 2026-10-02
+
+### Fixed
+- **Choose your own password**: *Save and continue* gave no feedback when something was wrong
+  (passwords that don't match, fewer than 8 characters, reusing the one you were given), so it
+  looked like it did nothing. The reason now shows on the form.
+
+### Changed
+- **SSO joins existing accounts by email**: a person's first SSO sign-in now joins the account
+  that already has their email (when the identity provider says it's verified), whether or not it
+  was marked for SSO and whichever way they sign in first. After that both work: SSO and their
+  password. Settings → Sign-in → *A first SSO sign-in joins the existing account with the same
+  email* can limit this to accounts marked for SSO, as before. People you didn't add still wait
+  for setup, as before.
+
 ## 4.4 — 2026-10-01
 
 ### Added

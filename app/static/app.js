@@ -1646,18 +1646,20 @@ const TOUR_VERSION = "3.7";
 function ChoosePassword({ me }) {
   const [pw, setPw] = useState({ password: "", confirm: "" });
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");   // shown on the form itself: this screen has nothing else around it
   window.__vlanmgrStarted = true;
   const save = async (body) => {
-    setBusy(true);
+    setBusy(true); setErr("");
     try { await api("/api/me/password", { method: "PUT", body }); location.reload(); }
-    catch (e) { toast(e.message, "err"); setBusy(false); }
+    catch (e) { setErr(e.status === 401 ? "You were signed out - sign in again." : e.message); setBusy(false); }
   };
   const submit = (e) => {
     e.preventDefault();
-    if (pw.password.length < 8) return toast("At least 8 characters", "err");
-    if (pw.password !== pw.confirm) return toast("The passwords don't match", "err");
+    if (pw.password.length < 8) return setErr("Use at least 8 characters.");
+    if (pw.password !== pw.confirm) return setErr("The two passwords don't match.");
     save({ password: pw.password });
   };
+  const edit = (k) => (e) => { setPw({ ...pw, [k]: e.target.value }); if (err) setErr(""); };
   const signOut = async () => { const r = await api("/api/auth/logout", { method: "POST" }); location.href = r.redirect; };
   return html`<div class="boot waiting">
     <${Logo} size=${52} />
@@ -1667,10 +1669,11 @@ function ChoosePassword({ me }) {
         Pick one only you know before you continue.</p>
       <input type="text" name="username" autocomplete="username" value=${me.username} hidden />
       <label class="field"><span class="field-label">New password</span>
-        <input type="password" autocomplete="new-password" autofocus value=${pw.password} onInput=${(e) => setPw({ ...pw, password: e.target.value })} /></label>
+        <input type="password" autocomplete="new-password" autofocus value=${pw.password} onInput=${edit("password")} /></label>
       <label class="field"><span class="field-label">Repeat it</span>
-        <input type="password" autocomplete="new-password" value=${pw.confirm} onInput=${(e) => setPw({ ...pw, confirm: e.target.value })} /></label>
-      <small class="hint">At least 8 characters.</small>
+        <input type="password" autocomplete="new-password" value=${pw.confirm} onInput=${edit("confirm")} /></label>
+      <small class="hint">At least 8 characters, and not the one you were given.</small>
+      ${err && html`<div class="notice err" role="alert"><${Icon} name="alert" /><div>${err}</div></div>`}
       <button class="btn primary" type="submit" disabled=${busy}>Save and continue</button>
       ${me.method === "oidc" && html`<p class="muted small choose-pw-sso">You signed in with SSO, which keeps working. This sets the password for
         signing in without it.</p>`}

@@ -503,3 +503,35 @@ def test_view_as_someone_who_never_signed_in(app, admin):
     assert me["username"] == "newbie" and me["impersonator"]["username"] == "admin" and not me.get("must_change_password")
     assert admin.get("/api/envs").status_code == 200
     assert admin.post("/api/impersonate/stop", json={}).status_code == 200
+
+
+def test_sso_joins_an_existing_account_by_verified_email(app, admin):
+    import auth
+    # a plain local account (not marked for SSO) with an email
+    uid = admin.post("/api/users", json={"username": "lee", "password": "temppass123", "email": "lee@corp.test",
+                                         "must_change": False}).get_json()["user"]["id"]
+    with app.test_request_context():
+        cfg = auth.stored_config()
+        cfg["oidc"].update(issuer="https://idp", client_id="x")
+        db.set_json("auth", cfg)
+        # an unverified email never joins
+        u, _ = auth._oidc_user({"sub": "lee-1", "email": "lee@corp.test", "email_verified": False})
+        assert u is None or u["id"] != uid
+        db.get().execute("DELETE FROM users WHERE oidc_sub='lee-1'")
+        db.get().commit()
+        # verified: joins, whatever the account's SSO flag (the default)
+        u, err = auth._oidc_user({"sub": "lee-2", "email": "LEE@corp.test", "email_verified": True})
+        assert err is None and u["id"] == uid
+    assert login(app.test_client(), "lee", "temppass123").status_code == 200   # the password still works
+
+
+def test_sso_join_can_be_limited_to_marked_accounts(app, admin):
+    import auth
+    uid = admin.post("/api/users", json={"username": "kim", "password": "temppass123", "email": "kim@corp.test",
+                                         "must_change": False}).get_json()["user"]["id"]
+    r = admin.put("/api/settings/auth", json={"oidc": {"issuer": "https://idp", "client_id": "x", "link_by_email": "marked"}})
+    assert r.status_code == 200, r.get_json()
+    with app.test_request_context():
+        u, _ = auth._oidc_user({"sub": "kim-1", "email": "kim@corp.test", "email_verified": True})
+        assert u is None or u["id"] != uid
+    assert admin.put("/api/settings/auth", json={"oidc": {"link_by_email": "everyone"}}).status_code == 400
