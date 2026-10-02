@@ -11,12 +11,13 @@ optionally the ability someone needs to be able to earn it (others don't see it 
 """
 
 import json
+from datetime import datetime
 
 import auth
 import db
 import perms
 
-GROUPS = ["Getting started", "Make it yours", "Ports", "Devices", "Feedback", "People & admin", "Regulars"]
+GROUPS = ["Getting started", "Make it yours", "Ports", "Devices", "Feedback", "People & admin", "Regulars", "Secrets"]
 
 # key, name, how, icon, tier, group, needs (ability), goal (for counted ones)
 CATALOG = [
@@ -86,6 +87,38 @@ CATALOG = [
     ("collector", "Collector", "Earn 20 achievements.", "layers", "gold", "Regulars", None, 20),
     ("completionist", "Completionist", "Earn 40 achievements.", "sparkle", "platinum", "Regulars", None, 40),
 ]
+# secret ones: "???" until earned. Times use the server's clock, so set TZ in compose to your timezone.
+SECRETS = [
+    ("indecisive", "Indecisive", "Changed the same port 3 times within 10 minutes.", "refresh", "bronze", "ports.change"),
+    ("boomerang", "Boomerang", "Changed a port and put it back exactly as it was within 5 minutes.", "uplink", "silver", "ports.change"),
+    ("undo_undo", "Undo the undo", "Undid an undo.", "refresh", "silver", "ports.change"),
+    ("again_and_again", "Have you tried turning it off and on again... and again?", "Power-cycled the same port 3 times in 10 minutes.", "power", "silver", "ports.poe"),
+    ("blink_twice", "Blink twice if you need help", "Blinked the same device's locate light 5 times in a day.", "target", "silver", "devices.manage"),
+    ("lights_out", "Lights out", "Turned a device's status light off.", "moon", "bronze", "devices.manage"),
+    ("friday_deploy", "Friday deploy", "Changed a port on a Friday after 4 pm.", "alert", "gold", "ports.change"),
+    ("night_shift", "Night shift", "Changed a port between 1 and 5 am.", "moon", "gold", "ports.change"),
+    ("weekend_warrior", "Weekend warrior", "Changed a port on a Saturday or Sunday.", "sun", "silver", "ports.change"),
+    ("vlan1", "VLAN 1 is not a strategy", "Put a port back on the Default network.", "layers", "bronze", "ports.change"),
+    ("answer42", "The answer to everything", "Changed port 42, or put a port on VLAN 42.", "sparkle", "gold", "ports.change"),
+    ("too_many_cooks", "Too many cooks", "Third person to change the same port on the same day.", "users", "silver", "ports.change"),
+    ("rubber_stamp", "Rubber stamp", "Approved a change request within a minute of it arriving.", "check", "silver", "ports.change"),
+    ("always_dns", "It's always DNS", "Reported a bug with DNS in the title.", "globe", "bronze", "feedback.submit"),
+    ("cobbler", "The cobbler's children", "Reported a bug about the feedback board itself.", "bug", "silver", "feedback.submit"),
+    ("patient_zero", "Patient zero", "Reported the very first bug that got fixed.", "bug", "gold", "feedback.submit"),
+    ("rainbow_road", "Rainbow road", "Gave 7 different networks your own colors.", "palette", "silver", None),
+    ("ghost_whisperer", "Ghost whisperer", "Viewed the app as someone who had never signed in.", "eye", "silver", "users.view_as"),
+    ("welcome_back", "Welcome back", "Came back after 30 days or more away.", "login", "silver", None),
+    ("konami", "Up, up, down, down...", "Entered the Konami code.", "sparkle", "gold", None),
+    ("disco", "Disco", "Flipped between day and night 10 times in a minute.", "sun", "silver", None),
+    ("hypnotized", "Hypnotized", "Kept the glowing ports open for 8 hours straight.", "eye", "gold", None),
+    ("speedrun", "Speedrun", "Finished the setup in under 20 seconds.", "clock", "gold", None),
+    ("tourist", "Tourist", "Took the guided tour 3 times.", "target", "bronze", None),
+    ("secret_agent", "Secret agent", "Found every other secret achievement.", "key", "platinum", None),
+]
+SECRET_KEYS = {x[0] for x in SECRETS}
+CATALOG += [(k, n, h, i, t, "Secrets", needs, None) for k, n, h, i, t, needs in SECRETS]
+# things only the browser sees, reported to /api/achievements/event (counted per person)
+EVENTS = {"konami": 1, "disco": 1, "hypnotized": 1, "speedrun": 1, "tour": 3}
 BY_KEY = {a[0]: a for a in CATALOG}
 TIERS = ("bronze", "silver", "gold", "platinum")
 
@@ -191,7 +224,117 @@ def progress(user_row):
         "regular": (min(days, 7), 7), "fixture": (min(days, 30), 30), "veteran": (min(days, 100), 100),
         "founding": one(rank <= 10),
     }
+    p.update(_secrets(conn, user_row, name, c, sets, prefs, mine))
     return p
+
+
+def _local(ts):
+    return datetime.fromtimestamp(ts)
+
+
+def _within(times, n, secs):
+    """Are there n of these times within `secs` of each other?"""
+    times = sorted(times)
+    return any(times[i + n - 1] - times[i] <= secs for i in range(len(times) - n + 1))
+
+
+def _secrets(conn, row, name, c, sets, prefs, mine):
+    uid = row["id"]
+    one = lambda ok: (1 if ok else 0, 1)   # noqa: E731
+    rows = conn.execute("SELECT id, ts, target, detail FROM audit WHERE username=? AND ok=1 AND action='port.set' ORDER BY ts",
+                        (name,)).fetchall() if c.get("port.set") else []
+    by_port = {}
+    for r in rows:
+        by_port.setdefault(r["target"], []).append((r["ts"], json.loads(r["detail"] or "{}")))
+    boomerang = False
+    for changes in by_port.values():
+        for (t1, d1), (t2, d2) in zip(changes, changes[1:]):
+            b1, a2 = d1.get("before") or {}, d2.get("after") or {}
+            if t2 - t1 <= 300 and b1.get("native") and (b1.get("native"), b1.get("tagged")) == (a2.get("native"), a2.get("tagged")):
+                boomerang = True
+    stamps = [_local(r["ts"]) for r in rows]
+    afters = [(json.loads(r["detail"] or "{}").get("after") or {}) for r in rows]
+
+    undo_undo = False
+    if c.get("port.undo"):
+        for r in conn.execute("SELECT detail FROM audit WHERE username=? AND ok=1 AND action='port.undo'", (name,)):
+            of = json.loads(r["detail"] or "{}").get("undo_of")
+            if of and conn.execute("SELECT 1 FROM audit WHERE id=? AND action='port.undo'", (of,)).fetchone():
+                undo_undo = True
+
+    def grouped(action):
+        g = {}
+        for r in conn.execute("SELECT ts, target FROM audit WHERE username=? AND ok=1 AND action=?", (name, action)):
+            g.setdefault(r["target"], []).append(r["ts"])
+        return g
+
+    cycles = grouped("port.power_cycle") if c.get("port.power_cycle") else {}
+    blinks = grouped("device.locate") if c.get("device.locate") else {}
+    blink_days = any(max([sum(1 for t in ts if _local(t).date() == d) for d in {_local(t).date() for t in ts}] or [0]) >= 5
+                     for ts in blinks.values())
+    lights_out = c.get("device.updated") and any(json.loads(r[0] or "{}").get("led") == "off" for r in conn.execute(
+        "SELECT detail FROM audit WHERE username=? AND ok=1 AND action='device.updated'", (name,)))
+
+    cooks = False
+    for target in by_port:
+        mine_days = {_local(t).date() for t, _ in by_port[target]}
+        others = conn.execute("SELECT username, ts FROM audit WHERE action='port.set' AND ok=1 AND target=? ORDER BY ts", (target,)).fetchall()
+        for day in mine_days:
+            order = []
+            for o in others:
+                if _local(o["ts"]).date() == day and o["username"].split(" (as ")[0] not in order:
+                    order.append(o["username"].split(" (as ")[0])
+            if name in order[2:]:
+                cooks = True
+
+    stamp = False
+    if c.get("request.approved"):
+        for r in conn.execute("SELECT ts, target FROM audit WHERE username=? AND ok=1 AND action='request.approved'", (name,)):
+            item = conn.execute("SELECT created_at FROM feedback WHERE id=?", (int(str(r["target"]).lstrip("#") or 0),)).fetchone()
+            if item and r["ts"] - item["created_at"] <= 60:
+                stamp = True
+
+    titles = conn.execute("SELECT kind, title, body FROM feedback WHERE user_id=?", (uid,)).fetchall()
+    first_fixed = conn.execute("SELECT user_id FROM feedback WHERE kind='bug' AND status='done' AND closed_at>0 "
+                               "ORDER BY closed_at, id LIMIT 1").fetchone()
+
+    ghost = False
+    if c.get("user.impersonate"):
+        for r in conn.execute("SELECT ts, target FROM audit WHERE username=? AND ok=1 AND action='user.impersonate'", (name,)):
+            t = conn.execute("SELECT id, last_login FROM users WHERE username=?", (r["target"],)).fetchone()
+            if t and (not t["last_login"] or not conn.execute(
+                    "SELECT 1 FROM user_days WHERE user_id=? AND day<=date(?, 'unixepoch', 'localtime')", (t["id"], r["ts"])).fetchone()):
+                ghost = ghost or not t["last_login"] or t["last_login"] > r["ts"]
+
+    days = [datetime.strptime(r[0], "%Y-%m-%d").date() for r in conn.execute(
+        "SELECT day FROM user_days WHERE user_id=? ORDER BY day", (uid,))]
+    events = {r[0]: r[1] for r in conn.execute("SELECT event, n FROM user_events WHERE user_id=?", (uid,))}
+    colors = len(prefs.get("vlan_colors") or {}) + len(prefs.get("shared_colors") or {})
+
+    return {
+        "indecisive": one(any(_within([t for t, _ in ch], 3, 600) for ch in by_port.values())),
+        "boomerang": one(boomerang),
+        "undo_undo": one(undo_undo),
+        "again_and_again": one(any(_within(ts, 3, 600) for ts in cycles.values())),
+        "blink_twice": one(blink_days),
+        "lights_out": one(lights_out),
+        "friday_deploy": one(any(d.weekday() == 4 and d.hour >= 16 for d in stamps)),
+        "night_shift": one(any(1 <= d.hour < 5 for d in stamps)),
+        "weekend_warrior": one(any(d.weekday() >= 5 for d in stamps)),
+        "vlan1": one(any(str(a.get("native", "")).endswith("(1)") for a in afters)),
+        "answer42": one(any(t.endswith("/ port 42") for t in by_port) or any(str(a.get("native", "")).endswith("(42)") for a in afters)),
+        "too_many_cooks": one(cooks),
+        "rubber_stamp": one(stamp),
+        "always_dns": one(any(t["kind"] == "bug" and "dns" in (t["title"] or "").lower() for t in titles)),
+        "cobbler": one(any(t["kind"] == "bug" and "feedback" in f"{t['title']} {t['body']}".lower() for t in titles)),
+        "patient_zero": one(first_fixed and first_fixed["user_id"] == uid),
+        "rainbow_road": (min(colors, 7), 7),
+        "ghost_whisperer": one(ghost),
+        "welcome_back": one(any((b - a).days >= 30 for a, b in zip(days, days[1:]))),
+        "konami": one(events.get("konami")), "disco": one(events.get("disco")),
+        "hypnotized": one(events.get("hypnotized")), "speedrun": one(events.get("speedrun")),
+        "tourist": (min(events.get("tour", 0), 3), 3),
+    }
 
 
 def earned(uid):
@@ -209,6 +352,9 @@ def evaluate(user_row):
     for k, goal in (("collector", 20), ("completionist", 40)):
         if total >= goal and k not in have and k not in new:
             new.append(k)
+    got = set(have) | set(new)
+    if "secret_agent" not in got and all(k in got for k in SECRET_KEYS - {"secret_agent"}):
+        new.append("secret_agent")
     t = db.now()
     for k in new:
         conn.execute("INSERT OR IGNORE INTO user_achievements (user_id, key, earned_at) VALUES (?,?,?)", (user_row["id"], k, t))
@@ -236,8 +382,12 @@ def listing(user_row, caps):
         if not visible_to(caps, a, got):
             continue
         n, g = prog.get(key, (0, 1))
+        if key in SECRET_KEYS and not got:   # what it is stays a surprise
+            out.append({"key": key, "name": "???", "how": "Secret achievement", "icon": "key", "tier": "silver",
+                        "group": group, "earned_at": None, "have": 0, "goal": None, "secret": True})
+            continue
         out.append({"key": key, "name": name, "how": how, "icon": icon, "tier": tier, "group": group,
-                    "earned_at": got, "have": n, "goal": g if (goal or g > 1) else None})
+                    "earned_at": got, "have": n, "goal": g if (goal or g > 1) else None, "secret": key in SECRET_KEYS})
     return {"achievements": out, "earned": sum(1 for x in out if x["earned_at"]), "total": len(out), "groups": GROUPS}
 
 
@@ -302,6 +452,22 @@ def register(app):
         rows = db.get().execute("SELECT id, role FROM users").fetchall()
         return jsonify({str(r["id"]): summary(r["id"]) for r in rows
                         if perms.is_admin(me) or r["id"] == me["id"] or perms.above(me, r["role"])})
+
+    @app.route("/api/achievements/event", methods=["POST"])
+    @auth.require()
+    def api_achievements_event():
+        """Things only the browser can see (a secret code, flipping the theme...). Returns anything earned."""
+        me = auth.current()
+        ev = str((request.get_json(silent=True) or {}).get("event") or "")
+        if ev not in EVENTS or not me.get("id") or me.get("impersonator") or not enabled():
+            return jsonify({"ok": True, "new": []})
+        conn = db.get()
+        conn.execute("INSERT INTO user_events (user_id, event, n, last_at) VALUES (?,?,1,?) "
+                     "ON CONFLICT(user_id, event) DO UPDATE SET n=n+1, last_at=excluded.last_at", (me["id"], ev, db.now()))
+        conn.commit()
+        new = evaluate(auth.get_user(me["id"]))
+        return jsonify({"ok": True, "new": [{"key": k, "name": BY_KEY[k][1], "how": BY_KEY[k][2], "icon": BY_KEY[k][3],
+                                             "tier": BY_KEY[k][4]} for k in new]})
 
     @app.route("/api/settings/achievements", methods=["PUT"])
     @auth.require("settings.manage")

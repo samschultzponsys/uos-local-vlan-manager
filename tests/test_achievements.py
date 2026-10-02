@@ -43,3 +43,28 @@ def test_can_be_turned_off(app, admin):
     assert admin.get("/api/me").get_json()["achievements"] is None
     assert admin.get("/api/achievements").get_json()["enabled"] is False
     admin.put("/api/settings/achievements", json={"enabled": True})
+
+
+def test_secret_achievements(app, fake, admin):
+    eid = configure_unifi(admin)
+    uid, sup = make_user(admin, app, "sid", "supervisor")
+    admin.put(f"/api/users/{uid}/access", json={"envs": [{"env_id": eid}]})
+    sup.get("/api/me")
+    _, r = _keys(sup)
+    secret = next(a for a in r["achievements"] if a["key"] == "boomerang")
+    assert secret["name"] == "???" and secret["secret"]          # a surprise until earned
+    port = f"/api/envs/{eid}/devices/dev-sw8/ports/3"
+    sup.put(port, json={"native_network_id": "net-rack7", "tagged_mode": "block_all"})
+    sup.put(port, json={"native_network_id": "net-lan", "tagged_mode": "auto"})      # straight back: boomerang
+    sup.put(port, json={"native_network_id": "net-cam", "tagged_mode": "block_all"})  # third time: indecisive
+    sup.post("/api/feedback", json={"kind": "bug", "title": "It was DNS again"})
+    new = {a["key"] for a in sup.get("/api/me").get_json()["achievements"]["new"]}
+    assert {"boomerang", "indecisive", "always_dns"} <= new
+    # things only the browser sees
+    assert sup.post("/api/achievements/event", json={"event": "konami"}).get_json()["new"][0]["key"] == "konami"
+    assert sup.post("/api/achievements/event", json={"event": "nonsense"}).get_json()["new"] == []
+    for _ in range(2):
+        sup.post("/api/achievements/event", json={"event": "tour"})
+    assert sup.post("/api/achievements/event", json={"event": "tour"}).get_json()["new"][0]["key"] == "tourist"
+    got, r = _keys(sup)
+    assert next(a for a in r["achievements"] if a["key"] == "boomerang")["name"] == "Boomerang"

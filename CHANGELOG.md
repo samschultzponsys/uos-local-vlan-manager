@@ -5,6 +5,15 @@ The newest `## x.y` heading below is the version the app reports, the tag the co
 image is published under, and the name of the matching GitHub release (`vX.Y`). Bump it
 here and nowhere else.
 
+## 4.7 — 2026-10-02
+
+### Added
+- **25 secret achievements**, shown as *???* until someone earns one. No spoilers here, except
+  that some reward persistence, some reward timing, a few reward mistakes made with style, and
+  one needs a famous cheat code. Like the others they credit past activity, as far back as
+  Activity goes. The time-based ones use the server's clock: set `TZ` in compose to your
+  timezone (the example compose file does).
+
 ## 4.6 — 2026-10-02
 
 ### Added

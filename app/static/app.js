@@ -7,7 +7,7 @@ import { SettingsModal, UsersModal, AccountModal, AuditModal, EnvInfoModal } fro
 import { SetupWizard, wizardNeeded } from "./wizard.js";
 import { FeedbackPage } from "./feedback.js";
 import { Tour, tourSteps, tourCaps } from "./tour.js";
-import { UnlockHost, announce } from "./achievements.js";
+import { UnlockHost, announce, sendEvent } from "./achievements.js";
 
 // --- tooltip ------------------------------------------------------------------
 
@@ -1256,7 +1256,32 @@ function App() {
   }, [theme]);
   // the theme is part of the person's settings, so it follows them to other browsers
   useEffect(() => { const t = me && (me.prefs || {}).theme; if (t === "light" || t === "dark") setTheme(t); }, [me && (me.prefs || {}).theme]);
-  const toggleTheme = () => { const t = theme === "dark" ? "light" : "dark"; setTheme(t); if (me && !me.impersonator) savePrefs({ theme: t }); };
+  const flips = useRef([]);
+  const toggleTheme = () => {
+    const t = theme === "dark" ? "light" : "dark"; setTheme(t); if (me && !me.impersonator) savePrefs({ theme: t });
+    // secret: day / night 10 times within a minute
+    const now = Date.now();
+    flips.current = [...flips.current.filter((x) => now - x < 60000), now];
+    if (flips.current.length === 10) sendEvent("disco");
+  };
+  // secret: the Konami code, anywhere
+  useEffect(() => {
+    const code = ["ArrowUp", "ArrowUp", "ArrowDown", "ArrowDown", "ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowRight", "b", "a"];
+    let at = 0;
+    const k = (e) => {
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      at = key === code[at] ? at + 1 : key === code[0] ? 1 : 0;
+      if (at === code.length) { at = 0; sendEvent("konami"); }
+    };
+    addEventListener("keydown", k);
+    return () => removeEventListener("keydown", k);
+  }, []);
+  // secret: the glowing ports open for 8 hours straight
+  useEffect(() => {
+    const opened = Date.now();
+    const t = setInterval(() => { if (Date.now() - opened >= 8 * 3600 * 1000) { clearInterval(t); sendEvent("hypnotized"); } }, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
   useEffect(() => {
     const place = () => {
       const t = document.querySelector(".topbar");
@@ -1607,7 +1632,7 @@ function App() {
     ${devOpen && html`<${DeviceModal} env=${env} device=${devOpen} me=${me} readonly=${!!st.readonly} onClose=${() => setDevModal(null)}
       onChanged=${() => load(true)} />`}
     ${(modal === "wizard" || modal === "wizard-new") && html`<${SetupWizard} me=${me} prefs=${prefs} onlyNew=${modal === "wizard-new"}
-      kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, appName: settings.app_name, startOptions, FX_OPTIONS }}
+      kit=${{ NetChip, Faceplate, SCREENS, viewFor, screenKey, LEGEND_DEFAULTS, PORTS_DEFAULTS, appName: settings.app_name, startOptions, FX_OPTIONS, onSpeedrun: () => sendEvent("speedrun") }}
       theme=${theme} setTheme=${setTheme}
       onCancel=${modal === "wizard" && !wizardNeeded(prefs) ? () => setModal(null) : null}
       onSave=${async (patch) => { await savePrefs(patch); setModal(null); setView(startValue({ ...PORTS_DEFAULTS, ...patch.ports_view }, canFb));
@@ -1628,7 +1653,7 @@ function App() {
       const steps = tourSteps({ can, multiEnv: envList.envs.length > 1, appName: settings.app_name,
         hasDevices: showEnv && shown.length > 0, hasPorts: showEnv && !!(st && !st.readonly) && shown.some((d) => d.ports.length),
         canRequest: ["requests.ports", "requests.poe", "requests.restart"].some(can) }, tour.since);
-      const done = () => { setTour(null); manualTour.current = false; if (me.id) savePrefs({ tour_done: TOUR_VERSION, tour_caps: tourCaps(me.caps) }); };
+      const done = () => { if (!tour.since) sendEvent("tour"); setTour(null); manualTour.current = false; if (me.id) savePrefs({ tour_done: TOUR_VERSION, tour_caps: tourCaps(me.caps) }); };
       if (!steps.length) { setTimeout(done, 0); return null; }
       return html`<${Tour} key=${tour.since ? "new" : "all"} steps=${steps} onDone=${done} />`;
     })()}

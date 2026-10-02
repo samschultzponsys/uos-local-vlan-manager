@@ -97,8 +97,9 @@ manage only their own switches and only the VLANs you allow.
   on a color palette (8 presets or your own colors), or an uploaded picture. The tab icon can
   follow the logo or be its own. The name shows in the top bar, the browser tab, the sign-in
   page, the setup wizard and the installed app.
-- **Achievements**: 59 badges for using the app (ports changed, feedback shipped, days used...),
-  credited for past activity too, shown in My account and on Users. Can be turned off.
+- **Achievements**: 59 badges for using the app (ports changed, feedback shipped, days used...)
+  plus 25 secret ones, credited for past activity too, shown in My account and on Users. Can be
+  turned off.
 - **Guided tour** after setup (and from the menu): highlights the real screen one stop at a time,
   only for what that person can see and do. When their access grows, they get a short tour of
   just what's new for them.

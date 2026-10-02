@@ -167,6 +167,13 @@ CREATE TABLE IF NOT EXISTS user_achievements (
     earned_at  INTEGER NOT NULL,
     PRIMARY KEY (user_id, key)
 );
+CREATE TABLE IF NOT EXISTS user_events (
+    user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    event    TEXT NOT NULL,
+    n        INTEGER NOT NULL DEFAULT 0,
+    last_at  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, event)
+);
 CREATE TABLE IF NOT EXISTS user_days (
     user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     day      TEXT NOT NULL,

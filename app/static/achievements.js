@@ -51,6 +51,11 @@ export function AchievementsList({ uid, self }) {
 }
 
 /** "Achievement unlocked" cards, one at a time, at the bottom of the screen */
+/** tell the server about something only the browser sees (a secret code...); celebrates anything earned */
+export function sendEvent(event) {
+  api("/api/achievements/event", { method: "POST", body: { event } }).then((r) => announce(r.new)).catch(() => {});
+}
+
 // unlocks can arrive before the card host is on screen: they wait here
 let waiting = [];
 let pushUnlock = null;

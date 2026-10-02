@@ -90,7 +90,12 @@ export function SetupWizard({ me, prefs, kit, onSave, theme, setTheme, onlyNew, 
   const used = new Set(data.envs.flatMap((x) => x.devices.flatMap((d) => d.ports.map((p) => p.native_network_id))));
   const unused = allNets.filter((n) => !used.has(n.id)).length;
 
-  const finish = () => onSave({ theme, legend: lg, ports_view: pv, scales, color_sync: sync, vlan_colors: mine, shared_colors: shared,
+  const [started] = useState(Date.now());
+  const finish = () => {
+    if (!onlyNew && Date.now() - started < 20000) kit.onSpeedrun && kit.onSpeedrun();   // secret: setup in under 20 s
+    return save();
+  };
+  const save = () => onSave({ theme, legend: lg, ports_view: pv, scales, color_sync: sync, vlan_colors: mine, shared_colors: shared,
     setup_done: SETUP_VERSION });
 
   const viewPicker = (cls, phoneLike) => html`<div class="wz-views">
